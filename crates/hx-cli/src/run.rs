@@ -97,7 +97,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
                 Some(cwd) => cwd.clone(),
                 None => std::env::current_dir().map_err(display)?,
             };
-            cwd.canonicalize()
+            hx_kernel::real_path(&cwd)
                 .map_err(|e| format!("cannot use {} as working directory: {e}", cwd.display()))?
         }
     };

@@ -286,8 +286,7 @@ impl Server {
         cwd: &Path,
         plan: bool,
     ) -> Result<(String, String), RpcError> {
-        let cwd = cwd
-            .canonicalize()
+        let cwd = hx_kernel::real_path(cwd)
             .map_err(|e| RpcError::invalid(format!("cannot use {}: {e}", cwd.display())))?;
         let store = hx_app::session_store(&self.home);
         let mut session =

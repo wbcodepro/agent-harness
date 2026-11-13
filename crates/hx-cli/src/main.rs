@@ -132,7 +132,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             let cwd = match &resume {
                 Some(id) => hx_app::session_cwd(&store, id)?,
                 None => std::env::current_dir()
-                    .and_then(|cwd| cwd.canonicalize())
+                    .and_then(|cwd| hx_kernel::real_path(&cwd))
                     .map_err(display)?,
             };
             let options = hx_app::Options {
@@ -146,7 +146,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::ToolWorker | Command::SandboxExec { .. } => unreachable!("handled above"),
         Command::Web { port } => {
             let cwd = std::env::current_dir()
-                .and_then(|cwd| cwd.canonicalize())
+                .and_then(|cwd| hx_kernel::real_path(&cwd))
                 .map_err(display)?;
             let options = hx_app::Options {
                 max_steps: 50,

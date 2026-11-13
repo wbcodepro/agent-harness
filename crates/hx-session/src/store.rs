@@ -146,8 +146,11 @@ impl SessionStore {
         file.read_to_end(&mut bytes)?;
         let parsed = parse_log(&bytes)?;
         if parsed.valid_len < bytes.len() as u64 {
-            file.set_len(parsed.valid_len)?;
-            file.sync_data()?;
+            // Cut off the torn tail through its own handle: a handle
+            // opened for appending is not allowed to truncate on Windows.
+            let cutter = OpenOptions::new().write(true).open(self.log_path(id))?;
+            cutter.set_len(parsed.valid_len)?;
+            cutter.sync_data()?;
         }
 
         let mut records = parsed.records;

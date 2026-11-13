@@ -70,7 +70,7 @@ pub struct ToolContext {
 impl ToolContext {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
-            cwd: cwd.into(),
+            cwd: hx_kernel::simplify_path(&cwd.into()),
             shared_group: false,
             kill_group: Arc::new(AtomicBool::new(false)),
         }

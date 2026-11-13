@@ -481,7 +481,7 @@ impl Tool for DiagnosticsTool {
                 return ToolOutput::error("Invalid input: path is required.");
             };
             let path = ctx.resolve(path);
-            let path = path.canonicalize().unwrap_or(path);
+            let path = hx_kernel::real_path(&path).unwrap_or(path);
             let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let Some(server) = self
                 .servers

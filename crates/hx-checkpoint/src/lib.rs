@@ -33,8 +33,8 @@ impl GitCheckpoints {
     /// `git_dir` is created on first use. `work_tree` is the workspace.
     pub fn new(git_dir: impl Into<PathBuf>, work_tree: impl Into<PathBuf>) -> Self {
         Self {
-            git_dir: git_dir.into(),
-            work_tree: work_tree.into(),
+            git_dir: hx_kernel::simplify_path(&git_dir.into()),
+            work_tree: hx_kernel::simplify_path(&work_tree.into()),
         }
     }
 
@@ -188,7 +188,8 @@ mod tests {
                         path.strip_prefix(root)
                             .unwrap()
                             .to_string_lossy()
-                            .into_owned(),
+                            // Compare with forward slashes on every platform.
+                            .replace('\\', "/"),
                         fs::read_to_string(&path).unwrap(),
                     );
                 }

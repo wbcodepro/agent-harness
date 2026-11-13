@@ -169,6 +169,12 @@ pub fn build<'a>(
 }
 
 async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime, String> {
+    // Paths end up on other programs' command lines; keep them in the form
+    // those programs accept.
+    let (home, cwd) = (
+        &hx_kernel::simplify_path(home),
+        &hx_kernel::simplify_path(cwd),
+    );
     let config = load_config(home)?;
     let secrets = load_secrets(home, cwd)?;
     let (llm, summarizer) = match &options.llm {
@@ -199,7 +205,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         policy.unreadable.extend(config.sandbox.unreadable.clone());
         // The harness's own data: credentials, settings, other sessions.
         // The spill directory stays readable; tools are pointed at it.
-        let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        let home = hx_kernel::real_path(home).unwrap_or_else(|_| home.to_path_buf());
         for private in [".env", "config.toml", "sessions", "checkpoints"] {
             policy.unreadable.push(home.join(private));
         }

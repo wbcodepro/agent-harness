@@ -33,6 +33,11 @@ fn relative<'a>(path: &'a Path, root: &Path) -> &'a Path {
     path.strip_prefix(root).unwrap_or(path)
 }
 
+/// A path as shown to the model: with forward slashes on every platform.
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn compile_glob(pattern: &str) -> Result<GlobMatcher, ToolOutput> {
     GlobPattern::new(pattern)
         .map(|glob| glob.compile_matcher())
@@ -110,7 +115,7 @@ impl Tool for Glob {
             let total = found.len();
             let mut out = String::new();
             for (_, path) in found.iter().take(MAX_GLOB_RESULTS) {
-                out.push_str(&relative(path, &root).to_string_lossy());
+                out.push_str(&display_path(relative(path, &root)));
                 out.push('\n');
             }
             if total > MAX_GLOB_RESULTS {
@@ -216,7 +221,7 @@ impl Tool for Grep {
                         } else {
                             relative(path, &root)
                         };
-                        out.push_str(&format!("{}:{}:{line}\n", name.display(), index + 1));
+                        out.push_str(&format!("{}:{}:{line}\n", display_path(name), index + 1));
                     }
                 }
             }
@@ -484,7 +489,7 @@ impl Tool for RepoMap {
             );
             let mut listed = 0usize;
             for (_, path, definitions) in &ranked {
-                let mut section = format!("\n{}\n", relative(path, &root).display());
+                let mut section = format!("\n{}\n", display_path(relative(path, &root)));
                 let mut top: Vec<&Definition> = definitions.iter().collect();
                 top.sort_by_key(|d| std::cmp::Reverse(weight(&d.name)));
                 top.truncate(12);
