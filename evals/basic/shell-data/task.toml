@@ -1,0 +1,2 @@
+prompt = "orders.csv has a header row and columns id,customer,amount. Write the total amount per customer to totals.txt, one `customer total` line per customer, sorted by customer name, totals as integers."
+check = "printf 'ana 55\\nbinh 20\\nchi 7\\n' | diff - totals.txt"

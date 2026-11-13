@@ -1,3 +1,4 @@
+mod eval;
 mod run;
 
 use std::path::PathBuf;
@@ -38,6 +39,8 @@ enum Command {
     },
     /// Serve the Agent Client Protocol on stdin/stdout, for editors.
     Acp,
+    /// Run a suite of tasks and report pass rate, time and token use.
+    Eval(eval::EvalArgs),
     /// List sessions.
     Sessions,
     /// Import a session recorded by another harness.
@@ -181,6 +184,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             "dsh" => println!("{}", hx_app::import_dsh(&store, &file, cwd.as_deref())?),
             other => return Err(format!("cannot import {other:?} sessions; supported: dsh")),
         },
+        Command::Eval(args) => return eval::run(&home, args).await,
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);

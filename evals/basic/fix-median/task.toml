@@ -1,0 +1,2 @@
+prompt = "python3 test_stats.py fails. Find and fix the bug in stats.py."
+check = "python3 test_stats.py"

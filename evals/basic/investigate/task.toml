@@ -1,0 +1,2 @@
+prompt = "Somewhere in this project a configuration value named retry_limit is defined. Find its value and the file that defines it, then write exactly `<value> <relative path>` on one line to answer.txt."
+check = "test \"$(tr -d '\\n' < answer.txt | sed 's#^\\./##; s# \\./# #')\" = '7 services/net/config.py'"

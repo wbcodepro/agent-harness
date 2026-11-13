@@ -1,0 +1,152 @@
+# hx
+
+`hx` là một agent harness viết bằng Rust: một binary duy nhất chạy mô hình ngôn ngữ như một agent lập trình trong terminal, trong editor (ACP) hoặc trong trình duyệt.
+
+Ba ý chính của thiết kế:
+
+- **Log là nguồn sự thật.** Mỗi session là một file JSONL chỉ ghi thêm. Mọi thứ model nhìn thấy (prompt hệ thống, danh sách tool, tin nhắn) đều được dựng lại từ log, nên resume, fork, rewind, nén ngữ cảnh và phát lại đều dùng chung một cơ chế.
+- **Tool không chạy trong tiến trình của harness.** Mỗi lần gọi tool chạy trong một tiến trình worker bị hệ điều hành giam (Seatbelt trên macOS, Landlock trên Linux). Không giam được thì từ chối chạy.
+- **Mở rộng mà không nới quyền.** Plugin là WebAssembly và chỉ đọc được nơi bạn cấp; server MCP chạy trong cùng sandbox với tool.
+
+## Cài đặt
+
+Cần Rust 1.89 trở lên và `git`.
+
+```sh
+cargo build --release -p hx-cli      # tạo target/release/hx
+```
+
+Đặt API key vào biến môi trường hoặc file `~/.hx/.env` (hoặc `.env` trong thư mục làm việc):
+
+```sh
+DEEPSEEK_API_KEY=...     # hoặc ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API_KEY
+```
+
+## Dùng
+
+```sh
+hx                                  # giao diện terminal
+hx run "sửa lỗi làm test_stats.py thất bại"     # một lượt, không tương tác
+hx run --session <id> "tiếp tục"    # nối tiếp một session
+hx run --plan "..."                 # chỉ khảo sát và đề xuất kế hoạch, không sửa gì
+hx web                              # giao diện web trên 127.0.0.1
+hx acp                              # máy chủ Agent Client Protocol cho editor
+hx sessions | show <id> | fork <id> | rewind <id> | recover <id>
+hx import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
+hx eval evals/basic                 # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
+```
+
+Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`, hoặc `HX_PROVIDER` / `HX_MODEL`. Mặc định: `deepseek-flash` với DeepSeek, `claude-opus-5-5` với Anthropic; OpenAI cần chỉ rõ model.
+
+Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy.
+
+## Tool có sẵn
+
+`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`, và `skill` khi có skill.
+
+Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song song. `subagent` giao việc cho một agent mới có ngữ cảnh riêng; với `isolate` nó làm trên một git worktree và nhánh riêng.
+
+## An toàn
+
+Mặc định (`workspace-write`):
+
+- Chỉ ghi được trong thư mục làm việc và thư mục tạm.
+- Không đọc được `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`…, dữ liệu riêng của hx, và các file `.env`.
+- Mạng chỉ đi qua proxy cục bộ tới danh sách tên miền cho phép.
+- Biến môi trường của harness không tới được tool; secret chỉ tới khi bạn cấp (`[secrets] grant`), và giá trị của mọi secret bị thay bằng `[secret:TÊN]` trong đầu ra tool trước khi ghi log.
+- Trước mỗi lượt và sau mỗi bước có thay đổi, workspace được lưu vào một kho git riêng ngoài dự án; `hx rewind` khôi phục file và tạo session mới dừng ngay trước lượt đó.
+
+`--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
+
+Giới hạn cần biết:
+
+- Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
+- Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
+- Windows chưa có sandbox: chỉ chạy được với `danger-full-access`. Bản Windows chưa được biên dịch và thử.
+- Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
+
+## Cấu hình
+
+`~/.hx/config.toml`. Mọi mục đều tùy chọn; khóa lạ là lỗi.
+
+```toml
+[model]
+provider = "anthropic"          # deepseek | openai | anthropic
+name = "claude-opus-5-5"
+effort = "high"                 # low | medium | high | xhigh | max (Anthropic)
+summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch sử
+
+[sandbox]
+mode = "workspace-write"        # read-only | workspace-write | danger-full-access
+writable = ["/data/cache"]
+unreadable = ["/data/private"]
+
+[network]
+mode = "allowlist"              # off | allowlist | open
+allow = ["github.com", "*.crates.io"]
+
+[[rule]]                        # luật đầu tiên khớp sẽ thắng
+tool = "bash"
+pattern = "git push*"
+action = "ask"                  # allow | ask | deny
+
+[secrets]
+grant = ["GITHUB_TOKEN"]
+
+[context]
+compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng
+spill_at_bytes = 16000          # đầu ra dài hơn thì lưu ra file, chỉ xem trước
+
+[verify]
+commands = ["cargo test -q"]    # phải đạt trước khi một lượt có sửa file được kết thúc
+
+[limits]
+tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn
+subagent_depth = 1
+
+[mcp.docs]                      # server MCP (stdio); mặc định chạy trong sandbox
+command = "docs-server"
+args = ["--stdio"]
+
+[[hook]]                        # lệnh chạy quanh mỗi lần gọi tool; thoát mã 2 = phản đối
+event = "pre_tool"
+tool = "bash"
+command = "./scripts/check-command.sh"
+
+[plugin.wc]                     # plugin WebAssembly và nơi nó được đọc
+path = "plugins/wordcount.wasm"
+read = ["docs"]
+```
+
+Dự án có thể tự khai báo lệnh kiểm tra trong `.hx/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.hx/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.hx/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.hx/skills/`.
+
+Plugin mẫu và mô tả ABI: `plugins/wordcount`.
+
+## Cấu trúc mã
+
+| Crate | Việc |
+|---|---|
+| `hx-kernel` | Registry service, bus sự kiện, chuỗi middleware |
+| `hx-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection |
+| `hx-llm` | Adapter chat-completions (DeepSeek, OpenAI) và Anthropic Messages |
+| `hx-tools` | Tool có sẵn và trait `Tool` |
+| `hx-agent` | Vòng turn/step, hook, checkpoint |
+| `hx-sandbox` | Chính sách, Seatbelt, Landlock, worker, proxy egress |
+| `hx-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
+| `hx-checkpoint` | Checkpoint workspace bằng kho git riêng |
+| `hx-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
+| `hx-verify` | Cổng kiểm chứng trước khi kết thúc lượt |
+| `hx-ext` | MCP, skills, hooks, plugin WebAssembly |
+| `hx-multi` | Subagent, worktree, bảng việc, ngân sách chung |
+| `hx-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
+| `hx-acp`, `hx-tui`, `hx-web`, `hx-cli` | Các giao diện |
+| `hx-eval` | Model giả phát lại bản ghi, cho test và eval |
+
+## Phát triển
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Test của plugin cần `rustup target add wasm32-unknown-unknown`; một số test cần `python3` và `git`. Đặt `HX_SCRIPT=<file.jsonl>` để `hx` phát lại phản hồi đã ghi thay vì gọi nhà cung cấp.

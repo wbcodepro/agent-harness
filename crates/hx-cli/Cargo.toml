@@ -26,6 +26,8 @@ hx-tui.workspace = true
 hx-web.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+toml.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

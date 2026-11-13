@@ -1,0 +1,2 @@
+prompt = "Add a function slugify(text) to textutil.py: lowercase, runs of non-alphanumeric characters become a single hyphen, no leading or trailing hyphen. Keep the existing function working."
+check = "python3 check.py"
