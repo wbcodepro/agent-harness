@@ -1643,10 +1643,10 @@ dependencies = [
 name = "hx-tui"
 version = "0.0.1"
 dependencies = [
+ "hx-acp",
  "hx-agent",
  "hx-app",
  "hx-eval",
- "hx-kernel",
  "hx-session",
  "hx-tools",
  "ratatui",

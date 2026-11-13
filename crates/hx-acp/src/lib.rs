@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hx_agent::{AgentError, Session, ToolRequest};
@@ -35,6 +35,7 @@ struct Pending {
 struct Entry {
     state: tokio::sync::Mutex<(Session, Runtime)>,
     cancel: Notify,
+    cwd: PathBuf,
 }
 
 struct Server {
@@ -43,6 +44,9 @@ struct Server {
     outbox: Outbox,
     pending: Arc<Pending>,
     sessions: Mutex<HashMap<String, Arc<Entry>>>,
+    /// The client asked for whole session records (`_hx/record`) instead of
+    /// the protocol's summarized `session/update` notifications.
+    raw_records: AtomicBool,
 }
 
 struct RpcError {
@@ -94,6 +98,7 @@ where
         outbox,
         pending: Arc::new(Pending::default()),
         sessions: Mutex::new(HashMap::new()),
+        raw_records: AtomicBool::new(false),
     });
 
     let mut lines = BufReader::new(reader).lines();
@@ -170,22 +175,25 @@ impl Server {
 
     async fn handle(&self, method: &str, params: &Value) -> Result<Value, RpcError> {
         match method {
-            "initialize" => Ok(json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "agentInfo": {"name": "hx", "version": env!("CARGO_PKG_VERSION")},
-                "agentCapabilities": {
-                    "loadSession": true,
-                    "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
-                },
-                "authMethods": [],
-            })),
+            "initialize" => {
+                if params["clientCapabilities"]["_meta"]["hx"]["records"] == true {
+                    self.raw_records.store(true, Ordering::Relaxed);
+                }
+                self.initialize()
+            }
+            "session/set_mode" => self.set_mode(params).await,
+            "_hx/rewind" => self.rewind(params).await,
             "authenticate" => Ok(json!({})),
             "session/new" => {
                 let cwd = params["cwd"]
                     .as_str()
                     .ok_or_else(|| RpcError::invalid("session/new needs cwd"))?;
-                let id = self.start(None, Path::new(cwd)).await?;
-                Ok(json!({"sessionId": id}))
+                let (id, sandbox) = self.start(None, Path::new(cwd), false).await?;
+                Ok(json!({
+                    "sessionId": id,
+                    "modes": modes(false),
+                    "_meta": {"hx": {"sandbox": sandbox}},
+                }))
             }
             "session/load" => {
                 let id = params["sessionId"]
@@ -194,8 +202,8 @@ impl Server {
                 let id = SessionId::parse(id).map_err(|e| RpcError::invalid(e.to_string()))?;
                 let store = hx_app::session_store(&self.home);
                 let cwd = hx_app::session_cwd(&store, &id).map_err(RpcError::invalid)?;
-                self.start(Some(&id), &cwd).await?;
-                Ok(Value::Null)
+                let (_, sandbox) = self.start(Some(&id), &cwd, false).await?;
+                Ok(json!({"modes": modes(false), "_meta": {"hx": {"sandbox": sandbox}}}))
             }
             "session/prompt" => self.prompt(params).await,
             other => Err(RpcError {
@@ -205,9 +213,79 @@ impl Server {
         }
     }
 
+    fn initialize(&self) -> Result<Value, RpcError> {
+        Ok(json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "agentInfo": {"name": "hx", "version": env!("CARGO_PKG_VERSION")},
+            "agentCapabilities": {
+                "loadSession": true,
+                "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
+            },
+            "authMethods": [],
+        }))
+    }
+
+    async fn runtime(&self, id: &str, cwd: &Path, plan: bool) -> Result<Runtime, RpcError> {
+        let mut options = self.options.clone();
+        options.plan = plan;
+        options.prompter = Some(Arc::new(PermissionPrompter {
+            session_id: id.to_string(),
+            outbox: self.outbox.clone(),
+            pending: Arc::clone(&self.pending),
+        }));
+        hx_app::build(&self.home, cwd, &options)
+            .await
+            .map_err(RpcError::internal)
+    }
+
+    /// Switches a session between acting and planning by rebuilding its
+    /// agent; the session itself carries on.
+    async fn set_mode(&self, params: &Value) -> Result<Value, RpcError> {
+        let id = params["sessionId"].as_str().unwrap_or("");
+        let entry = self
+            .entry(Some(id))
+            .ok_or_else(|| RpcError::invalid("unknown sessionId"))?;
+        let plan = match params["modeId"].as_str() {
+            Some("plan") => true,
+            Some("act") => false,
+            other => return Err(RpcError::invalid(format!("unknown mode {other:?}"))),
+        };
+        let runtime = self.runtime(id, &entry.cwd, plan).await?;
+        entry.state.lock().await.1 = runtime;
+        Ok(json!({}))
+    }
+
+    /// Extension: undoes the session's last turn, files included, and
+    /// continues in a fork that ends just before it.
+    async fn rewind(&self, params: &Value) -> Result<Value, RpcError> {
+        let id = params["sessionId"].as_str().unwrap_or("");
+        let entry = self
+            .entry(Some(id))
+            .ok_or_else(|| RpcError::invalid("unknown sessionId"))?;
+        let id = SessionId::parse(id).map_err(|e| RpcError::invalid(e.to_string()))?;
+        let store = hx_app::session_store(&self.home);
+        let rewound = hx_app::rewind(&self.home, &store, &id, None)
+            .await
+            .map_err(RpcError::invalid)?;
+        let (fork, _) = self
+            .start(Some(&rewound.session), &entry.cwd, false)
+            .await?;
+        Ok(json!({
+            "sessionId": fork,
+            "turn": rewound.turn,
+            "removed": rewound.restored.removed,
+        }))
+    }
+
     /// Creates or reopens a session and registers it. Reopening replays the
-    /// conversation to the client, as the protocol requires.
-    async fn start(&self, existing: Option<&SessionId>, cwd: &Path) -> Result<String, RpcError> {
+    /// conversation to the client, as the protocol requires. Returns the
+    /// session id and how its tools are confined.
+    async fn start(
+        &self,
+        existing: Option<&SessionId>,
+        cwd: &Path,
+        plan: bool,
+    ) -> Result<(String, String), RpcError> {
         let cwd = cwd
             .canonicalize()
             .map_err(|e| RpcError::invalid(format!("cannot use {}: {e}", cwd.display())))?;
@@ -216,19 +294,13 @@ impl Server {
             hx_app::open_session(&store, existing, &cwd).map_err(RpcError::internal)?;
         let id = session.id().to_string();
 
-        let mut options = self.options.clone();
-        options.prompter = Some(Arc::new(PermissionPrompter {
-            session_id: id.clone(),
-            outbox: self.outbox.clone(),
-            pending: Arc::clone(&self.pending),
-        }));
-        let runtime = hx_app::build(&self.home, &cwd, &options)
-            .await
-            .map_err(RpcError::internal)?;
+        let runtime = self.runtime(&id, &cwd, plan).await?;
+        let sandbox = format!("{:?}", runtime.policy.mode);
 
         let mut updates = Updates {
             session_id: id.clone(),
             outbox: self.outbox.clone(),
+            raw: self.raw_records.load(Ordering::Relaxed),
         };
         if existing.is_some() {
             for record in session.records() {
@@ -242,9 +314,10 @@ impl Server {
             Arc::new(Entry {
                 state: tokio::sync::Mutex::new((session, runtime)),
                 cancel: Notify::new(),
+                cwd,
             }),
         );
-        Ok(id)
+        Ok((id, sandbox))
     }
 
     async fn prompt(&self, params: &Value) -> Result<Value, RpcError> {
@@ -298,6 +371,19 @@ impl Server {
 struct Updates {
     session_id: String,
     outbox: Outbox,
+    /// Send each record whole, as the `_hx/record` extension notification.
+    raw: bool,
+}
+
+/// The modes a session can be in, in the protocol's shape.
+fn modes(plan: bool) -> Value {
+    json!({
+        "currentModeId": if plan { "plan" } else { "act" },
+        "availableModes": [
+            {"id": "act", "name": "Act", "description": "Do the work."},
+            {"id": "plan", "name": "Plan", "description": "Investigate and propose a plan; change nothing."},
+        ],
+    })
 }
 
 impl Updates {
@@ -368,8 +454,19 @@ impl Updates {
         }
     }
 
+    fn record(&self, record: &Record, replay: bool) {
+        let _ = self.outbox.send(json!({
+            "jsonrpc": "2.0",
+            "method": "_hx/record",
+            "params": {"sessionId": self.session_id, "record": record, "replay": replay},
+        }));
+    }
+
     /// A record appended while a turn runs: text arrives as deltas.
     fn live(&mut self, record: &Record) {
+        if self.raw {
+            return self.record(record, false);
+        }
         if self.tool(record) {
             return;
         }
@@ -388,6 +485,9 @@ impl Updates {
     /// A record from a session being loaded: whole messages, including the
     /// user's.
     fn replay(&mut self, record: &Record) {
+        if self.raw {
+            return self.record(record, true);
+        }
         if self.tool(record) {
             return;
         }
@@ -415,7 +515,7 @@ impl Prompter for PermissionPrompter {
     fn ask<'a>(
         &'a self,
         request: &'a ToolRequest,
-        _question: String,
+        question: String,
     ) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async move {
             let id = self.pending.next_id.fetch_add(1, Ordering::Relaxed) + 1;
@@ -431,7 +531,7 @@ impl Prompter for PermissionPrompter {
                 "method": "session/request_permission",
                 "params": {
                     "sessionId": self.session_id,
-                    "toolCall": {"toolCallId": request.call_id},
+                    "toolCall": {"toolCallId": request.call_id, "title": question},
                     "options": [
                         {"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
                         {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"},

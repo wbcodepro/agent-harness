@@ -117,26 +117,38 @@ impl App {
         }
     }
 
-    /// Rebuilds the transcript from a stored session.
-    pub fn load(&mut self, records: &[Record]) {
+    /// Empties the transcript, for switching to another session.
+    pub fn reset(&mut self) {
         self.entries.clear();
         self.streaming = false;
-        for record in records {
-            match &record.event {
-                Event::AssistantDelta { .. } => {}
-                Event::AssistantMessage { content, usage, .. } => {
-                    for block in content {
-                        if let Block::Text { text } = block {
-                            self.push(Kind::Assistant, text.clone());
-                        }
+        self.context_tokens = 0;
+    }
+
+    /// Folds in a record of a stored session being replayed: messages
+    /// arrive whole, so the deltas that once streamed them are skipped.
+    pub fn apply_replayed(&mut self, record: &Record) {
+        match &record.event {
+            Event::AssistantDelta { .. } => {}
+            Event::AssistantMessage { content, usage, .. } => {
+                for block in content {
+                    if let Block::Text { text } = block {
+                        self.push(Kind::Assistant, text.clone());
                     }
-                    self.context_tokens = usage.input_tokens
-                        + usage.cache_read_tokens
-                        + usage.cache_write_tokens
-                        + usage.output_tokens;
                 }
-                other => self.apply_settled(other),
+                self.context_tokens = usage.input_tokens
+                    + usage.cache_read_tokens
+                    + usage.cache_write_tokens
+                    + usage.output_tokens;
             }
+            other => self.apply_settled(other),
+        }
+    }
+
+    /// Rebuilds the transcript from a stored session.
+    pub fn load(&mut self, records: &[Record]) {
+        self.reset();
+        for record in records {
+            self.apply_replayed(record);
         }
     }
 

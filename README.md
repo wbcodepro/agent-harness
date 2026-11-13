@@ -143,7 +143,8 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 | `hx-ext` | MCP, chẩn đoán LSP, skills, hooks, plugin WebAssembly |
 | `hx-multi` | Subagent, worktree, bảng việc, ngân sách chung |
 | `hx-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
-| `hx-acp`, `hx-tui`, `hx-web`, `hx-cli` | Các giao diện |
+| `hx-acp` | Máy chủ Agent Client Protocol; giao diện terminal cũng là một client của nó |
+| `hx-tui`, `hx-web`, `hx-cli` | Các giao diện |
 | `hx-eval` | Model giả phát lại bản ghi, cho test và eval |
 
 ## Phát triển
