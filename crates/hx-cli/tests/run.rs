@@ -1,4 +1,5 @@
 //! Drives the real `hx` binary with scripted model responses.
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
