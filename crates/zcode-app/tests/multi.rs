@@ -453,3 +453,108 @@ async fn a_reviewing_model_approves_only_what_is_plainly_harmless() {
         ]
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_plugin_packaged_for_claude_code_brings_its_skills_hooks_and_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let (home, work, plugin) = (root.join("home"), root.join("work"), root.join("relkit"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+    std::fs::create_dir_all(plugin.join("skills/changelog")).unwrap();
+    std::fs::create_dir_all(plugin.join("hooks")).unwrap();
+    std::fs::write(
+        plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name": "relkit"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("skills/changelog/SKILL.md"),
+        "---\nname: changelog\ndescription: Write the changelog.\n---\nGroup entries by kind.\n",
+    )
+    .unwrap();
+    // The hook is a script inside the plugin, found through the plugin's
+    // own directory variable.
+    std::fs::write(
+        plugin.join("hooks/guard.sh"),
+        "grep -q 'git tag' && { echo \"tagging is done by $(basename $CLAUDE_PLUGIN_ROOT)\" >&2; exit 2; }; exit 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("hooks/hooks.json"),
+        json!({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh"}]}]}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("server.py"),
+        r#"
+import json, sys
+def send(m): sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    m = json.loads(line); i = m.get("id"); method = m.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "t", "version": "0"}}})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "next_version", "description": "Next version.", "inputSchema": {"type": "object"}}]}})
+    elif method == "tools/call":
+        send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": "2.4.0"}]}})
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join(".mcp.json"),
+        json!({"mcpServers": {"versions": {"command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/server.py"]}}})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[compat]\nclaude_plugins = [{:?}]\n",
+            plugin.display().to_string()
+        ),
+    )
+    .unwrap();
+
+    let options = options(vec![
+        call("c1", "skill", json!({"name": "changelog"})),
+        call("c2", "mcp__relkit_versions__next_version", json!({})),
+        call("c3", "bash", json!({"command": "git tag v2.4.0"})),
+        ScriptedResponse::text("Done."),
+    ]);
+    let runtime = zcode_app::build(&home, &work, &options).await.unwrap();
+    assert!(
+        runtime
+            .agent
+            .system
+            .contains("- changelog: Write the changelog.")
+    );
+    let store = zcode_app::session_store(&home);
+    let mut session = zcode_app::open_session(&store, None, &work).unwrap();
+    runtime
+        .agent
+        .run_turn(&mut session, vec![Block::text("Release")])
+        .await
+        .unwrap();
+
+    let results = tool_results(session.records());
+    assert!(
+        results[0].0.starts_with("Group entries by kind."),
+        "{}",
+        results[0].0
+    );
+    assert_eq!(
+        results[1..],
+        [
+            ("2.4.0".to_string(), false),
+            (
+                "PreToolUse:Bash hook blocked this call: tagging is done by relkit".to_string(),
+                true
+            ),
+        ]
+    );
+}

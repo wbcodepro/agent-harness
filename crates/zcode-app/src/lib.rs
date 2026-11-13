@@ -347,15 +347,29 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
     // Hooks written for Claude Code, from the settings files the user
     // chose to trust.
-    let mut settings_files = Vec::new();
+    let mut settings_files: Vec<zcode_ext::claude_hooks::HookFile> = Vec::new();
     for source in &config.compat.claude_hooks {
         match source {
             HookSource::User => settings_files
-                .extend(std::env::home_dir().map(|home| home.join(".claude/settings.json"))),
+                .extend(std::env::home_dir().map(|home| home.join(".claude/settings.json").into())),
             HookSource::Project => settings_files.extend([
-                cwd.join(".claude/settings.json"),
-                cwd.join(".claude/settings.local.json"),
+                cwd.join(".claude/settings.json").into(),
+                cwd.join(".claude/settings.local.json").into(),
             ]),
+        }
+    }
+    // Plugins packaged for Claude Code that the user listed.
+    let mut claude_plugins = Vec::new();
+    for path in &config.compat.claude_plugins {
+        match zcode_ext::claude_plugin::ClaudePlugin::open(path) {
+            Ok(plugin) => {
+                settings_files.push(zcode_ext::claude_hooks::HookFile {
+                    path: plugin.hooks_file(),
+                    plugin_root: Some(plugin.root.clone()),
+                });
+                claude_plugins.push(plugin);
+            }
+            Err(e) => eprintln!("zcode: {e}"),
         }
     }
     let (claude_hooks, skipped) = zcode_ext::claude_hooks::ClaudeHooks::load(
@@ -431,11 +445,13 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
 
     // Extensions. One that fails to load is reported and left out; the
     // rest of the agent still works.
-    let skills = zcode_ext::skills::discover(&[
+    let mut skill_roots = vec![
         cwd.join(".zcode/skills"),
         cwd.join(".claude/skills"),
         home.join("skills"),
-    ]);
+    ];
+    skill_roots.extend(claude_plugins.iter().map(|plugin| plugin.skills_root()));
+    let skills = zcode_ext::skills::discover(&skill_roots);
     if !skills.is_empty() && config.model.tools == ToolProfile::Full {
         system.push_str(&zcode_ext::skills::prompt_section(&skills));
         tools.insert(Arc::new(zcode_ext::skills::SkillTool::new(skills)));
@@ -444,7 +460,18 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     // Tools from MCP servers and plugins. A few are declared like any
     // other; many are deferred.
     let mut extension_tools = ToolSet::new();
-    for (name, server) in &config.mcp {
+    let mut mcp_servers: Vec<(String, zcode_ext::mcp::McpServerConfig)> = config
+        .mcp
+        .iter()
+        .map(|(name, server)| (name.clone(), server.clone()))
+        .collect();
+    for plugin in &claude_plugins {
+        match plugin.mcp_servers() {
+            Ok(servers) => mcp_servers.extend(servers),
+            Err(e) => eprintln!("zcode: {e}"),
+        }
+    }
+    for (name, server) in &mcp_servers {
         let started = async {
             let confinement = policy.is_confined().then_some(&policy);
             // Credentials in headers come from the environment or the

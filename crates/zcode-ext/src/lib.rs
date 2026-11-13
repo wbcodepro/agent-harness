@@ -8,6 +8,7 @@
 //!   the user did not grant.
 
 pub mod claude_hooks;
+pub mod claude_plugin;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;

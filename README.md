@@ -172,6 +172,7 @@ command = "./scripts/check-command.sh"
 [compat]
 claude_hooks = ["user"]         # chạy hooks viết cho Claude Code: "user" = ~/.claude/settings.json,
                                 # "project" = .claude/settings(.local).json của dự án; mặc định không chạy
+claude_plugins = ["/đường/dẫn/tới/plugin"]   # plugin đóng gói cho Claude Code: nạp skills, hooks và server MCP của nó
 
 [plugin.wc]                     # plugin WebAssembly và nơi nó được đọc
 path = "plugins/wordcount.wasm"
@@ -183,6 +184,8 @@ Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần l
 MCP: server stdio chạy trong sandbox; server HTTP được gọi từ tiến trình zcode, xác thực bằng header tĩnh. Chưa hỗ trợ luồng đăng nhập OAuth, bản đặc tả không trạng thái `2026-07-28`, và yêu cầu do server khởi xướng (sampling, elicitation).
 
 Hooks của Claude Code: zcode đọc cùng file `settings.json` và nói cùng giao thức (JSON qua stdin, mã thoát 2 để chặn, JSON trên stdout) cho các sự kiện `PreToolUse`, `PostToolUse`, `UserPromptSubmit` và `Stop`, với hook loại `command`, `matcher` và `if`. Tên tool và tham số được đổi sang dạng Claude Code (`Bash`, `Edit`, `file_path`…). Sự kiện và loại hook khác được báo một lần lúc khởi động rồi bỏ qua. Khác biệt cần biết: hook chạy lần lượt chứ không song song; `permissionDecision: "ask"` bị coi là chặn; `"allow"` không bỏ qua luật quyền của zcode; `tool_response` chỉ có trường `output`; `transcript_path` trỏ tới log của zcode, không cùng định dạng với Claude Code. Hook chạy ngoài sandbox, nên chỉ bật `"project"` với repo bạn tin.
+
+Plugin của Claude Code: với mỗi thư mục trong `claude_plugins`, zcode nạp `skills/`, `hooks/hooks.json` (kể cả biến `${CLAUDE_PLUGIN_ROOT}`) và các server trong `.mcp.json` (stdio và HTTP; tool mang tên `mcp__<plugin>_<server>__<tool>`). Lệnh (`commands/`), định nghĩa subagent (`agents/`) và marketplace chưa được hỗ trợ.
 
 Dự án có thể tự khai báo lệnh kiểm tra trong `.zcode/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.zcode/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.zcode/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.zcode/skills/`.
 

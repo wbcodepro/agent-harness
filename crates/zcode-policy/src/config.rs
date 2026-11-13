@@ -319,6 +319,10 @@ pub struct CompatConfig {
     /// Which Claude Code settings files to run hooks from. Empty (the
     /// default) runs none: hooks are commands that run outside the sandbox.
     pub claude_hooks: Vec<HookSource>,
+    /// Directories of plugins packaged for Claude Code. Their skills, hooks
+    /// and MCP servers are loaded; list only plugins you trust, since
+    /// their hooks run outside the sandbox.
+    pub claude_plugins: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

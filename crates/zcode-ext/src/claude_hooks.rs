@@ -171,6 +171,25 @@ struct Entry {
     command: String,
     args: Option<Vec<String>>,
     timeout: Duration,
+    /// The directory of the plugin the hook came with, if any.
+    plugin_root: Option<PathBuf>,
+}
+
+/// A file to read hooks from, and the plugin it belongs to when it is a
+/// plugin's `hooks/hooks.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookFile {
+    pub path: PathBuf,
+    pub plugin_root: Option<PathBuf>,
+}
+
+impl From<PathBuf> for HookFile {
+    fn from(path: PathBuf) -> Self {
+        Self {
+            path,
+            plugin_root: None,
+        }
+    }
 }
 
 /// What one hook, or all hooks for one event together, decided.
@@ -283,11 +302,25 @@ pub struct ClaudeHooks {
 impl ClaudeHooks {
     /// Reads the hooks of every file in `files` that exists. Returns the
     /// hooks and a line for each thing that was skipped or unreadable.
-    pub fn load(files: &[PathBuf], cwd: &Path, sessions: &Path, plan: bool) -> (Self, Vec<String>) {
+    pub fn load(
+        files: &[HookFile],
+        cwd: &Path,
+        sessions: &Path,
+        plan: bool,
+    ) -> (Self, Vec<String>) {
         let mut entries: Vec<Entry> = Vec::new();
         let mut notes = Vec::new();
         let mut seen: Vec<(On, String, String)> = Vec::new();
-        for file in files {
+        for HookFile {
+            path: file,
+            plugin_root,
+        } in files
+        {
+            // A plugin refers to its own files through this placeholder.
+            let in_plugin = |text: String| match plugin_root {
+                Some(root) => text.replace("${CLAUDE_PLUGIN_ROOT}", &root.to_string_lossy()),
+                None => text,
+            };
             let Ok(text) = std::fs::read_to_string(file) else {
                 continue;
             };
@@ -347,11 +380,14 @@ impl ClaudeHooks {
                                     on,
                                     matcher,
                                     condition,
-                                    command,
-                                    args: handler.args,
+                                    command: in_plugin(command),
+                                    args: handler
+                                        .args
+                                        .map(|args| args.into_iter().map(&in_plugin).collect()),
                                     timeout: Duration::from_secs(
                                         handler.timeout.unwrap_or(default),
                                     ),
+                                    plugin_root: plugin_root.clone(),
                                 });
                             }
                             Err(why) => notes.push(skip(format!("was skipped: {why}"))),
@@ -408,6 +444,9 @@ impl ClaudeHooks {
                 command
             }
         };
+        if let Some(root) = &entry.plugin_root {
+            command.env("CLAUDE_PLUGIN_ROOT", root);
+        }
         let spawned = command
             .current_dir(&self.cwd)
             .env("CLAUDE_PROJECT_DIR", &self.cwd)
@@ -650,7 +689,12 @@ mod tests {
     fn hooks(dir: &Path, settings: Value) -> (ClaudeHooks, Vec<String>) {
         let file = dir.join("settings.json");
         std::fs::write(&file, settings.to_string()).unwrap();
-        ClaudeHooks::load(&[file.clone(), file], dir, &dir.join("sessions"), false)
+        ClaudeHooks::load(
+            &[file.clone().into(), file.into()],
+            dir,
+            &dir.join("sessions"),
+            false,
+        )
     }
 
     fn command(matcher: &str, command: &str) -> Value {
