@@ -428,6 +428,20 @@ impl Tool for Edit {
                             .to_string(),
                     ),
                     None => {
+                        // The commonest reason of all: the model is
+                        // repeating an edit it has already made.
+                        let wanted = input.new_string.trim();
+                        if !wanted.is_empty()
+                            && let Some(at) = text.find(wanted)
+                        {
+                            return ToolOutput::error(format!(
+                                "old_string was not found in {}, but new_string is already \
+                                 there (line {}). This change has been made; do not repeat it. \
+                                 Move on to what is still left to do.",
+                                path.display(),
+                                text[..at].matches('\n').count() + 1
+                            ));
+                        }
                         return ToolOutput::error(format!(
                             "old_string was not found in {}.{} Read the file and copy the text exactly.",
                             path.display(),
@@ -634,6 +648,36 @@ mod tests {
             .call(&json!({"path": "notes.txt", "content": "((("}), &ctx)
             .await;
         assert!(!text.text.contains("Warning"));
+    }
+
+    #[tokio::test]
+    async fn repeating_an_edit_that_was_already_made_is_recognized() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        fs::write(
+            dir.path().join("a.py"),
+            "x = 1\nif n >= limit:\n    stop()\n",
+        )
+        .unwrap();
+        let edit = || {
+            let ctx = ctx.clone();
+            async move {
+                Edit.call(
+                    &json!({"path": "a.py", "old_string": "if n >= limit:", "new_string": "if n > limit:"}),
+                    &ctx,
+                )
+                .await
+            }
+        };
+        assert!(!edit().await.is_error);
+        let again = edit().await;
+        assert!(again.is_error);
+        assert!(
+            again.text.contains("new_string is already there (line 2)")
+                && again.text.contains("do not repeat it"),
+            "{}",
+            again.text
+        );
     }
 
     #[tokio::test]
