@@ -67,7 +67,8 @@ impl Tool for Glob {
         ToolSpec {
             name: "glob".into(),
             description: "List files whose path matches a glob such as **/*.rs or src/*.py, \
-                          newest first. Files ignored by the project are skipped."
+                          newest first, as paths relative to the working directory. Files \
+                          ignored by the project are skipped."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -115,7 +116,9 @@ impl Tool for Glob {
             let total = found.len();
             let mut out = String::new();
             for (_, path) in found.iter().take(MAX_GLOB_RESULTS) {
-                out.push_str(&display_path(relative(path, &root)));
+                // Relative to the working directory, not to the directory
+                // searched, so a path can be handed straight to another tool.
+                out.push_str(&display_path(relative(path, &ctx.cwd)));
                 out.push('\n');
             }
             if total > MAX_GLOB_RESULTS {
@@ -147,7 +150,8 @@ impl Tool for Grep {
         ToolSpec {
             name: "grep".into(),
             description: "Search file contents with a regular expression. Returns matching \
-                          lines as path:line:text. A match inside a function or class is \
+                          lines as path:line:text, with paths relative to the working \
+                          directory. A match inside a function or class is \
                           followed by [in <its name>, line <where it starts>]. Files ignored \
                           by the project, binary files and very large files are skipped."
                 .into(),
@@ -219,11 +223,7 @@ impl Tool for Grep {
                     if shown < limit {
                         shown += 1;
                         let line: String = line.chars().take(MAX_SHOWN_LINE_CHARS).collect();
-                        let name = if root.is_file() {
-                            path.as_path()
-                        } else {
-                            relative(path, &root)
-                        };
+                        let name = relative(path, &ctx.cwd);
                         // Which function a line is in is usually the next
                         // thing asked; saying it here saves reading the file.
                         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -566,7 +566,7 @@ impl Tool for RepoMap {
             );
             let mut listed = 0usize;
             for (_, path, definitions) in &ranked {
-                let mut section = format!("\n{}\n", display_path(relative(path, &root)));
+                let mut section = format!("\n{}\n", display_path(relative(path, &ctx.cwd)));
                 let mut top: Vec<&Definition> = definitions.iter().collect();
                 top.sort_by_key(|d| std::cmp::Reverse(weight(&d.name)));
                 top.truncate(12);
@@ -684,6 +684,20 @@ mod tests {
             "{}",
             single.text
         );
+
+        // Searching a subdirectory still names files from the working
+        // directory, so what comes back can be passed to read or edit.
+        let narrowed = Grep
+            .call(&json!({"pattern": "todo", "path": "src/util"}), &ctx)
+            .await;
+        assert_eq!(
+            narrowed.text,
+            "src/util/money.rs:6:    todo!()  [in parse_money, line 5]\n"
+        );
+        let listed = Glob
+            .call(&json!({"pattern": "*.rs", "path": "src/util"}), &ctx)
+            .await;
+        assert_eq!(listed.text, "src/util/money.rs\n");
 
         assert_eq!(
             Grep.call(&json!({"pattern": "zzz"}), &ctx).await,
