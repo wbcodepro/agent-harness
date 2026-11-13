@@ -172,6 +172,10 @@ pub trait TurnHook: Send + Sync {
     }
 }
 
+/// Starts the message telling the model the turn is about to run out.
+pub const STEPS_LEFT_PREFIX: &str = "[zcode limit]";
+const STEPS_LEFT_WARNING: u64 = 3;
+
 pub struct Agent {
     pub llm: Arc<dyn Llm>,
     pub tools: ToolSet,
@@ -363,6 +367,20 @@ impl Agent {
             if may_have_changed {
                 changed = true;
                 self.checkpoint(session).await?;
+            }
+            // A turn cut off at the limit ends mid-thought with nothing
+            // said. Warned a few requests ahead, the model can wrap up.
+            if called_tools
+                && self.max_steps > 2 * STEPS_LEFT_WARNING
+                && step + STEPS_LEFT_WARNING == self.max_steps
+            {
+                session.append(Event::UserMessage {
+                    content: vec![Block::text(format!(
+                        "{STEPS_LEFT_PREFIX} This turn can make {STEPS_LEFT_WARNING} more \
+                         requests. Finish what you can verify, then say plainly what is done \
+                         and what is left."
+                    ))],
+                })?;
             }
             session.append(Event::StepEnd { turn, step })?;
             if completion.stop == StopReason::Refusal {

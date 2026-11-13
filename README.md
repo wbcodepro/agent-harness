@@ -175,7 +175,7 @@ path = "plugins/wordcount.wasm"
 read = ["docs"]
 ```
 
-Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, kết quả kèm một ghi chú báo cho model biết nó đang lặp. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
+Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, hoặc cùng một lời gọi thất bại bốn lần mà chưa lần nào đạt, kết quả kèm một ghi chú báo cho model biết nó đang kẹt (ghi chú này cũng được tính khi quyết định leo thang). Ba request trước khi lượt hết số bước, model được báo để kịp tổng kết. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
 
 MCP: server stdio chạy trong sandbox; server HTTP được gọi từ tiến trình zcode, xác thực bằng header tĩnh. Chưa hỗ trợ luồng đăng nhập OAuth, bản đặc tả không trạng thái `2026-07-28`, và yêu cầu do server khởi xướng (sampling, elicitation).
 

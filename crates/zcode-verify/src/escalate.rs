@@ -2,6 +2,7 @@
 //! and, when a stronger model is configured, hand the rest of the turn to
 //! it.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,16 +21,26 @@ pub const REPEAT_PREFIX: &str = "[zcode repeat]";
 /// How many identical calls with identical results in a row draw the note.
 const REPEATS: usize = 3;
 
+/// A call that keeps failing draws the note at every multiple of this,
+/// even when each failure reads differently.
+const FAILURES: usize = 4;
+
 /// Notices the model making the same call and getting the same result over
 /// and over, and says so in the result.
 ///
 /// Weaker models fall into this after a failed edit or a command that keeps
 /// failing the same way; nothing in the conversation changes, so nothing
 /// gets them out unless the harness points at it.
+///
+/// The other shape of being stuck is a check that is run again and again
+/// between changes and never passes: every result differs a little, so
+/// nothing repeats exactly, but nothing is getting closer either.
 #[derive(Default)]
 pub struct RepeatGuard {
     /// The last call, its result, and how many times in a row it happened.
     last: Mutex<Option<(String, String, usize)>>,
+    /// How many times each call has failed since it last succeeded.
+    failures: Mutex<HashMap<String, usize>>,
 }
 
 impl Layer<ToolRequest, ToolOutput> for RepeatGuard {
@@ -41,12 +52,35 @@ impl Layer<ToolRequest, ToolOutput> for RepeatGuard {
         let call = format!("{} {}", req.name, req.input);
         Box::pin(async move {
             let mut output = next.run(req).await;
+            let failed = {
+                let mut failures = self.failures.lock().expect("repeat guard lock poisoned");
+                if failures.len() > 256 {
+                    failures.clear();
+                }
+                if output.is_error {
+                    let count = failures.entry(call.clone()).or_insert(0);
+                    *count += 1;
+                    *count
+                } else {
+                    failures.remove(&call);
+                    0
+                }
+            };
             let mut last = self.last.lock().expect("repeat guard lock poisoned");
             let count = match &*last {
                 Some((seen, result, count)) if *seen == call && *result == output.text => count + 1,
                 _ => 1,
             };
             *last = Some((call, output.text.clone(), count));
+            if count < REPEATS && failed > 0 && failed % FAILURES == 0 {
+                output.text.push_str(&format!(
+                    "\n{REPEAT_PREFIX} This call has now failed {failed} times without once \
+                     succeeding. What you have been changing between attempts is not fixing \
+                     it. Stop and read the original request and the files involved again, \
+                     and question your assumptions, including whether the thing you are \
+                     running is itself right."
+                ));
+            }
             if count >= REPEATS {
                 output.text.push_str(&format!(
                     "\n{REPEAT_PREFIX} You have made this exact call {count} times in a row \
@@ -185,6 +219,55 @@ mod tests {
         assert_eq!(run("make", "other").await.text, "other");
         assert_eq!(run("ls", "other").await.text, "other");
         assert_eq!(run("make", "boom").await.text, "boom");
+    }
+
+    #[tokio::test]
+    async fn a_check_that_keeps_failing_differently_is_pointed_out_too() {
+        let pipeline = ToolPipeline::new();
+        pipeline.push(RepeatGuard::default());
+        let run = |result: String, failed: bool| {
+            let request = ToolRequest {
+                call_id: "c".into(),
+                name: "bash".into(),
+                input: json!({ "command": "make test" }),
+                effect: Effect::Execute,
+            };
+            pipeline.run(request, move |_| {
+                let result = result.clone();
+                async move {
+                    ToolOutput {
+                        text: result,
+                        is_error: failed,
+                    }
+                }
+            })
+        };
+        for attempt in 1..=3 {
+            assert!(
+                !run(format!("error {attempt}"), true)
+                    .await
+                    .text
+                    .contains(REPEAT_PREFIX)
+            );
+        }
+        let fourth = run("error 4".into(), true).await.text;
+        assert!(fourth.contains("failed 4 times"), "{fourth}");
+        assert!(
+            !run("error 5".into(), true)
+                .await
+                .text
+                .contains(REPEAT_PREFIX)
+        );
+        // Passing once clears the count.
+        assert_eq!(run("ok".into(), false).await.text, "ok");
+        for attempt in 1..=3 {
+            assert!(
+                !run(format!("again {attempt}"), true)
+                    .await
+                    .text
+                    .contains(REPEAT_PREFIX)
+            );
+        }
     }
 
     fn scripted(text: &str) -> Arc<dyn Llm> {

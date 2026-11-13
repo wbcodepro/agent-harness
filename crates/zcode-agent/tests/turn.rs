@@ -337,6 +337,37 @@ async fn deferred_tools_are_found_by_search_and_run_under_their_own_names() {
     );
 }
 
+#[tokio::test]
+async fn the_model_is_warned_a_few_requests_before_the_turn_runs_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut responses: Vec<ScriptedResponse> = (1..=6)
+        .map(|n| tool_call(&format!("c{n}"), "glob", json!({"pattern": "*"})))
+        .collect();
+    responses.push(ScriptedResponse::text("Listed; nothing else done."));
+    let llm = Arc::new(ScriptedLlm::new(Recording { responses }));
+    let agent = agent(llm, dir.path()); // eight steps at most
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent
+        .run_turn(&mut session, user("Look around"))
+        .await
+        .unwrap();
+
+    let warned_after: Vec<usize> = session
+        .history()
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            matches!(&message.content[0], Block::Text { text } if text.starts_with(zcode_agent::STEPS_LEFT_PREFIX))
+        })
+        .map(|(index, _)| index)
+        .collect();
+    // Once, after the fifth step's result: user, then five call/result
+    // pairs, then the warning.
+    assert_eq!(warned_after, [11]);
+}
+
 /// Has the user say something while the first tool call is running.
 struct Interject(Steering);
 
