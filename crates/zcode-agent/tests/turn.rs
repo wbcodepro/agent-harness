@@ -68,6 +68,7 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
         max_steps: 8,
         max_tokens: None,
         max_tool_calls: 32,
+        deferred: ToolSet::new(),
     }
 }
 
@@ -256,6 +257,84 @@ async fn a_pipeline_layer_can_deny_a_tool_and_the_model_is_told() {
     assert_eq!(results.len(), 2);
     assert!(results[0].0.contains("Denied by policy: write") && results[0].1);
     assert!(results[1].0.contains("no tool named") && results[1].1);
+}
+
+#[tokio::test]
+async fn deferred_tools_are_found_by_search_and_run_under_their_own_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            tool_call("c1", "tool_search", json!({"query": "create a file"})),
+            tool_call(
+                "c2",
+                "tool_call",
+                json!({"name": "write", "input": {"path": "a.txt", "content": "x"}}),
+            ),
+            tool_call(
+                "c3",
+                "tool_call",
+                json!({"name": "read", "input": {"path": "a.txt"}}),
+            ),
+            tool_call("c4", "tool_call", json!({"name": "launch", "input": {}})),
+            ScriptedResponse::text("Done."),
+        ],
+    }));
+    let mut agent = agent(llm, dir.path());
+    // Everything but bash is deferred; only bash and the two entry points
+    // are declared to the model.
+    agent.deferred = ToolSet::builtin();
+    agent.deferred.retain(|tool| tool.spec().name != "bash");
+    agent.tools.retain(|tool| tool.spec().name == "bash");
+    zcode_agent::deferred::declare_deferred(&mut agent.tools, &agent.deferred);
+    agent.pipeline.push(DenyWrites);
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent
+        .run_turn(&mut session, user("Make a.txt"))
+        .await
+        .unwrap();
+
+    let declared: Vec<String> = session
+        .history()
+        .tools
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(declared, ["bash", "tool_search", "tool_call"]);
+    let results: Vec<(String, bool)> = session
+        .records()
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ToolResult {
+                content, is_error, ..
+            } => match &content[0] {
+                Block::Text { text } => Some((text.clone(), *is_error)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(
+        results[0].0.starts_with("write\nCreate a file"),
+        "{}",
+        results[0].0
+    );
+    assert!(results[0].0.contains("Input schema: {"));
+    // Policy saw the real tool, not the wrapper: the write is refused by
+    // name, and the read, which changes nothing, goes through.
+    assert_eq!(results[1], ("Denied by policy: write".to_string(), true));
+    assert!(
+        results[2].0.contains("does not exist")
+            || results[2].0.contains("No such file")
+            || results[2].1,
+        "{}",
+        results[2].0
+    );
+    assert!(
+        results[3].0.contains("no tool named \"launch\"") && results[3].1,
+        "{}",
+        results[3].0
+    );
 }
 
 /// Streams part of an answer, then fails.

@@ -61,6 +61,8 @@ Máy chủ được kiểm thử bằng runtime client chính thức của giao 
 
 `edit` và `apply_patch` chấp nhận sai lệch về khoảng trắng, thụt lề và kiểu xuống dòng khi chỉ có đúng một chỗ khớp; dòng không đổi luôn giữ nguyên như trong file. Tham số gọi tool bị bọc trong code fence hoặc lẫn chữ được gỡ ra trước khi chạy.
 
+Khi tool từ server MCP và plugin nhiều hơn `defer_tools_over`, chúng không nằm trong danh sách tool gửi cho model (mỗi tool khai báo tốn token ở mọi request). Model tìm bằng `tool_search` và chạy bằng `tool_call`; luật quyền và hook vẫn thấy tên thật của tool được gọi.
+
 Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song song. `subagent` giao việc cho một agent mới có ngữ cảnh riêng; với `isolate` nó làm trên một git worktree và nhánh riêng.
 
 ## An toàn
@@ -126,6 +128,8 @@ grant = ["GITHUB_TOKEN"]
 compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng
 clear_tool_results = false      # true: vượt ngưỡng thì xóa kết quả tool cũ trước, chưa đủ mới tóm tắt
 spill_at_bytes = 16000          # đầu ra dài hơn thì lưu ra file, chỉ xem trước
+defer_tools_over = 20           # nhiều tool MCP/plugin hơn số này thì không khai báo cho model;
+                                # model tìm bằng tool_search và chạy bằng tool_call
 
 [verify]
 commands = ["cargo test -q"]    # phải đạt trước khi một lượt có sửa file được kết thúc

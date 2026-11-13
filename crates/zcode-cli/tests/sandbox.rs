@@ -520,4 +520,52 @@ for line in sys.stdin:
     ] {
         assert!(offered.contains(&name.to_string()), "{offered:?}");
     }
+
+    // Past the configured count, extension tools are not declared at all:
+    // the model searches for one and calls it through `tool_call`.
+    let config = fs::read_to_string(fx.home.join("config.toml")).unwrap();
+    fs::write(
+        fx.home.join("config.toml"),
+        format!("[context]\ndefer_tools_over = 2\n\n{config}"),
+    )
+    .unwrap();
+    let (output, results) = fx.run(
+        vec![
+            ("tool_search", json!({"query": "add numbers"})),
+            (
+                "tool_call",
+                json!({"name": "mcp__calc__add", "input": {"a": 2, "b": 40}}),
+            ),
+            (
+                "tool_call",
+                json!({"name": "wc__file_stats", "input": {"path": "../home/config.toml"}}),
+            ),
+        ],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        results[0].0.starts_with("mcp__calc__add\nAdd."),
+        "{stderr}\n{results:#?}"
+    );
+    assert_eq!(results[1], ("42".to_string(), false), "{stderr}");
+    assert!(results[2].1 && results[2].0.contains("not been granted"));
+    let records = store
+        .read(&store.list().unwrap().pop().unwrap().id)
+        .unwrap();
+    let offered: Vec<String> = records
+        .iter()
+        .find_map(|r| match &r.event {
+            Event::ToolsDeclared { tools } => Some(tools.iter().map(|t| t.name.clone()).collect()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(offered.contains(&"tool_search".to_string()), "{offered:?}");
+    assert!(offered.contains(&"tool_call".to_string()), "{offered:?}");
+    assert!(
+        !offered
+            .iter()
+            .any(|name| name.starts_with("mcp__") || name.starts_with("wc__")),
+        "{offered:?}"
+    );
 }

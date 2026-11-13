@@ -6,6 +6,8 @@
 //! request is rebuilt from the log, so the log alone explains what the model
 //! saw and did.
 
+pub mod deferred;
+
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -16,7 +18,7 @@ use zcode_session::{
     Block, Delta, Event, History, Record, SessionError, SessionId, SessionWriter, StopReason,
     TurnEndReason, assemble, derive_history, plan_close,
 };
-use zcode_tools::{Effect, ToolContext, ToolOutput, ToolRunner, ToolSet};
+use zcode_tools::{Effect, Tool, ToolContext, ToolOutput, ToolRunner, ToolSet};
 
 type Observer = Box<dyn FnMut(&Record) + Send>;
 
@@ -186,6 +188,9 @@ pub struct Agent {
     /// Most tool calls run from one model response; the rest are refused.
     /// Stops a model that is stuck emitting calls.
     pub max_tool_calls: usize,
+    /// Tools that are not declared to the model but can be run through
+    /// `tool_call`. See [`deferred`].
+    pub deferred: ToolSet,
 }
 
 impl Agent {
@@ -313,11 +318,15 @@ impl Agent {
                 }
                 let mut remaining = calls.into_iter().peekable();
                 while let Some(first) = remaining.next() {
-                    let overlaps =
-                        |name: &str| self.tools.get(name).is_some_and(|t| t.concurrent());
+                    let overlaps = |name: &str, input: &Value| {
+                        self.resolve(name, input)
+                            .is_some_and(|(tool, _, _)| tool.concurrent())
+                    };
                     let mut batch = vec![first];
-                    if overlaps(&batch[0].1) {
-                        while let Some(next) = remaining.next_if(|(_, name, _)| overlaps(name)) {
+                    if overlaps(&batch[0].1, &batch[0].2) {
+                        while let Some(next) =
+                            remaining.next_if(|(_, name, input)| overlaps(name, input))
+                        {
                             batch.push(next);
                         }
                     }
@@ -328,9 +337,8 @@ impl Agent {
                             input: input.clone(),
                         })?;
                         may_have_changed |= self
-                            .tools
-                            .get(name)
-                            .is_some_and(|tool| tool.effect() != Effect::ReadOnly);
+                            .resolve(name, input)
+                            .is_some_and(|(tool, _, _)| tool.effect() != Effect::ReadOnly);
                     }
                     let ids: Vec<String> = batch.iter().map(|(id, _, _)| id.clone()).collect();
                     let outputs = futures_util::future::join_all(
@@ -401,9 +409,34 @@ impl Agent {
         Ok(())
     }
 
+    /// The tool a call is really for, with its name and input: the named
+    /// tool itself, or for `tool_call` the deferred tool it names.
+    fn resolve(&self, name: &str, input: &Value) -> Option<(Arc<dyn Tool>, String, Value)> {
+        if name == deferred::CALL_TOOL {
+            // A name that resolves to nothing is an unknown tool, not a
+            // call to `tool_call` for the policy layers to rule on.
+            let inner = input["name"].as_str()?;
+            let tool = self.deferred.get(inner)?;
+            return Some((
+                tool,
+                inner.to_string(),
+                repair_input(input["input"].clone()),
+            ));
+        }
+        Some((self.tools.get(name)?, name.to_string(), input.clone()))
+    }
+
     async fn execute(&self, call_id: String, name: String, input: Value) -> ToolOutput {
-        let Some(tool) = self.tools.get(&name) else {
-            return ToolOutput::error(format!("There is no tool named {name:?}."));
+        let Some((tool, name, input)) = self.resolve(&name, &input) else {
+            return ToolOutput::error(if name == deferred::CALL_TOOL {
+                format!(
+                    "There is no tool named {}. Find the exact name with {}.",
+                    input["name"],
+                    deferred::SEARCH_TOOL
+                )
+            } else {
+                format!("There is no tool named {name:?}.")
+            });
         };
         let request = ToolRequest {
             call_id,

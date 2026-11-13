@@ -279,6 +279,10 @@ pub struct ContextConfig {
     pub compact_at_tokens: u64,
     /// Tool outputs longer than this are saved to a file and previewed.
     pub spill_at_bytes: usize,
+    /// With more MCP and plugin tools than this, none of them is declared
+    /// to the model: it finds them with `tool_search` and runs them with
+    /// `tool_call`, so they cost no prompt tokens until used.
+    pub defer_tools_over: usize,
     /// Past the threshold, first clear old tool results from what the model
     /// sees, and summarize only if that is not enough. Off by default: on
     /// the one task it was measured on, a model that had not noted what it
@@ -291,6 +295,7 @@ impl Default for ContextConfig {
         Self {
             compact_at_tokens: 100_000,
             spill_at_bytes: 16_000,
+            defer_tools_over: 20,
             clear_tool_results: false,
         }
     }

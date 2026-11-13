@@ -184,6 +184,13 @@ impl ToolSet {
         self.tools.push(tool);
     }
 
+    /// Adds each tool, replacing any with the same name.
+    pub fn extend(&mut self, tools: impl IntoIterator<Item = Arc<dyn Tool>>) {
+        for tool in tools {
+            self.insert(tool);
+        }
+    }
+
     /// Keeps only the tools for which `keep` returns true.
     pub fn retain(&mut self, keep: impl Fn(&Arc<dyn Tool>) -> bool) {
         self.tools.retain(keep);

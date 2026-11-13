@@ -417,6 +417,9 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         tools.insert(Arc::new(zcode_ext::skills::SkillTool::new(skills)));
     }
     let helper = std::env::current_exe().unwrap_or_default();
+    // Tools from MCP servers and plugins. A few are declared like any
+    // other; many are deferred.
+    let mut extension_tools = ToolSet::new();
     for (name, server) in &config.mcp {
         let started = async {
             let confinement = policy.is_confined().then_some(&policy);
@@ -425,7 +428,9 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             client.tools().await
         };
         match started.await {
-            Ok(server_tools) => server_tools.into_iter().for_each(|tool| tools.insert(tool)),
+            Ok(server_tools) => server_tools
+                .into_iter()
+                .for_each(|tool| extension_tools.insert(tool)),
             Err(e) => eprintln!("zcode: {e}"),
         }
     }
@@ -440,8 +445,18 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     for (name, plugin) in &config.plugins {
         let loaded = zcode_ext::wasm::WasmPlugin::load(name, plugin, cwd).and_then(|p| p.tools());
         match loaded {
-            Ok(plugin_tools) => plugin_tools.into_iter().for_each(|tool| tools.insert(tool)),
+            Ok(plugin_tools) => plugin_tools
+                .into_iter()
+                .for_each(|tool| extension_tools.insert(tool)),
             Err(e) => eprintln!("zcode: {e}"),
+        }
+    }
+    let mut deferred = ToolSet::new();
+    if extension_tools.specs().len() > config.context.defer_tools_over {
+        deferred = extension_tools;
+    } else {
+        for spec in extension_tools.specs() {
+            tools.extend(extension_tools.get(&spec.name));
         }
     }
     // Working with other agents: a shared board, a shared budget, and the
@@ -481,6 +496,10 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                         .agent
                         .tools
                         .retain(|tool| tool.effect() != Effect::Write);
+                    runtime
+                        .agent
+                        .deferred
+                        .retain(|tool| tool.effect() != Effect::Write);
                 }
                 Ok(zcode_multi::Child {
                     agent: runtime.agent,
@@ -514,9 +533,12 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         }
     }
     if options.plan {
+        deferred.retain(|tool| tool.effect() != Effect::Write);
         tools.retain(|tool| tool.effect() != Effect::Write);
         system.push_str(PLAN_MODE);
     }
+
+    zcode_agent::deferred::declare_deferred(&mut tools, &deferred);
 
     let agent = Agent {
         llm,
@@ -530,6 +552,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         max_steps: options.max_steps,
         max_tokens: None,
         max_tool_calls: config.model.max_tool_calls,
+        deferred,
     };
     Ok(Runtime {
         agent,
