@@ -159,6 +159,11 @@ impl Tool for Write {
                 Ok(()) => {
                     let mut said =
                         format!("Wrote {} bytes to {}.", input.content.len(), path.display());
+                    said.push_str(&crate::search::syntax_warning(
+                        &path,
+                        before.as_deref(),
+                        &input.content,
+                    ));
                     if let Some(before) = before
                         && before.len() > 200
                         && input.content.len() * 2 < before.len()
@@ -442,8 +447,9 @@ impl Tool for Edit {
                     ));
                 }
             };
+            let warning = crate::search::syntax_warning(&path, Some(&text), &updated);
             match fs::write(&path, updated) {
-                Ok(()) => ToolOutput::ok(format!("{note} in {}.", path.display())),
+                Ok(()) => ToolOutput::ok(format!("{note} in {}.{warning}", path.display())),
                 Err(e) => ToolOutput::error(format!("Cannot write {}: {e}", path.display())),
             }
         })
@@ -570,6 +576,64 @@ mod tests {
         );
         assert!(where_it_differs(file, "nothing\nlike this").contains("None of its lines"));
         assert!(where_it_differs("x()\nif a:\n    x()\n", "x()").contains("more than one place"));
+    }
+
+    // Python files are checked with python3, which the test machines
+    // other than Unix ones may not have under that name.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_change_that_breaks_the_syntax_is_reported_with_the_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let good = "def remove(stock, sku):\n    if sku in stock:\n        del stock[sku]\n    return stock\n";
+        fs::write(dir.path().join("inv.py"), good).unwrap();
+        let edit = |old: &'static str, new: &'static str| {
+            let ctx = ctx.clone();
+            async move {
+                Edit.call(
+                    &json!({"path": "inv.py", "old_string": old, "new_string": new}),
+                    &ctx,
+                )
+                .await
+            }
+        };
+        // A sound change says nothing extra.
+        let fine = edit("    return stock", "    return dict(stock)").await;
+        assert!(!fine.text.contains("Warning"), "{}", fine.text);
+        // One line pushed too deep: Python no longer parses.
+        let broken = edit(
+            "        del stock[sku]",
+            "            del stock[sku]\n      x = 1",
+        )
+        .await;
+        assert!(!broken.is_error);
+        assert!(broken.text.contains("no longer parses"), "{}", broken.text);
+        assert!(
+            broken.text.contains("line 4: `      x = 1`"),
+            "{}",
+            broken.text
+        );
+        // Already broken: further edits are not blamed for it.
+        let later = edit("    return dict(stock)", "    return stock").await;
+        assert!(!later.text.contains("Warning"), "{}", later.text);
+
+        // The same for a whole-file write, and for other languages.
+        let write = Write
+            .call(
+                &json!({"path": "m.rs", "content": "fn main() {\n    let x = (1;\n}\n"}),
+                &ctx,
+            )
+            .await;
+        assert!(
+            write.text.contains("no longer parses") && write.text.contains("line 2"),
+            "{}",
+            write.text
+        );
+        // No grammar, no opinion.
+        let text = Write
+            .call(&json!({"path": "notes.txt", "content": "((("}), &ctx)
+            .await;
+        assert!(!text.text.contains("Warning"));
     }
 
     #[tokio::test]

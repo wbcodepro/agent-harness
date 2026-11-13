@@ -397,6 +397,101 @@ fn outline(extension: &str, text: &str) -> Option<(Vec<Definition>, HashSet<Stri
     Some((definitions, mentions))
 }
 
+/// The first place the syntax tree of `text` has an error, as a 1-based
+/// line number. `None` when the text parses cleanly or there is no grammar
+/// for the extension.
+fn first_syntax_error(extension: &str, text: &str) -> Option<usize> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&grammar(extension)?).ok()?;
+    let tree = parser.parse(text, None)?;
+    if !tree.root_node().has_error() {
+        return None;
+    }
+    let mut cursor = tree.walk();
+    loop {
+        let node = cursor.node();
+        if node.is_error() || node.is_missing() {
+            return Some(node.start_position().row + 1);
+        }
+        // Only subtrees that contain the error are worth entering.
+        if node.has_error() && cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return Some(tree.root_node().start_position().row + 1);
+            }
+        }
+    }
+}
+
+/// Asks Python itself whether `text` is valid Python. The outer `None`
+/// means it could not be asked (no `python3`); the inner one that the
+/// text is fine. The bundled grammar is not used for Python because it
+/// accepts wrong indentation, which is the mistake that matters most.
+fn python_syntax_error(text: &str) -> Option<Option<(usize, String)>> {
+    use std::io::Write as _;
+    const CHECK: &str = "import ast,sys\ntry:\n ast.parse(sys.stdin.read())\nexcept SyntaxError as e:\n print(f'{e.lineno}:{e.msg}')";
+    let mut child = std::process::Command::new("python3")
+        .args(["-I", "-c", CHECK])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let said = String::from_utf8_lossy(&output.stdout);
+    let Some((line, message)) = said.trim().split_once(':') else {
+        return Some(None);
+    };
+    Some(Some((line.parse().ok()?, message.trim().to_string())))
+}
+
+/// The first syntax error in `text`, as a 1-based line and what is wrong.
+fn syntax_error(extension: &str, text: &str) -> Option<(usize, String)> {
+    if extension == "py"
+        && let Some(checked) = python_syntax_error(text)
+    {
+        return checked;
+    }
+    first_syntax_error(extension, text).map(|line| (line, "syntax error".to_string()))
+}
+
+/// What to tell the model when a change left a source file that no longer
+/// parses though it did before. Empty when there is nothing to say: no
+/// grammar, the file was already broken, or it is still fine.
+///
+/// A model that breaks the syntax otherwise finds out several steps later,
+/// from a test run whose error it then has to connect back to the edit.
+pub(crate) fn syntax_warning(path: &Path, before: Option<&str>, after: &str) -> String {
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let Some((line, message)) = syntax_error(extension, after) else {
+        return String::new();
+    };
+    if before.is_some_and(|before| syntax_error(extension, before).is_some()) {
+        return String::new();
+    }
+    let shown: String = after
+        .lines()
+        .nth(line.saturating_sub(1))
+        .unwrap_or("")
+        .chars()
+        .take(160)
+        .collect();
+    format!(
+        " Warning: the file no longer parses ({message}, line {line}: `{}`). Check the \
+         indentation and brackets of what you just changed and fix it now.",
+        shown.trim_end()
+    )
+}
+
 /// A definition that spans several lines, by its first and last row.
 struct Scope {
     start: usize,

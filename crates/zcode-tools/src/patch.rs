@@ -375,8 +375,12 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                 if !content.is_empty() {
                     content.push('\n');
                 }
+                let warning = crate::search::syntax_warning(&target, None, &content);
                 outcomes.push((target, Some(content)));
                 summary.push(format!("A {path}"));
+                if !warning.is_empty() {
+                    summary.push(format!("  {path}:{warning}"));
+                }
             }
             Op::Delete { path } => {
                 let target = ctx.resolve(path);
@@ -395,6 +399,10 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                 let text =
                     fs::read_to_string(&source).map_err(|e| format!("Cannot read {path}: {e}"))?;
                 let updated = apply_hunks(path, &text, hunks)?;
+                let warning = crate::search::syntax_warning(&source, Some(&text), &updated);
+                if !warning.is_empty() {
+                    summary.push(format!("  {path}:{warning}"));
+                }
                 match move_to {
                     Some(new_path) => {
                         outcomes.push((source, None));
