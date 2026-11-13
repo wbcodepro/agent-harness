@@ -100,14 +100,25 @@ async fn typing_a_request_runs_a_turn_with_approval_and_rewind_undoes_it() {
     );
 
     ui.type_line("make a.txt");
-    // Unconfined tools ask first; nothing happens until the user answers.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Unconfined tools ask first. Wait until the call is logged (the
+    // question follows at once), and check nothing ran before the answer.
+    let store = hx_app::session_store(&home);
+    wait_for("the tool call to be logged", || {
+        store.list().unwrap().first().is_some_and(|header| {
+            store
+                .read(&header.id)
+                .unwrap()
+                .iter()
+                .any(|record| matches!(record.event, hx_session::Event::ToolCall { .. }))
+        })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!work.join("a.txt").exists());
     ui.key(KeyCode::Char('y'));
     wait_for("the approved write", || work.join("a.txt").exists()).await;
 
     // The session recorded a completed turn.
-    let store = hx_app::session_store(&home);
     wait_for("the turn to finish", || {
         store.list().unwrap().first().is_some_and(|header| {
             store.read(&header.id).unwrap().iter().any(|record| {
