@@ -98,6 +98,11 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 /// minutes counts as failed: a check that runs the agent's code can hang on
 /// it.
 async fn shell(command: &str, cwd: &Path) -> bool {
+    // Windows installs Python as `python`; `python3` there is a stub that
+    // only offers to open the Store.
+    #[cfg(windows)]
+    let command =
+        &format!("python3 -c 0 >/dev/null 2>&1 || python3() {{ python \"$@\"; }}\n{command}");
     let child = tokio::process::Command::new(zcode_kernel::bash_program())
         .arg("-c")
         .arg(command)
@@ -257,6 +262,33 @@ fn tasks_in(suite: &Path, filter: Option<&str>) -> Result<Vec<(String, PathBuf)>
     Ok(tasks)
 }
 
+/// The tasks' configuration, with the user's acceptance of a sandbox that
+/// confines only writes carried over from their own config.toml. Each task
+/// runs with a data directory of its own, and on Windows the agent refuses
+/// to start confined until `allow_partial` is set there.
+fn with_accepted_partial_sandbox(home: &Path, config: &str) -> String {
+    let accepted = std::fs::read_to_string(home.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|user| user.get("sandbox")?.get("allow_partial")?.as_bool())
+        .unwrap_or(false);
+    let Ok(mut table) = config.parse::<toml::Table>() else {
+        return config.to_string();
+    };
+    if !accepted {
+        return config.to_string();
+    }
+    let sandbox = table
+        .entry("sandbox")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    match sandbox.as_table_mut() {
+        Some(sandbox) if !sandbox.contains_key("allow_partial") => {
+            sandbox.insert("allow_partial".into(), toml::Value::Boolean(true));
+            toml::to_string(&table).unwrap_or_else(|_| config.to_string())
+        }
+        _ => config.to_string(),
+    }
+}
 /// Runs every task once with `config` as the agent's configuration file.
 async fn run_suite(
     home: &Path,
@@ -273,6 +305,7 @@ async fn run_suite(
         .names()
         .filter_map(|name| Some((name.to_string(), secrets.get(name)?.to_string())))
         .collect();
+    let config = &with_accepted_partial_sandbox(home, config);
 
     let scratch = std::env::temp_dir().join(format!("zcode-eval-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
@@ -552,5 +585,36 @@ mod tests {
             trial("apply-patch", 7, 3000),
         ];
         assert_eq!(best(&tied).edit_format, "search-replace");
+    }
+
+    #[test]
+    fn tasks_inherit_the_users_acceptance_of_a_partial_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = "[model]\ntools = \"minimal\"\n";
+        // Not accepted: the configuration is passed on untouched.
+        assert_eq!(with_accepted_partial_sandbox(dir.path(), task), task);
+        let user = dir.path().join("config.toml");
+        std::fs::write(&user, "[sandbox]\nallow_partial = false\n").unwrap();
+        assert_eq!(with_accepted_partial_sandbox(dir.path(), task), task);
+
+        std::fs::write(
+            &user,
+            "[sandbox]\nallow_partial = true\nwritable = [\"/elsewhere\"]\n",
+        )
+        .unwrap();
+        // Only the acceptance is carried over, nothing else of the user's.
+        let merged: toml::Table = with_accepted_partial_sandbox(dir.path(), task)
+            .parse()
+            .unwrap();
+        assert_eq!(merged["model"]["tools"].as_str(), Some("minimal"));
+        assert_eq!(merged["sandbox"].as_table().unwrap().len(), 1);
+        assert_eq!(merged["sandbox"]["allow_partial"].as_bool(), Some(true));
+        let empty: toml::Table = with_accepted_partial_sandbox(dir.path(), "")
+            .parse()
+            .unwrap();
+        assert_eq!(empty["sandbox"]["allow_partial"].as_bool(), Some(true));
+        // A configuration that decides for itself keeps its decision.
+        let own = "[sandbox]\nallow_partial = false\n";
+        assert_eq!(with_accepted_partial_sandbox(dir.path(), own), own);
     }
 }
