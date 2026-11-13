@@ -21,6 +21,10 @@ pub const REPEAT_PREFIX: &str = "[zcode repeat]";
 /// How many identical calls with identical results in a row draw the note.
 const REPEATS: usize = 3;
 
+/// After this many identical calls with identical results in a row, the
+/// next one is not run at all.
+const REFUSE_AFTER: usize = 4;
+
 /// A call that keeps failing draws the note at every multiple of this,
 /// even when each failure reads differently.
 const FAILURES: usize = 4;
@@ -51,6 +55,26 @@ impl Layer<ToolRequest, ToolOutput> for RepeatGuard {
     ) -> BoxFuture<'a, ToolOutput> {
         let call = format!("{} {}", req.name, req.input);
         Box::pin(async move {
+            // Nothing else has been called since the last of these, so it
+            // would come back the same once more. Past a point, saying so
+            // in the result has not worked: do not spend the call.
+            let already = match &*self.last.lock().expect("repeat guard lock poisoned") {
+                Some((seen, _, count)) if *seen == call => *count,
+                _ => 0,
+            };
+            if already >= REFUSE_AFTER {
+                if let Some((_, _, count)) =
+                    &mut *self.last.lock().expect("repeat guard lock poisoned")
+                {
+                    *count += 1;
+                }
+                return ToolOutput::error(format!(
+                    "{REPEAT_PREFIX} Not run. You have made this exact call {already} times in \
+                     a row with the same result, and nothing has changed since. You already \
+                     have its result above. Make a different call, or stop and say what is \
+                     blocking you."
+                ));
+            }
             let mut output = next.run(req).await;
             let failed = {
                 let mut failures = self.failures.lock().expect("repeat guard lock poisoned");
@@ -217,10 +241,38 @@ mod tests {
         let third = run("make", "boom").await.text;
         assert!(third.starts_with("boom\n[zcode repeat]"), "{third}");
         assert!(run("make", "boom").await.text.contains("4 times"));
-        // A different result, or a different call, starts over.
-        assert_eq!(run("make", "other").await.text, "other");
+        // From the fifth on it is not run: the tool's own output is gone
+        // from the result, and only the refusal is left.
+        let fifth = run("make", "boom").await;
+        assert!(
+            fifth.is_error && fifth.text.starts_with("[zcode repeat] Not run."),
+            "{}",
+            fifth.text
+        );
+        assert!(run("make", "boom").await.text.contains("Not run"));
+        // Any other call in between starts over: something may have changed.
         assert_eq!(run("ls", "other").await.text, "other");
-        assert_eq!(run("make", "boom").await.text, "boom");
+        assert_eq!(run("make", "fixed").await.text, "fixed");
+    }
+
+    #[tokio::test]
+    async fn a_different_result_from_the_same_call_starts_the_count_over() {
+        let pipeline = ToolPipeline::new();
+        pipeline.push(RepeatGuard::default());
+        let run = |result: &'static str| {
+            let request = ToolRequest {
+                call_id: "c".into(),
+                name: "bash".into(),
+                input: json!({ "command": "date" }),
+                effect: Effect::Execute,
+            };
+            pipeline.run(request, move |_| {
+                Box::pin(async move { ToolOutput::ok(result) })
+            })
+        };
+        for result in ["1", "1", "2", "2", "3", "3", "4", "4"] {
+            assert_eq!(run(result).await.text, result);
+        }
     }
 
     #[tokio::test]
