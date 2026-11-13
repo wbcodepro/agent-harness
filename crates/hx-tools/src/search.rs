@@ -269,6 +269,113 @@ struct Definition {
     signature: String,
 }
 
+/// The tree-sitter grammar for a file extension, where one is bundled.
+fn grammar(extension: &str) -> Option<tree_sitter::Language> {
+    Some(match extension {
+        "rs" => tree_sitter_rust::LANGUAGE.into(),
+        "py" => tree_sitter_python::LANGUAGE.into(),
+        "js" | "jsx" | "mjs" => tree_sitter_javascript::LANGUAGE.into(),
+        "ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        "go" => tree_sitter_go::LANGUAGE.into(),
+        _ => return None,
+    })
+}
+
+/// Syntax node kinds that introduce a named definition, across the bundled
+/// grammars.
+const DEFINITION_KINDS: &[&str] = &[
+    // Rust
+    "function_item",
+    "function_signature_item",
+    "struct_item",
+    "enum_item",
+    "trait_item",
+    "type_item",
+    "mod_item",
+    "const_item",
+    "static_item",
+    "macro_definition",
+    "union_item",
+    // Python
+    "function_definition",
+    "class_definition",
+    // JavaScript and TypeScript
+    "function_declaration",
+    "generator_function_declaration",
+    "class_declaration",
+    "method_definition",
+    "interface_declaration",
+    "type_alias_declaration",
+    "enum_declaration",
+    "abstract_class_declaration",
+    // Go
+    "method_declaration",
+    "type_spec",
+];
+
+fn signature_of(line: &str) -> String {
+    let shown: String = line.trim().chars().take(110).collect();
+    shown.trim_end_matches(['{', ' ', ':']).to_string()
+}
+
+/// Definitions and mentioned identifiers of a source file, from its syntax
+/// tree. `None` when there is no grammar for the file or it cannot be
+/// parsed; the caller then falls back to line patterns.
+fn outline(extension: &str, text: &str) -> Option<(Vec<Definition>, HashSet<String>)> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&grammar(extension)?).ok()?;
+    let tree = parser.parse(text, None)?;
+    let source = text.as_bytes();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut definitions = Vec::new();
+    let mut mentions = HashSet::new();
+
+    let mut cursor = tree.walk();
+    'walk: loop {
+        let node = cursor.node();
+        let kind = node.kind();
+        // `const f = () => ...` and `const f = function ...` define f.
+        let is_function_binding = kind == "variable_declarator"
+            && node.child_by_field_name("value").is_some_and(|value| {
+                matches!(
+                    value.kind(),
+                    "arrow_function" | "function_expression" | "function"
+                )
+            });
+        if (DEFINITION_KINDS.contains(&kind) || is_function_binding)
+            && let Some(name) = node.child_by_field_name("name")
+            && let Ok(name) = name.utf8_text(source)
+        {
+            let row = node.start_position().row;
+            definitions.push(Definition {
+                name: name.to_string(),
+                line: row + 1,
+                signature: signature_of(lines.get(row).copied().unwrap_or("")),
+            });
+        }
+        if kind.ends_with("identifier")
+            && let Ok(name) = node.utf8_text(source)
+            && name.len() >= 3
+        {
+            mentions.insert(name.to_string());
+        }
+
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    Some((definitions, mentions))
+}
+
 impl Tool for RepoMap {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -318,21 +425,28 @@ impl Tool for RepoMap {
                 let Some(text) = searchable_text(&path) else {
                     continue;
                 };
-                let mut definitions = Vec::new();
-                for (index, line) in text.lines().enumerate() {
-                    if let Some(captures) = definition_regex().captures(line) {
-                        let signature: String = line.trim().chars().take(110).collect();
-                        definitions.push(Definition {
-                            name: captures[1].to_string(),
-                            line: index + 1,
-                            signature: signature.trim_end_matches(['{', ' ', ':']).to_string(),
-                        });
-                    }
-                }
-                let mentions = identifier_regex()
-                    .find_iter(&text)
-                    .map(|found| found.as_str().to_string())
-                    .collect();
+                let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+                let (definitions, mentions) = outline(extension, &text).unwrap_or_else(|| {
+                    // No grammar for this language: recognise definitions
+                    // by the shape of their first line.
+                    let definitions = text
+                        .lines()
+                        .enumerate()
+                        .filter_map(|(index, line)| {
+                            let captures = definition_regex().captures(line)?;
+                            Some(Definition {
+                                name: captures[1].to_string(),
+                                line: index + 1,
+                                signature: signature_of(line),
+                            })
+                        })
+                        .collect();
+                    let mentions = identifier_regex()
+                        .find_iter(&text)
+                        .map(|found| found.as_str().to_string())
+                        .collect();
+                    (definitions, mentions)
+                });
                 files.push((path, definitions, mentions));
             }
             if files.is_empty() {
@@ -512,5 +626,56 @@ mod tests {
 
         let tiny = RepoMap.call(&json!({"max_chars": 500}), &ctx).await;
         assert!(tiny.text.len() <= 600);
+    }
+
+    fn names(extension: &str, text: &str) -> Vec<(String, usize)> {
+        let (definitions, _) = outline(extension, text).expect("a grammar is bundled");
+        definitions.into_iter().map(|d| (d.name, d.line)).collect()
+    }
+
+    #[test]
+    fn definitions_come_from_the_syntax_tree_not_from_look_alike_text() {
+        let rust = "/// fn in_a_comment() {}\nconst TEXT: &str = \"fn in_a_string() {}\";\n\
+            impl Cart {\n    #[inline]\n    pub(crate) async fn\n        checkout(&self) {}\n}\n\
+            macro_rules! money { () => {}; }\n";
+        assert_eq!(
+            names("rs", rust),
+            [
+                ("TEXT".to_string(), 2),
+                ("checkout".to_string(), 5),
+                ("money".to_string(), 8)
+            ]
+        );
+
+        let typescript = "export const total = async (items: Item[]) => 0;\nconst limit = 3;\n\
+            interface Item { price: number }\nclass Cart {\n  add(item: Item) {}\n}\n";
+        assert_eq!(
+            names("ts", typescript),
+            [
+                ("total".to_string(), 1),
+                ("Item".to_string(), 3),
+                ("Cart".to_string(), 4),
+                ("add".to_string(), 5),
+            ]
+        );
+
+        let go = "package cart\n\ntype Cart struct{}\n\nfunc (c *Cart) Total() int { return 0 }\n";
+        assert_eq!(
+            names("go", go),
+            [("Cart".to_string(), 3), ("Total".to_string(), 5)]
+        );
+
+        let python = "class Shop:\n    def open(self):\n        def inner(): pass\n";
+        assert_eq!(
+            names("py", python),
+            [
+                ("Shop".to_string(), 1),
+                ("open".to_string(), 2),
+                ("inner".to_string(), 3)
+            ]
+        );
+
+        // Languages without a bundled grammar use the line patterns.
+        assert!(outline("rb", "def hi; end").is_none());
     }
 }
