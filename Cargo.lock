@@ -5111,6 +5111,7 @@ dependencies = [
 name = "zcode-ext"
 version = "0.0.1"
 dependencies = [
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

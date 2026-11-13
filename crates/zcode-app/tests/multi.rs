@@ -277,3 +277,85 @@ async fn a_model_profile_narrows_the_tools_and_picks_the_edit_format() {
     assert_eq!(whole, ["read", "write", "bash", "glob", "grep"]);
     assert!(system.contains("complete new content"));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hooks_written_for_claude_code_run_when_the_user_opts_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let (home, work) = (root.join("home"), root.join("work"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(work.join(".claude")).unwrap();
+    let settings = json!({"hooks": {
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo 'The release branch is r9.'"}]}],
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+            "command": "grep -q 'git push' && { echo 'pushing is not allowed' >&2; exit 2; }; exit 0"}]}],
+        // Objects the first time the agent tries to stop, then lets it.
+        "Stop": [{"hooks": [{"type": "command",
+            "command": "test -f .asked && exit 0; touch .asked; echo 'Say which branch you used.' >&2; exit 2"}]}],
+    }});
+    std::fs::write(work.join(".claude/settings.json"), settings.to_string()).unwrap();
+    let script = || {
+        vec![
+            call("c1", "bash", json!({"command": "git push origin r9"})),
+            ScriptedResponse::text("Could not push."),
+            ScriptedResponse::text("I used r9."),
+        ]
+    };
+    let user_messages = |records: &[zcode_session::Record]| -> Vec<String> {
+        records
+            .iter()
+            .filter_map(|record| match &record.event {
+                Event::UserMessage { content } => match &content[0] {
+                    Block::Text { text } => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Without the opt-in, a repository's hooks are not run.
+    let runtime = zcode_app::build(&home, &work, &options(script()))
+        .await
+        .unwrap();
+    let store = zcode_app::session_store(&home);
+    let mut session = zcode_app::open_session(&store, None, &work).unwrap();
+    runtime
+        .agent
+        .run_turn(&mut session, vec![Block::text("Push the release")])
+        .await
+        .unwrap();
+    assert_eq!(user_messages(session.records()), ["Push the release"]);
+    assert!(!work.join(".asked").exists());
+
+    std::fs::write(
+        home.join("config.toml"),
+        "[compat]\nclaude_hooks = [\"project\"]\n",
+    )
+    .unwrap();
+    let runtime = zcode_app::build(&home, &work, &options(script()))
+        .await
+        .unwrap();
+    let mut session = zcode_app::open_session(&store, None, &work).unwrap();
+    runtime
+        .agent
+        .run_turn(&mut session, vec![Block::text("Push the release")])
+        .await
+        .unwrap();
+    assert_eq!(
+        user_messages(session.records()),
+        [
+            "Push the release",
+            "[hook context]\nThe release branch is r9.",
+            "[hook Stop] Say which branch you used.",
+        ]
+    );
+    assert_eq!(
+        tool_results(session.records()),
+        [(
+            "PreToolUse:Bash hook blocked this call: pushing is not allowed".to_string(),
+            true
+        )]
+    );
+}

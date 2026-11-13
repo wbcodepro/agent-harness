@@ -148,12 +148,18 @@ event = "pre_tool"
 tool = "bash"
 command = "./scripts/check-command.sh"
 
+[compat]
+claude_hooks = ["user"]         # chạy hooks viết cho Claude Code: "user" = ~/.claude/settings.json,
+                                # "project" = .claude/settings(.local).json của dự án; mặc định không chạy
+
 [plugin.wc]                     # plugin WebAssembly và nơi nó được đọc
 path = "plugins/wordcount.wasm"
 read = ["docs"]
 ```
 
 Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, kết quả kèm một ghi chú báo cho model biết nó đang lặp. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
+
+Hooks của Claude Code: zcode đọc cùng file `settings.json` và nói cùng giao thức (JSON qua stdin, mã thoát 2 để chặn, JSON trên stdout) cho các sự kiện `PreToolUse`, `PostToolUse`, `UserPromptSubmit` và `Stop`, với hook loại `command`, `matcher` và `if`. Tên tool và tham số được đổi sang dạng Claude Code (`Bash`, `Edit`, `file_path`…). Sự kiện và loại hook khác được báo một lần lúc khởi động rồi bỏ qua. Khác biệt cần biết: hook chạy lần lượt chứ không song song; `permissionDecision: "ask"` bị coi là chặn; `"allow"` không bỏ qua luật quyền của zcode; `tool_response` chỉ có trường `output`; `transcript_path` trỏ tới log của zcode, không cùng định dạng với Claude Code. Hook chạy ngoài sandbox, nên chỉ bật `"project"` với repo bạn tin.
 
 Dự án có thể tự khai báo lệnh kiểm tra trong `.zcode/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.zcode/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.zcode/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.zcode/skills/`.
 

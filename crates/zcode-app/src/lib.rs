@@ -19,8 +19,8 @@ use zcode_eval::{Recording, ScriptedLlm};
 use zcode_kernel::BoxFuture;
 use zcode_llm::{ChatCompletions, Llm};
 use zcode_policy::{
-    ApprovalLayer, Config, EditFormat, GitGuard, NetworkMode, ProjectConfig, RedactLayer,
-    RuleAction, Secrets, ToolProfile,
+    ApprovalLayer, Config, EditFormat, GitGuard, HookSource, NetworkMode, ProjectConfig,
+    RedactLayer, RuleAction, Secrets, ToolProfile,
 };
 use zcode_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
 use zcode_session::{CreateOptions, Event, SessionId, SessionStore};
@@ -324,6 +324,32 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             cwd: cwd.to_path_buf(),
         });
     }
+    // Hooks written for Claude Code, from the settings files the user
+    // chose to trust.
+    let mut settings_files = Vec::new();
+    for source in &config.compat.claude_hooks {
+        match source {
+            HookSource::User => settings_files
+                .extend(std::env::home_dir().map(|home| home.join(".claude/settings.json"))),
+            HookSource::Project => settings_files.extend([
+                cwd.join(".claude/settings.json"),
+                cwd.join(".claude/settings.local.json"),
+            ]),
+        }
+    }
+    let (claude_hooks, skipped) = zcode_ext::claude_hooks::ClaudeHooks::load(
+        &settings_files,
+        cwd,
+        &home.join("sessions"),
+        options.plan,
+    );
+    for note in skipped {
+        eprintln!("zcode: {note}");
+    }
+    let claude_hooks = (!claude_hooks.is_empty()).then(|| Arc::new(claude_hooks));
+    if let Some(hooks) = &claude_hooks {
+        pipeline.push(zcode_ext::claude_hooks::ToolHooks(Arc::clone(hooks)));
+    }
 
     let checkpointer: Option<Arc<dyn Checkpointer>> =
         if config.checkpoints.enabled && checkpointable(cwd) {
@@ -343,6 +369,9 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     let project =
         ProjectConfig::load(&cwd.join(".zcode/config.toml")).map_err(|e| e.to_string())?;
     let verify = project.verify.unwrap_or_else(|| config.verify.clone());
+    if let Some(claude_hooks) = claude_hooks {
+        hooks.push(claude_hooks);
+    }
     // A stronger model for when the usual one is stuck.
     let llm: Arc<dyn Llm> = match stronger {
         Some(stronger) => {

@@ -34,6 +34,7 @@ pub struct Config {
     pub context: ContextConfig,
     pub verify: VerifyConfig,
     pub limits: LimitsConfig,
+    pub compat: CompatConfig,
     /// Permission rules, first match wins.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
@@ -293,6 +294,26 @@ impl Default for ContextConfig {
             clear_tool_results: false,
         }
     }
+}
+
+/// Reading other tools' configuration.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CompatConfig {
+    /// Which Claude Code settings files to run hooks from. Empty (the
+    /// default) runs none: hooks are commands that run outside the sandbox.
+    pub claude_hooks: Vec<HookSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HookSource {
+    /// `~/.claude/settings.json`: the user's own hooks.
+    User,
+    /// `.claude/settings.json` and `.claude/settings.local.json` in the
+    /// working directory. These come with the repository: turn this on
+    /// only for repositories whose hooks you would run by hand.
+    Project,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

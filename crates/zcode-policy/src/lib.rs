@@ -8,9 +8,9 @@ mod secrets;
 mod shell;
 
 pub use config::{
-    ApprovalConfig, CheckpointConfig, Config, ConfigError, ContextConfig, EditFormat, LimitsConfig,
-    ModelConfig, NetworkConfig, NetworkMode, ProjectConfig, Rule, RuleAction, SandboxConfig,
-    SecretsConfig, ToolProfile, VerifyConfig,
+    ApprovalConfig, CheckpointConfig, CompatConfig, Config, ConfigError, ContextConfig, EditFormat,
+    HookSource, LimitsConfig, ModelConfig, NetworkConfig, NetworkMode, ProjectConfig, Rule,
+    RuleAction, SandboxConfig, SecretsConfig, ToolProfile, VerifyConfig,
 };
 pub use gitguard::{GIT_GUARD_PREFIX, GitGuard};
 pub use layers::{ApprovalLayer, Prompter, RedactLayer, glob_match};

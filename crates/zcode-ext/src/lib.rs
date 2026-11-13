@@ -7,6 +7,7 @@
 //! - [`wasm`]: plugins compiled to WebAssembly, with no access to anything
 //!   the user did not grant.
 
+pub mod claude_hooks;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;
