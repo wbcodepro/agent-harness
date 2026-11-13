@@ -157,6 +157,10 @@ fn deltas_for(content: &[Block]) -> Vec<Delta> {
                     json: input.to_string(),
                 });
             }
+            Block::Fallback { from, to } => deltas.push(Delta::Fallback {
+                from: from.clone(),
+                to: to.clone(),
+            }),
             // Assistant messages do not carry tool results.
             Block::ToolResult { .. } => {}
         }

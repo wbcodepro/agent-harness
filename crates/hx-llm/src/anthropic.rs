@@ -14,7 +14,23 @@ pub struct Anthropic {
     api_key: String,
     model: String,
     effort: Option<String>,
+    /// Ask the API to continue on another model when this one declines.
+    fallbacks: bool,
     retry: Retry,
+}
+
+const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
+
+/// Models that accept `fallbacks: "default"`.
+fn supports_fallbacks(model: &str) -> bool {
+    [
+        "claude-fable-5",
+        "claude-mythos-5",
+        "claude-opus-5",
+        "claude-sonnet-5-5",
+    ]
+    .iter()
+    .any(|family| model.starts_with(family))
 }
 
 impl Anthropic {
@@ -26,6 +42,7 @@ impl Anthropic {
             api_key: api_key.into(),
             model: model.into(),
             effort: None,
+            fallbacks: true,
             retry: Retry::default(),
         }
     }
@@ -35,6 +52,18 @@ impl Anthropic {
     pub fn with_effort(mut self, effort: Option<String>) -> Self {
         self.effort = effort.filter(|effort| !effort.is_empty());
         self
+    }
+
+    /// Whether a response the model declines may be continued by another
+    /// model the provider recommends. On by default, for the models and
+    /// endpoints that support it.
+    pub fn with_fallbacks(mut self, fallbacks: bool) -> Self {
+        self.fallbacks = fallbacks;
+        self
+    }
+
+    fn uses_fallbacks(&self) -> bool {
+        self.fallbacks && supports_fallbacks(&self.model)
     }
 
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
@@ -48,12 +77,16 @@ impl Anthropic {
     }
 
     async fn open(&self, body: &Value) -> Result<reqwest::Response, LlmError> {
-        let response = self
+        let mut request = self
             .client
             .post(&self.url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if self.uses_fallbacks() {
+            request = request.header("anthropic-beta", FALLBACK_BETA);
+        }
+        let response = request
             .body(serde_json::to_vec(body).map_err(|e| LlmError::Protocol(e.to_string()))?)
             .send()
             .await
@@ -104,13 +137,25 @@ impl Llm for Anthropic {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let body = build_body(&self.model, self.effort.as_deref(), request, true);
+            let body = build_body(
+                &self.model,
+                self.effort.as_deref(),
+                self.uses_fallbacks(),
+                request,
+                true,
+            );
             let mut response = match self.open_with_retry(&body).await {
                 // The history carries reasoning this conversation can no
                 // longer vouch for. Send it once more without any; the
                 // model answers this step without that reasoning.
                 Err(e) if rejects_thinking(&e) => {
-                    let body = build_body(&self.model, self.effort.as_deref(), request, false);
+                    let body = build_body(
+                        &self.model,
+                        self.effort.as_deref(),
+                        self.uses_fallbacks(),
+                        request,
+                        false,
+                    );
                     self.open_with_retry(&body).await?
                 }
                 other => other?,
@@ -169,6 +214,11 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
                 };
                 out.push(json!({"type": "tool_use", "id": id, "name": name, "input": input}));
             }
+            // Goes back exactly where it appeared.
+            Block::Fallback { from, to } if message.role == Role::Assistant => {
+                out.push(json!({"type": "fallback", "from": from, "to": to}));
+            }
+            Block::Fallback { .. } => {}
             Block::ToolResult {
                 call_id,
                 content,
@@ -189,7 +239,13 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
     out
 }
 
-fn build_body(model: &str, effort: Option<&str>, request: &Request, with_thinking: bool) -> Value {
+fn build_body(
+    model: &str,
+    effort: Option<&str>,
+    fallbacks: bool,
+    request: &Request,
+    with_thinking: bool,
+) -> Value {
     // Tool results travel in user turns, and adjacent turns of one role
     // are merged, so every tool result for an assistant turn lands in the
     // single user message that follows it.
@@ -243,6 +299,9 @@ fn build_body(model: &str, effort: Option<&str>, request: &Request, with_thinkin
     if let Some(effort) = effort {
         body["output_config"] = json!({"effort": effort});
     }
+    if fallbacks {
+        body["fallbacks"] = json!("default");
+    }
     body
 }
 
@@ -284,11 +343,16 @@ impl Decoder {
             Some("message_start") => self.read_usage(&event["message"]["usage"]),
             Some("content_block_start") => {
                 let block = &event["content_block"];
-                if block["type"].as_str() == Some("tool_use") {
-                    emit(Delta::ToolUseStart {
+                match block["type"].as_str() {
+                    Some("tool_use") => emit(Delta::ToolUseStart {
                         id: block["id"].as_str().unwrap_or_default().into(),
                         name: block["name"].as_str().unwrap_or_default().into(),
-                    })?;
+                    })?,
+                    Some("fallback") => emit(Delta::Fallback {
+                        from: block["from"].clone(),
+                        to: block["to"].clone(),
+                    })?,
+                    _ => {}
                 }
             }
             Some("content_block_delta") => {
@@ -583,6 +647,60 @@ mod tests {
                 ],
             })
         );
+    }
+
+    #[tokio::test]
+    async fn a_declined_response_continues_on_the_fallback_model() {
+        let stream = sse(&[
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 9}}}),
+            json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": "void", "name": "read", "input": {}}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "content_block_start", "index": 1, "content_block": {
+                "type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-4-8"}}}),
+            json!({"type": "content_block_stop", "index": 1}),
+            json!({"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Here."}}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+            json!({"type": "message_stop"}),
+        ]);
+        let (base_url, bodies) = serve(vec![(200, stream.clone()), (200, stream)]).await;
+        let adapter = Anthropic::new(&base_url, "k", "claude-opus-5-5")
+            .with_client(reqwest::Client::builder().no_proxy().build().unwrap());
+
+        let (deltas, result) = collect(&adapter, &request()).await;
+        assert_eq!(result.unwrap().stop, StopReason::EndTurn);
+        let handover = Block::Fallback {
+            from: json!({"model": "claude-opus-5-5"}),
+            to: json!({"model": "claude-opus-4-8"}),
+        };
+        // The declined model's tool call is gone; nothing will run it.
+        let content = assemble(&deltas);
+        assert_eq!(content, vec![handover, Block::text("Here.")]);
+        assert_eq!(bodies.lock().unwrap()[0]["fallbacks"], "default");
+
+        // On the next request the handover goes back in place.
+        let mut next = request();
+        next.messages.push(Message {
+            role: Role::Assistant,
+            content,
+        });
+        next.messages.push(Message {
+            role: Role::User,
+            content: vec![Block::text("Thanks")],
+        });
+        collect(&adapter, &next).await.1.unwrap();
+        let sent = bodies.lock().unwrap()[1].clone();
+        let echoed = &sent["messages"][3]["content"];
+        assert_eq!(
+            echoed[0],
+            json!({"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-4-8"}})
+        );
+        assert_eq!(echoed[1]["text"], "Here.");
+
+        // Models without server-side fallback are not sent the parameter.
+        assert!(!supports_fallbacks("claude-haiku-5-5") && !supports_fallbacks("claude-sonnet-5"));
+        assert!(supports_fallbacks("claude-fable-5-2") && supports_fallbacks("claude-sonnet-5-5"));
     }
 
     #[tokio::test]

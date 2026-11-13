@@ -286,6 +286,7 @@ fn print_block(block: &Block, depth: usize) {
         Block::Text { text } => println!("{pad}{text}"),
         Block::Thinking { text, .. } => println!("{pad}(thinking) {text}"),
         Block::ToolUse { id, name, input } => println!("{pad}-> {name} {input} ({id})"),
+        Block::Fallback { to, .. } => println!("{pad}(continued by {})", to["model"]),
         Block::ToolResult {
             call_id,
             content,

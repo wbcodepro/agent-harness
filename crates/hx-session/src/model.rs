@@ -236,6 +236,12 @@ pub enum Block {
         #[serde(default)]
         is_error: bool,
     },
+    /// The provider handed the response over from one model to another at
+    /// this point. Kept in place because the provider needs it back there.
+    Fallback {
+        from: Value,
+        to: Value,
+    },
 }
 
 impl Block {
@@ -267,6 +273,11 @@ pub enum Delta {
     /// A fragment of the open tool call's JSON input.
     ToolInput {
         json: String,
+    },
+    /// The provider switched models mid-response; see [`Block::Fallback`].
+    Fallback {
+        from: Value,
+        to: Value,
     },
 }
 
@@ -327,6 +338,20 @@ pub fn assemble<'a>(deltas: impl IntoIterator<Item = &'a Delta>) -> Vec<Block> {
             (Delta::ToolInput { json }, Some(Open::Tool { json: buf, .. })) => buf.push_str(json),
             // Input with no open tool call has nothing to attach to.
             (Delta::ToolInput { .. }, _) => {}
+            (Delta::Fallback { from, to }, _) => {
+                blocks.extend(open.take().map(close));
+                // What the first model reasoned and the tools it asked for
+                // are void once another model takes over: only its text
+                // carries across. Dropping them here means they are never
+                // run and never sent back.
+                blocks.retain(|block| {
+                    !matches!(block, Block::Thinking { .. } | Block::ToolUse { .. })
+                });
+                blocks.push(Block::Fallback {
+                    from: from.clone(),
+                    to: to.clone(),
+                });
+            }
             (delta, _) => {
                 blocks.extend(open.take().map(close));
                 open = Some(match delta {
@@ -344,7 +369,9 @@ pub fn assemble<'a>(deltas: impl IntoIterator<Item = &'a Delta>) -> Vec<Block> {
                         name: name.clone(),
                         json: String::new(),
                     },
-                    Delta::ToolInput { .. } => unreachable!("handled above"),
+                    Delta::ToolInput { .. } | Delta::Fallback { .. } => {
+                        unreachable!("handled above")
+                    }
                 });
             }
         }
@@ -433,6 +460,49 @@ mod tests {
         assert!(wire.contains(r#"{"type":"thinking","text":"first","signature":"sig1"}"#));
         assert!(wire.contains(r#"{"type":"thinking","text":"third"}"#));
         assert_eq!(serde_json::from_str::<Vec<Block>>(&wire).unwrap(), blocks);
+    }
+
+    #[test]
+    fn a_model_handover_voids_the_first_models_reasoning_and_tool_calls() {
+        let deltas = [
+            Delta::ThinkingSignature {
+                signature: "s1".into(),
+            },
+            Delta::Text {
+                text: "Let me ".into(),
+            },
+            Delta::ToolUseStart {
+                id: "void".into(),
+                name: "bash".into(),
+            },
+            Delta::Fallback {
+                from: json!({"model": "a"}),
+                to: json!({"model": "b"}),
+            },
+            Delta::Text {
+                text: "check.".into(),
+            },
+            Delta::ToolUseStart {
+                id: "kept".into(),
+                name: "read".into(),
+            },
+        ];
+        assert_eq!(
+            assemble(&deltas),
+            vec![
+                Block::text("Let me "),
+                Block::Fallback {
+                    from: json!({"model": "a"}),
+                    to: json!({"model": "b"}),
+                },
+                Block::text("check."),
+                Block::ToolUse {
+                    id: "kept".into(),
+                    name: "read".into(),
+                    input: json!({}),
+                },
+            ]
+        );
     }
 
     #[test]

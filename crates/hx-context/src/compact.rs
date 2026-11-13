@@ -36,6 +36,7 @@ fn block_chars(blocks: &[Block]) -> usize {
             Block::Text { text } | Block::Thinking { text, .. } => text.len(),
             Block::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
             Block::ToolResult { content, .. } => block_chars(content),
+            Block::Fallback { .. } => 0,
         })
         .sum()
 }
@@ -107,7 +108,7 @@ fn transcript(messages: &[Message]) -> String {
                     out.push_str(text);
                     out.push('\n');
                 }
-                Block::Thinking { .. } => {}
+                Block::Thinking { .. } | Block::Fallback { .. } => {}
                 Block::ToolUse { name, input, .. } => {
                     out.push_str(&format!("[called {name} with {input}]\n"));
                 }
