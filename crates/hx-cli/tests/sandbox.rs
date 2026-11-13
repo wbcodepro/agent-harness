@@ -404,3 +404,120 @@ fn large_outputs_are_spilled_to_a_file_the_tools_can_read() {
     );
     assert!(results[0].0.ends_with(":4321:4321\n"), "{results:#?}");
 }
+
+#[test]
+fn skills_hooks_mcp_servers_and_plugins_extend_one_agent() {
+    let fx = Fixture::new("");
+    // A skill in the project.
+    fs::create_dir_all(fx.work.join(".hx/skills/greet")).unwrap();
+    fs::write(
+        fx.work.join(".hx/skills/greet/SKILL.md"),
+        "---\nname: greet\ndescription: How to greet\n---\nAlways say xin chao.\n",
+    )
+    .unwrap();
+    // An MCP server with one tool.
+    let server = fx.root.join("server.py");
+    fs::write(
+        &server,
+        r#"
+import json, sys
+def send(m): sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    m = json.loads(line); i = m.get("id"); method = m.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "t", "version": "0"}}})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "add", "description": "Add.", "inputSchema": {"type": "object"}}]}})
+    elif method == "tools/call":
+        a = m["params"]["arguments"]
+        send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": str(a["a"] + a["b"])}]}})
+"#,
+    )
+    .unwrap();
+    // A plugin granted one directory.
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/wordcount");
+    let built = Command::new(env!("CARGO"))
+        .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
+        .current_dir(&plugin)
+        .env_remove("CARGO_TARGET_DIR")
+        .status()
+        .unwrap();
+    assert!(built.success());
+    fs::create_dir(fx.work.join("docs")).unwrap();
+    fs::write(fx.work.join("docs/a.txt"), "one two three\n").unwrap();
+    fs::write(
+        fx.home.join("config.toml"),
+        format!(
+            "[sandbox]\nwritable_tmp = false\n\n[mcp.calc]\ncommand = \"python3\"\nargs = [{server:?}]\n\n\
+             [plugin.wc]\npath = {wasm:?}\nread = [\"docs\"]\n\n\
+             [[hook]]\nevent = \"pre_tool\"\ntool = \"bash\"\n\
+             command = \"grep -q forbidden && {{ echo not-that >&2; exit 2; }}; exit 0\"\n",
+            server = server.display().to_string(),
+            wasm = plugin
+                .join("target/wasm32-unknown-unknown/release/hx_plugin_wordcount.wasm")
+                .display()
+                .to_string(),
+        ),
+    )
+    .unwrap();
+
+    let (output, results) = fx.run(
+        vec![
+            ("skill", json!({"name": "greet"})),
+            ("mcp__calc__add", json!({"a": 2, "b": 40})),
+            ("wc__file_stats", json!({"path": "docs/a.txt"})),
+            ("wc__file_stats", json!({"path": "../home/config.toml"})),
+            bash("echo forbidden"),
+            bash("echo fine"),
+        ],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        results[0].0.starts_with("Always say xin chao."),
+        "{stderr}\n{results:#?}"
+    );
+    assert_eq!(results[1], ("42".to_string(), false), "{stderr}");
+    assert_eq!(
+        results[2],
+        ("1 lines, 3 words, 14 characters".to_string(), false)
+    );
+    assert!(results[3].1 && results[3].0.contains("not been granted"));
+    assert_eq!(
+        results[4],
+        (
+            "Blocked by the user's pre-tool hook: not-that".to_string(),
+            true
+        )
+    );
+    assert_eq!(results[5], ("fine\n".to_string(), false));
+
+    // The model was told about the skill and offered every extension tool.
+    let store = SessionStore::new(fx.home.join("sessions"));
+    let records = store
+        .read(&store.list().unwrap().pop().unwrap().id)
+        .unwrap();
+    let system = records
+        .iter()
+        .find_map(|r| match &r.event {
+            Event::SystemMessage { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(system.contains("- greet: How to greet"));
+    let offered: Vec<String> = records
+        .iter()
+        .find_map(|r| match &r.event {
+            Event::ToolsDeclared { tools } => Some(tools.iter().map(|t| t.name.clone()).collect()),
+            _ => None,
+        })
+        .unwrap();
+    for name in [
+        "skill",
+        "mcp__calc__add",
+        "wc__text_stats",
+        "wc__file_stats",
+    ] {
+        assert!(offered.contains(&name.to_string()), "{offered:?}");
+    }
+}

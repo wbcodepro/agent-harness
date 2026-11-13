@@ -241,6 +241,13 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
         prompter,
     });
 
+    if !config.hooks.is_empty() {
+        pipeline.push(hx_ext::hooks::HookLayer {
+            hooks: config.hooks.clone(),
+            cwd: cwd.to_path_buf(),
+        });
+    }
+
     let checkpointer: Option<Arc<dyn Checkpointer>> =
         if config.checkpoints.enabled && checkpointable(cwd) {
             Some(Arc::new(GitCheckpoints::new(
@@ -270,6 +277,38 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
 
     let mut tools = ToolSet::builtin();
     let mut system = system_prompt(cwd, &policy) + &load_instructions(home, cwd);
+
+    // Extensions. One that fails to load is reported and left out; the
+    // rest of the agent still works.
+    let skills = hx_ext::skills::discover(&[
+        cwd.join(".hx/skills"),
+        cwd.join(".claude/skills"),
+        home.join("skills"),
+    ]);
+    if !skills.is_empty() {
+        system.push_str(&hx_ext::skills::prompt_section(&skills));
+        tools.insert(Arc::new(hx_ext::skills::SkillTool::new(skills)));
+    }
+    let helper = std::env::current_exe().unwrap_or_default();
+    for (name, server) in &config.mcp {
+        let started = async {
+            let confinement = policy.is_confined().then_some(&policy);
+            let client =
+                hx_ext::mcp::McpClient::start(name, server, confinement, &helper, cwd).await?;
+            client.tools().await
+        };
+        match started.await {
+            Ok(server_tools) => server_tools.into_iter().for_each(|tool| tools.insert(tool)),
+            Err(e) => eprintln!("hx: {e}"),
+        }
+    }
+    for (name, plugin) in &config.plugins {
+        let loaded = hx_ext::wasm::WasmPlugin::load(name, plugin, cwd).and_then(|p| p.tools());
+        match loaded {
+            Ok(plugin_tools) => plugin_tools.into_iter().for_each(|tool| tools.insert(tool)),
+            Err(e) => eprintln!("hx: {e}"),
+        }
+    }
     if options.plan {
         tools.retain(|tool| tool.effect() != Effect::Write);
         system.push_str(PLAN_MODE);

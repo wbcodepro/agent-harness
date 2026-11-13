@@ -99,6 +99,14 @@ impl ToolContext {
 pub trait Tool: Send + Sync {
     fn spec(&self) -> ToolSpec;
     fn effect(&self) -> Effect;
+
+    /// Whether the tool must run in the harness process instead of a
+    /// confined worker, because it holds something a worker cannot have: a
+    /// live connection, or its own stronger sandbox.
+    fn host_side(&self) -> bool {
+        false
+    }
+
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput>;
 }
 

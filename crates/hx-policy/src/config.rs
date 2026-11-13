@@ -1,4 +1,9 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use hx_ext::hooks::Hook;
+use hx_ext::mcp::McpServerConfig;
+use hx_ext::wasm::PluginConfig;
 
 use hx_sandbox::Mode;
 use serde::Deserialize;
@@ -30,6 +35,14 @@ pub struct Config {
     /// Permission rules, first match wins.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
+    /// Model Context Protocol servers, by name.
+    pub mcp: BTreeMap<String, McpServerConfig>,
+    /// Commands run before and after tool calls.
+    #[serde(rename = "hook")]
+    pub hooks: Vec<Hook>,
+    /// WebAssembly plugins, by name.
+    #[serde(rename = "plugin")]
+    pub plugins: BTreeMap<String, PluginConfig>,
 }
 
 impl Config {
@@ -310,6 +323,32 @@ mod tests {
         assert_eq!(loaded.verify.unwrap().commands, ["make test"]);
         std::fs::write(&project, "[sandbox]\nmode = \"danger-full-access\"\n").unwrap();
         assert!(ProjectConfig::load(&project).is_err());
+
+        let extended = Config::parse(
+            r#"
+            [mcp.docs]
+            command = "docs-server"
+            args = ["--stdio"]
+            env = { DOCS_TOKEN = "t" }
+
+            [[hook]]
+            event = "pre_tool"
+            tool = "bash"
+            command = "./check.sh"
+
+            [plugin.wc]
+            path = "wc.wasm"
+            read = ["docs"]
+            "#,
+        )
+        .unwrap();
+        assert!(
+            extended.mcp["docs"].sandbox,
+            "servers are confined by default"
+        );
+        assert_eq!(extended.hooks.len(), 1);
+        assert_eq!(extended.plugins["wc"].read, [PathBuf::from("docs")]);
+        assert!(Config::parse("[mcp.x]\ncomand = \"y\"").is_err());
 
         for bad in [
             "[sandbox]\nmod = \"read-only\"",

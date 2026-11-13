@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 hx-agent.workspace = true
+hx-ext.workspace = true
 hx-kernel.workspace = true
 hx-sandbox.workspace = true
 hx-tools.workspace = true

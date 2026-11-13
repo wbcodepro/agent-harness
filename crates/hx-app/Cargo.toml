@@ -12,6 +12,7 @@ hx-checkpoint.workspace = true
 hx-context.workspace = true
 hx-verify.workspace = true
 hx-eval.workspace = true
+hx-ext.workspace = true
 hx-kernel.workspace = true
 hx-llm.workspace = true
 hx-policy.workspace = true

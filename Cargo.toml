@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["plugins"]
 
 [workspace.package]
 version = "0.0.1"
@@ -19,6 +20,7 @@ hx-app = { path = "crates/hx-app" }
 hx-checkpoint = { path = "crates/hx-checkpoint" }
 hx-context = { path = "crates/hx-context" }
 hx-eval = { path = "crates/hx-eval" }
+hx-ext = { path = "crates/hx-ext" }
 hx-llm = { path = "crates/hx-llm" }
 hx-tools = { path = "crates/hx-tools" }
 hx-tui = { path = "crates/hx-tui" }

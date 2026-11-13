@@ -336,7 +336,13 @@ impl Agent {
         self.pipeline
             .run(request, |request: ToolRequest| {
                 let tool = Arc::clone(&tool);
-                async move { self.runner.run(&tool, &request.input, context).await }
+                async move {
+                    if tool.host_side() {
+                        tool.call(&request.input, context).await
+                    } else {
+                        self.runner.run(&tool, &request.input, context).await
+                    }
+                }
             })
             .await
     }
