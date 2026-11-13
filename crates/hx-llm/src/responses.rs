@@ -530,10 +530,13 @@ mod tests {
         let (base_url, bodies) = serve(vec![(400, rejection), (200, done)]).await;
         let (_, result) = collect(&adapter(&base_url), &request(history)).await;
         assert_eq!(result.unwrap().stop, StopReason::MaxTokens);
-        let bodies = bodies.lock().unwrap();
-        let reasoning = |body: &Value| body.to_string().matches("\"type\":\"reasoning\"").count();
-        assert_eq!((reasoning(&bodies[0]), reasoning(&bodies[1])), (1, 0));
-        assert!(!bodies[0].to_string().contains("anthropic-signature"));
+        {
+            let bodies = bodies.lock().unwrap();
+            let reasoning =
+                |body: &Value| body.to_string().matches("\"type\":\"reasoning\"").count();
+            assert_eq!((reasoning(&bodies[0]), reasoning(&bodies[1])), (1, 0));
+            assert!(!bodies[0].to_string().contains("anthropic-signature"));
+        }
 
         let failed =
             sse(&[json!({"type": "response.failed", "response": {"error": {"message": "boom"}}})]);
