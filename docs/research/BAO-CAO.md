@@ -169,8 +169,12 @@ Những lỗi của harness tìm ra theo cách này, mỗi cái đều đã th�
 | Chèn `import` bằng `old_string` rỗng bị từ chối, model chuyển sang `sed` làm hỏng file | Thông báo lỗi không chỉ cách làm đúng | Thông báo nói cách thêm dòng, kèm dòng đầu của file |
 | Bản vá viết `@@ -19,7 +19,7 @@` áp vào sai chỗ | `apply_patch` coi số dòng là chữ để tìm | Dùng số dòng làm gợi ý vị trí |
 | Cùng một lệnh test hỏng 18 lần liên tiếp | Chỉ phát hiện lặp khi kết quả giống hệt | Báo khi một lời gọi hỏng bốn lần chưa lần nào đạt |
+| Sửa làm sai thụt lề, chỉ biết khi chạy test về sau, rồi gửi lại y nguyên đoạn cũ | Không kiểm cú pháp lúc sửa | Báo lỗi cú pháp ngay trong kết quả của `edit`/`write`/`apply_patch` |
+| Đọc cùng một file bảy lần liên tiếp dù đã được nhắc | Ghi chú "đang lặp" không ngăn được | Từ lần thứ năm giống hệt, lời gọi không được chạy |
 
 Ba tác vụ thêm sau đó (`spec-hidden-tests`, `large-file-fix`, `api-change`): `deepseek-flash` đạt 3/3; `gpt-4o-mini` 0/3 trước khi sửa lỗi thụt lề, sau đó `large-file-fix` 2/2, `api-change` 1/2, `spec-hidden-tests` 0/2 (model viết một lần rồi báo xong, sót quy tắc về không dùng chung đối tượng; bật `[verify] checklist` không cứu được, 0/3).
+
+Một lần chạy cả 11 tác vụ ở cấu hình mặc định sau các bản sửa trên (commit `f8be489`): 7/11. Hỏng `api-change`, `schema-validator`, `spec-hidden-tests`, `three-bugs`, trong khi `schema-validator` và `three-bugs` từng đạt ở lần đo trước: dao động giữa các lần chạy của model này lớn, một lần chạy không đủ để so sánh hai bản. `three-bugs` chạy lại bốn lần sau khi có cảnh báo cú pháp: 3/4.
 
 Điều chưa làm được: `rust-tokenizer` vẫn hỏng ở hai trên bốn cấu hình và là giới hạn của model, không thấy nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
 
