@@ -147,8 +147,9 @@ impl Tool for Grep {
         ToolSpec {
             name: "grep".into(),
             description: "Search file contents with a regular expression. Returns matching \
-                          lines as path:line:text. Files ignored by the project, binary files \
-                          and very large files are skipped."
+                          lines as path:line:text. A match inside a function or class is \
+                          followed by [in <its name>, line <where it starts>]. Files ignored \
+                          by the project, binary files and very large files are skipped."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -208,6 +209,8 @@ impl Tool for Grep {
                 let Some(text) = searchable_text(path) else {
                     continue;
                 };
+                // Parsed only for a file that has a match to show.
+                let mut file_scopes: Option<Vec<Scope>> = None;
                 for (index, line) in text.lines().enumerate() {
                     if !regex.is_match(line) {
                         continue;
@@ -221,7 +224,20 @@ impl Tool for Grep {
                         } else {
                             relative(path, &root)
                         };
-                        out.push_str(&format!("{}:{}:{line}\n", display_path(name), index + 1));
+                        // Which function a line is in is usually the next
+                        // thing asked; saying it here saves reading the file.
+                        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        let inside = enclosing(
+                            file_scopes.get_or_insert_with(|| scopes(extension, &text)),
+                            index,
+                        )
+                        .map(|scope| format!("  [in {}, line {}]", scope.name, scope.start + 1))
+                        .unwrap_or_default();
+                        out.push_str(&format!(
+                            "{}:{}:{line}{inside}\n",
+                            display_path(name),
+                            index + 1
+                        ));
                     }
                 }
             }
@@ -379,6 +395,67 @@ fn outline(extension: &str, text: &str) -> Option<(Vec<Definition>, HashSet<Stri
         }
     }
     Some((definitions, mentions))
+}
+
+/// A definition that spans several lines, by its first and last row.
+struct Scope {
+    start: usize,
+    end: usize,
+    name: String,
+}
+
+/// The multi-line definitions of a source file, for telling which one a
+/// given line is inside. Empty when there is no grammar for the file.
+fn scopes(extension: &str, text: &str) -> Vec<Scope> {
+    let mut found = Vec::new();
+    let Some(language) = grammar(extension) else {
+        return found;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&language).is_err() {
+        return found;
+    }
+    let Some(tree) = parser.parse(text, None) else {
+        return found;
+    };
+    let source = text.as_bytes();
+    let mut cursor = tree.walk();
+    'walk: loop {
+        let node = cursor.node();
+        let (start, end) = (node.start_position().row, node.end_position().row);
+        if end > start
+            && DEFINITION_KINDS.contains(&node.kind())
+            && let Some(name) = node.child_by_field_name("name")
+            && let Ok(name) = name.utf8_text(source)
+        {
+            found.push(Scope {
+                start,
+                end,
+                name: name.to_string(),
+            });
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    found
+}
+
+/// The innermost definition that `row` is inside of, not counting one that
+/// starts on that very line.
+fn enclosing(scopes: &[Scope], row: usize) -> Option<&Scope> {
+    scopes
+        .iter()
+        .filter(|scope| scope.start < row && row <= scope.end)
+        .max_by_key(|scope| scope.start)
 }
 
 impl Tool for RepoMap {
@@ -574,8 +651,10 @@ mod tests {
         let out = Grep.call(&json!({"pattern": r"parse_money\("}), &ctx).await;
         assert_eq!(
             out.text,
-            "src/cart.rs:4:    parse_money(\"0\")\n\
-             src/main.py:3:        return total([parse_money('1')])\n\
+            // A match inside a definition says which; the innermost one
+            // (the method, not its class), and not a definition's own line.
+            "src/cart.rs:4:    parse_money(\"0\")  [in total, line 3]\n\
+             src/main.py:3:        return total([parse_money('1')])  [in pay, line 2]\n\
              src/util/money.rs:5:pub fn parse_money(text: &str) -> Money {\n"
         );
 
@@ -599,7 +678,9 @@ mod tests {
             )
             .await;
         assert!(
-            single.text.ends_with("money.rs:2:    cents: i64,\n"),
+            single
+                .text
+                .ends_with("money.rs:2:    cents: i64,  [in Money, line 1]\n"),
             "{}",
             single.text
         );
