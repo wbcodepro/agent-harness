@@ -143,6 +143,10 @@ subagent_depth = 1
 command = "docs-server"
 args = ["--stdio"]
 
+[mcp.tracker]                   # server MCP qua HTTP (streamable HTTP)
+url = "https://mcp.example.com/mcp"
+headers = { Authorization = "Bearer $TRACKER_TOKEN" }   # $TÊN lấy từ biến môi trường hoặc file .env
+
 [lsp.rust]                      # language server cho tool `diagnostics`
 command = "rust-analyzer"
 extensions = ["rs"]
@@ -162,6 +166,8 @@ read = ["docs"]
 ```
 
 Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, kết quả kèm một ghi chú báo cho model biết nó đang lặp. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
+
+MCP: server stdio chạy trong sandbox; server HTTP được gọi từ tiến trình zcode, xác thực bằng header tĩnh. Chưa hỗ trợ luồng đăng nhập OAuth, bản đặc tả không trạng thái `2026-07-28`, và yêu cầu do server khởi xướng (sampling, elicitation).
 
 Hooks của Claude Code: zcode đọc cùng file `settings.json` và nói cùng giao thức (JSON qua stdin, mã thoát 2 để chặn, JSON trên stdout) cho các sự kiện `PreToolUse`, `PostToolUse`, `UserPromptSubmit` và `Stop`, với hook loại `command`, `matcher` và `if`. Tên tool và tham số được đổi sang dạng Claude Code (`Bash`, `Edit`, `file_path`…). Sự kiện và loại hook khác được báo một lần lúc khởi động rồi bỏ qua. Khác biệt cần biết: hook chạy lần lượt chứ không song song; `permissionDecision: "ask"` bị coi là chặn; `"allow"` không bỏ qua luật quyền của zcode; `tool_response` chỉ có trường `output`; `transcript_path` trỏ tới log của zcode, không cùng định dạng với Claude Code. Hook chạy ngoài sandbox, nên chỉ bật `"project"` với repo bạn tin.
 

@@ -22,11 +22,21 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(300);
 /// credentials included, is withheld unless the configuration passes it.
 const INHERITED_ENV: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR"];
 
-/// How to start one Model Context Protocol server (stdio transport).
+/// How to reach one Model Context Protocol server: a `command` to start
+/// and talk to over stdio, or the `url` of one served over HTTP.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpServerConfig {
+    #[serde(default)]
     pub command: String,
+    /// Endpoint of a server that speaks the streamable HTTP transport.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Headers sent with every HTTP request, for example an
+    /// `Authorization` header. `$NAME` or `${NAME}` in a value stands for
+    /// an environment variable or secret of that name.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
@@ -41,16 +51,191 @@ fn yes() -> bool {
     true
 }
 
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            url: None,
+            headers: BTreeMap::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            sandbox: true,
+        }
+    }
+}
+
+impl McpServerConfig {
+    /// Replaces `$NAME` and `${NAME}` in header values with what `lookup`
+    /// gives for the name. A name it does not know is an error: sending the
+    /// literal text as a credential would only fail later and less clearly.
+    pub fn expand_headers(
+        &mut self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<(), String> {
+        for (header, value) in &mut self.headers {
+            let mut expanded = String::new();
+            let mut rest = value.as_str();
+            while let Some(at) = rest.find('$') {
+                expanded.push_str(&rest[..at]);
+                let after = &rest[at + 1..];
+                let (name, remainder) = match after.strip_prefix('{') {
+                    Some(braced) => match braced.split_once('}') {
+                        Some((name, remainder)) => (name, remainder),
+                        None => ("", after),
+                    },
+                    None => {
+                        let end = after
+                            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                            .unwrap_or(after.len());
+                        after.split_at(end)
+                    }
+                };
+                if name.is_empty() {
+                    expanded.push('$');
+                    rest = after;
+                    continue;
+                }
+                expanded.push_str(
+                    &lookup(name).ok_or_else(|| {
+                        format!("header {header} needs ${name}, which is not set")
+                    })?,
+                );
+                rest = remainder;
+            }
+            expanded.push_str(rest);
+            *value = expanded;
+        }
+        Ok(())
+    }
+}
+
+/// A server reached over HTTP: every message is a POST to one endpoint,
+/// answered with JSON or with a short event stream that carries the answer.
+struct HttpLink {
+    http: reqwest::Client,
+    url: String,
+    headers: BTreeMap<String, String>,
+    /// Given by the server at initialization, to be sent back from then on.
+    session: Mutex<Option<String>>,
+    /// The protocol version agreed at initialization.
+    version: Mutex<Option<String>>,
+}
+
+/// Pulls complete events off the front of an event-stream buffer and
+/// returns the JSON-RPC message answering request `id`, if it has arrived.
+fn response_in_stream(buffer: &mut String, id: u64) -> Option<Value> {
+    while let Some(end) = buffer.find("\n\n") {
+        let event: String = buffer.drain(..end + 2).collect();
+        let data: Vec<&str> = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(|data| data.strip_prefix(' ').unwrap_or(data))
+            .collect();
+        if let Ok(message) = serde_json::from_str::<Value>(&data.join("\n"))
+            && message.get("method").is_none()
+            && message["id"].as_u64() == Some(id)
+        {
+            return Some(message);
+        }
+    }
+    None
+}
+
+impl HttpLink {
+    /// Sends one message. Returns the response to it when `id` is given,
+    /// and nothing for a notification.
+    async fn exchange(
+        &self,
+        name: &str,
+        message: &Value,
+        id: Option<u64>,
+    ) -> Result<Option<Value>, String> {
+        let mut request = self
+            .http
+            .post(&self.url)
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        for (header, value) in &self.headers {
+            request = request.header(header, value);
+        }
+        let session = self.session.lock().expect("mcp lock").clone();
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let version = self.version.lock().expect("mcp lock").clone();
+        if let Some(version) = version {
+            request = request.header("mcp-protocol-version", version);
+        }
+        let mut response = request
+            .body(message.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("cannot reach MCP server {name}: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(match status.as_u16() {
+                401 | 403 => format!(
+                    "MCP server {name} refused the credentials (HTTP {status}); check its \
+                     `headers` in the configuration"
+                ),
+                _ => format!("MCP server {name} answered HTTP {status}"),
+            });
+        }
+        if let Some(session) = response.headers().get("mcp-session-id")
+            && let Ok(session) = session.to_str()
+        {
+            *self.session.lock().expect("mcp lock") = Some(session.to_string());
+        }
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let streamed = response
+            .headers()
+            .get("content-type")
+            .and_then(|kind| kind.to_str().ok())
+            .is_some_and(|kind| kind.starts_with("text/event-stream"));
+        let cut_off = || format!("MCP server {name} closed the connection before answering");
+        if !streamed {
+            let body = response.bytes().await.map_err(|_| cut_off())?;
+            return serde_json::from_slice(&body)
+                .map(Some)
+                .map_err(|e| format!("MCP server {name} sent an unreadable answer: {e}"));
+        }
+        // The answer is one of the events; the server may send others
+        // first, and may or may not close the stream afterwards.
+        let mut buffer = String::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| cut_off())? {
+            buffer.push_str(&String::from_utf8_lossy(&chunk).replace("\r\n", "\n"));
+            if let Some(message) = response_in_stream(&mut buffer, id) {
+                return Ok(Some(message));
+            }
+        }
+        buffer.push_str("\n\n");
+        response_in_stream(&mut buffer, id)
+            .map(Some)
+            .ok_or_else(cut_off)
+    }
+}
+
+/// How messages reach the server.
+enum Link {
+    Stdio {
+        outbox: mpsc::UnboundedSender<String>,
+        waiting: Waiting,
+        /// Kills the server and anything it started when the client is
+        /// dropped.
+        _group: GroupGuard,
+    },
+    Http(HttpLink),
+}
+
 type Waiting = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
 /// A running server and the JSON-RPC conversation with it.
 pub struct McpClient {
     name: String,
-    outbox: mpsc::UnboundedSender<String>,
-    waiting: Waiting,
+    link: Link,
     next_id: AtomicU64,
-    /// Kills the server and anything it started when the client is dropped.
-    _group: GroupGuard,
 }
 
 impl McpClient {
@@ -65,6 +250,18 @@ impl McpClient {
         helper: &Path,
         cwd: &Path,
     ) -> Result<Arc<Self>, String> {
+        match (&config.url, config.command.is_empty()) {
+            (Some(url), true) => return Self::connect(name, url, &config.headers).await,
+            (Some(_), false) => {
+                return Err(format!(
+                    "MCP server {name}: give either `command` or `url`, not both"
+                ));
+            }
+            (None, true) => {
+                return Err(format!("MCP server {name}: `command` or `url` is required"));
+            }
+            (None, false) => {}
+        }
         let args: Vec<OsString> = config.args.iter().map(OsString::from).collect();
         let (program, args) = match policy.filter(|_| config.sandbox) {
             Some(policy) => {
@@ -147,12 +344,44 @@ impl McpClient {
 
         let client = Arc::new(Self {
             name: name.to_string(),
-            outbox,
-            waiting,
+            link: Link::Stdio {
+                outbox,
+                waiting,
+                _group: group,
+            },
             next_id: AtomicU64::new(1),
-            _group: group,
         });
-        client
+        client.handshake().await?;
+        Ok(client)
+    }
+
+    /// Connects to a server over HTTP and completes the handshake.
+    async fn connect(
+        name: &str,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Arc<Self>, String> {
+        let http = reqwest::Client::builder()
+            .connect_timeout(STARTUP_TIMEOUT)
+            .build()
+            .map_err(|e| format!("MCP server {name}: {e}"))?;
+        let client = Arc::new(Self {
+            name: name.to_string(),
+            link: Link::Http(HttpLink {
+                http,
+                url: url.to_string(),
+                headers: headers.clone(),
+                session: Mutex::new(None),
+                version: Mutex::new(None),
+            }),
+            next_id: AtomicU64::new(1),
+        });
+        client.handshake().await?;
+        Ok(client)
+    }
+
+    async fn handshake(&self) -> Result<(), String> {
+        let agreed = self
             .request(
                 "initialize",
                 json!({
@@ -163,36 +392,58 @@ impl McpClient {
                 STARTUP_TIMEOUT,
             )
             .await?;
-        client.notify("notifications/initialized");
-        Ok(client)
-    }
-
-    fn notify(&self, method: &str) {
-        let _ = self
-            .outbox
-            .send(json!({"jsonrpc": "2.0", "method": method}).to_string());
+        let ready = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        match &self.link {
+            Link::Stdio { outbox, .. } => {
+                let _ = outbox.send(ready.to_string());
+            }
+            Link::Http(link) => {
+                *link.version.lock().expect("mcp lock") = Some(
+                    agreed["protocolVersion"]
+                        .as_str()
+                        .unwrap_or(PROTOCOL_VERSION)
+                        .to_string(),
+                );
+                link.exchange(&self.name, &ready, None).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn request(&self, method: &str, params: Value, limit: Duration) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (answer, answered) = oneshot::channel();
-        self.waiting.lock().expect("mcp lock").insert(id, answer);
+        let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let gone = || format!("MCP server {} stopped responding", self.name);
-        self.outbox
-            .send(
-                json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string(),
+        let late = || {
+            format!(
+                "MCP server {} did not answer {method} within {} s",
+                self.name,
+                limit.as_secs()
             )
-            .map_err(|_| gone())?;
-        let response = match tokio::time::timeout(limit, answered).await {
-            Ok(Ok(response)) => response,
-            Ok(Err(_)) => return Err(gone()),
-            Err(_) => {
-                self.waiting.lock().expect("mcp lock").remove(&id);
-                return Err(format!(
-                    "MCP server {} did not answer {method} within {} s",
-                    self.name,
-                    limit.as_secs()
-                ));
+        };
+        let response = match &self.link {
+            Link::Stdio {
+                outbox, waiting, ..
+            } => {
+                let (answer, answered) = oneshot::channel();
+                waiting.lock().expect("mcp lock").insert(id, answer);
+                outbox.send(message.to_string()).map_err(|_| gone())?;
+                match tokio::time::timeout(limit, answered).await {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(_)) => return Err(gone()),
+                    Err(_) => {
+                        waiting.lock().expect("mcp lock").remove(&id);
+                        return Err(late());
+                    }
+                }
+            }
+            Link::Http(link) => {
+                match tokio::time::timeout(limit, link.exchange(&self.name, &message, Some(id)))
+                    .await
+                {
+                    Ok(exchanged) => exchanged?.ok_or_else(gone)?,
+                    Err(_) => return Err(late()),
+                }
             }
         };
         if let Some(error) = response.get("error") {
@@ -347,8 +598,7 @@ for line in sys.stdin:
         McpServerConfig {
             command: "python3".into(),
             args: vec![script.display().to_string()],
-            env: BTreeMap::new(),
-            sandbox: true,
+            ..McpServerConfig::default()
         }
     }
 
@@ -388,14 +638,182 @@ for line in sys.stdin:
         );
     }
 
+    /// Serves the MCP HTTP transport on a local port: wants a bearer token,
+    /// hands out a session at initialization and insists on it afterwards,
+    /// and answers `tools/list` as an event stream with a notification in
+    /// front of the answer.
+    async fn http_server() -> String {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut raw = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let (head, body) = loop {
+                        let Ok(n) = socket.read(&mut chunk).await else {
+                            return;
+                        };
+                        if n == 0 {
+                            return;
+                        }
+                        raw.extend_from_slice(&chunk[..n]);
+                        let text = String::from_utf8_lossy(&raw).to_string();
+                        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                            let length: usize = head
+                                .lines()
+                                .find_map(|line| {
+                                    line.to_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|v| v.trim().parse().unwrap())
+                                })
+                                .unwrap_or(0);
+                            if body.len() >= length {
+                                break (head.to_lowercase(), body.to_string());
+                            }
+                        }
+                    };
+                    let message: Value = serde_json::from_str(&body).unwrap();
+                    let (id, method) = (&message["id"], message["method"].as_str().unwrap_or(""));
+                    let answer =
+                        |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result});
+                    let (status, kind, extra, payload) = if !head
+                        .contains("authorization: bearer t0ken")
+                    {
+                        ("401 Unauthorized", "text/plain", "", String::new())
+                    } else if method == "initialize" {
+                        let result = json!({"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "h", "version": "0"}});
+                        (
+                            "200 OK",
+                            "application/json",
+                            "Mcp-Session-Id: s-77\r\n",
+                            answer(result).to_string(),
+                        )
+                    } else if !head.contains("mcp-session-id: s-77")
+                        || !head.contains("mcp-protocol-version: 2025-06-18")
+                    {
+                        ("400 Bad Request", "text/plain", "", String::new())
+                    } else if method == "notifications/initialized" {
+                        ("202 Accepted", "text/plain", "", String::new())
+                    } else if method == "tools/list" {
+                        let tools = json!({"tools": [{"name": "greet", "description": "Greet someone.", "inputSchema": {"type": "object"}}]});
+                        let stream = format!(
+                            "event: message\r\ndata: {}\r\n\r\nevent: message\r\ndata: {}\r\n\r\n",
+                            json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {}}),
+                            answer(tools)
+                        );
+                        ("200 OK", "text/event-stream", "", stream)
+                    } else {
+                        let name = message["params"]["arguments"]["name"]
+                            .as_str()
+                            .unwrap_or("?");
+                        let result =
+                            json!({"content": [{"type": "text", "text": format!("hello {name}")}]});
+                        ("200 OK", "application/json", "", answer(result).to_string())
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_server_over_http_is_used_like_a_local_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = McpServerConfig {
+            url: Some(http_server().await),
+            headers: BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer ${API_TOKEN}".to_string(),
+            )]),
+            ..McpServerConfig::default()
+        };
+
+        // A credential that is not available is said so before any request.
+        let error = config.clone().expand_headers(|_| None).unwrap_err();
+        assert_eq!(
+            error,
+            "header Authorization needs $API_TOKEN, which is not set"
+        );
+        config
+            .expand_headers(|name| (name == "API_TOKEN").then(|| "t0ken".to_string()))
+            .unwrap();
+        assert_eq!(config.headers["Authorization"], "Bearer t0ken");
+
+        let client = McpClient::start("web", &config, None, Path::new("zcode"), dir.path())
+            .await
+            .unwrap();
+        let tools = client.tools().await.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].spec().name, "mcp__web__greet");
+        let greeted = tools[0]
+            .call(&json!({"name": "Lan"}), &ToolContext::new(dir.path()))
+            .await;
+        assert_eq!(greeted, ToolOutput::ok("hello Lan"));
+
+        let wrong = McpServerConfig {
+            headers: BTreeMap::from([("Authorization".to_string(), "Bearer nope".to_string())]),
+            ..config.clone()
+        };
+        let error = McpClient::start("web", &wrong, None, Path::new("zcode"), dir.path())
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("refused the credentials"), "{error}");
+
+        let both = McpServerConfig {
+            command: "true".into(),
+            ..config
+        };
+        let error = McpClient::start("web", &both, None, Path::new("zcode"), dir.path())
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("either `command` or `url`"), "{error}");
+    }
+
+    #[test]
+    fn header_values_expand_names_and_leave_other_dollars_alone() {
+        let known = |name: &str| match name {
+            "ONE" => Some("1".to_string()),
+            "TWO" => Some("2".to_string()),
+            _ => None,
+        };
+        let expand = |value: &str| {
+            let mut config = McpServerConfig {
+                headers: BTreeMap::from([("A".to_string(), value.to_string())]),
+                ..McpServerConfig::default()
+            };
+            config
+                .expand_headers(known)
+                .map(|()| config.headers["A"].clone())
+        };
+        assert_eq!(expand("x-$ONE-${TWO}y").unwrap(), "x-1-2y");
+        // A dollar that is not followed by a name is just a dollar.
+        assert_eq!(expand("100$ $ ${").unwrap(), "100$ $ ${");
+        assert_eq!(
+            expand("Bearer $MISSING").unwrap_err(),
+            "header A needs $MISSING, which is not set"
+        );
+    }
+
     #[tokio::test]
     async fn a_server_that_cannot_start_or_dies_is_an_error_not_a_hang() {
         let dir = tempfile::tempdir().unwrap();
         let missing = McpServerConfig {
             command: "/nonexistent/mcp-server".into(),
-            args: vec![],
-            env: BTreeMap::new(),
             sandbox: false,
+            ..McpServerConfig::default()
         };
         let error = McpClient::start("gone", &missing, None, Path::new("zcode"), dir.path())
             .await

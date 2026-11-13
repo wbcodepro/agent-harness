@@ -423,8 +423,14 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     for (name, server) in &config.mcp {
         let started = async {
             let confinement = policy.is_confined().then_some(&policy);
+            // Credentials in headers come from the environment or the
+            // user's secrets, by name, so they stay out of the config file.
+            let mut server = server.clone();
+            server
+                .expand_headers(|name| secrets.get(name).map(String::from))
+                .map_err(|e| format!("MCP server {name}: {e}"))?;
             let client =
-                zcode_ext::mcp::McpClient::start(name, server, confinement, &helper, cwd).await?;
+                zcode_ext::mcp::McpClient::start(name, &server, confinement, &helper, cwd).await?;
             client.tools().await
         };
         match started.await {

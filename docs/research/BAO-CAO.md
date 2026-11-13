@@ -145,7 +145,7 @@ Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình 
 9. Hoãn nạp tool MCP; MCP qua HTTP.
 10. Bảo vệ `.git`; luật quyền hiểu cú pháp shell.
 
-Trạng thái đợt 2 (2026-11-14): mục 8 có `zcode run --output json|stream-json`, chưa có steering; mục 10 đã làm (hoàn tác thay đổi vào `.git/hooks` và `.git/config`; luật quyền so với từng lệnh trong dòng shell). Mục 7: chạy được hooks định dạng Claude Code cho bốn sự kiện (`[compat] claude_hooks`), chưa có gói plugin. Mục 9: đã hoãn nạp tool MCP/plugin (`tool_search` + `tool_call`, `[context] defer_tools_over`); MCP qua HTTP chưa làm.
+Trạng thái đợt 2 (2026-11-14): mục 8 có `zcode run --output json|stream-json`, chưa có steering; mục 10 đã làm (hoàn tác thay đổi vào `.git/hooks` và `.git/config`; luật quyền so với từng lệnh trong dòng shell). Mục 7: chạy được hooks định dạng Claude Code cho bốn sự kiện (`[compat] claude_hooks`), chưa có gói plugin. Mục 9: đã hoãn nạp tool MCP/plugin (`tool_search` + `tool_call`, `[context] defer_tools_over`); MCP qua HTTP đã có (streamable HTTP, header tĩnh; đã thử với một server công khai thật), chưa có OAuth và bản đặc tả `2026-07-28`.
 
 **Đợt 3: khác biệt hóa**
 11. Agent duyệt lệnh chỉ cho các lệnh muốn thoát sandbox.
