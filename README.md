@@ -41,6 +41,16 @@ Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`,
 
 Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy.
 
+### Trong editor (ACP)
+
+`hx acp` nói Agent Client Protocol qua stdin/stdout. Với Zed, thêm vào `settings.json` (theo tài liệu của Zed; cấu hình này chưa được thử trong Zed):
+
+```json
+{ "agent_servers": { "hx": { "command": "/đường/dẫn/tới/hx", "args": ["acp"] } } }
+```
+
+Máy chủ được kiểm thử bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
+
 ## Tool có sẵn
 
 `read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill và `diagnostics` khi có cấu hình language server.
@@ -63,7 +73,7 @@ Giới hạn cần biết:
 
 - Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
 - Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
-- Windows chưa có sandbox: chỉ chạy được với `danger-full-access`. Bản Windows chưa được biên dịch và thử.
+- Windows chưa có sandbox gốc và bản Windows chưa được biên dịch hay thử. Trên Windows hãy chạy `hx` trong WSL2 (dùng bản Linux; cần kernel 6.7 trở lên để sandbox hoạt động).
 - Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
 
 ## Cấu hình
