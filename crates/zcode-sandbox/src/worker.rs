@@ -57,6 +57,8 @@ const INHERITED_ENV: &[&str] = &[
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
     "OS",
+    // Which bash the shell tool runs on Windows.
+    "ZCODE_BASH",
 ];
 
 /// Body of the hidden `zcode tool-worker` command: runs one tool call read from

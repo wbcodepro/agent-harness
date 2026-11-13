@@ -146,6 +146,19 @@ impl Tool for Bash {
                     Some(code) => text.push_str(&format!("[exit code {code}]")),
                     None => text.push_str("[killed by a signal]"),
                 }
+                // Git's bash keeps shared state per installation. Once a
+                // bash outside the sandbox has created it, one inside is
+                // refused access and dies before running anything.
+                #[cfg(windows)]
+                if stderr.contains("NtCreateDirectoryObject") {
+                    text.push_str(
+                        "\n[zcode] bash could not start in the sandbox because another bash \
+                         from the same Git installation is running outside it (a Git Bash \
+                         window, an editor's terminal). The command did not run. Tell the user: \
+                         close those, or set ZCODE_BASH to the bash.exe of a second copy of \
+                         Git for Windows that only zcode uses.",
+                    );
+                }
                 ToolOutput::error(text)
             }
         })

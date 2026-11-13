@@ -30,12 +30,21 @@ pub fn sh_program() -> PathBuf {
 }
 
 /// The bash of Git for Windows (or another bash that works on Windows
-/// paths), if one is installed. Looked up once.
+/// paths), if one is installed: the one `ZCODE_BASH` names, else the one
+/// found. Looked up once.
 #[cfg(windows)]
 pub fn windows_bash() -> Option<&'static std::path::Path> {
     static FOUND: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     FOUND
         .get_or_init(|| {
+            // The user's choice comes first. It is the way to give zcode a
+            // Git of its own: bash keeps shared state per installation, and
+            // a confined bash cannot join the state of an unconfined one.
+            if let Some(chosen) = std::env::var_os("ZCODE_BASH").map(PathBuf::from)
+                && chosen.is_file()
+            {
+                return Some(chosen);
+            }
             let roots = [
                 "ProgramFiles",
                 "ProgramW6432",
