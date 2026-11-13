@@ -386,7 +386,25 @@ impl Tool for Edit {
                 Err(output) => return output,
             };
             if input.old_string.is_empty() {
-                return ToolOutput::error("old_string must not be empty.");
+                // Usually an attempt to add lines. Say how that is done,
+                // or the next attempt is a shell one-liner that mangles
+                // the file.
+                let path = ctx.resolve(&input.path);
+                let first = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| text.lines().next().map(str::to_string));
+                return ToolOutput::error(match first {
+                    Some(first) => format!(
+                        "old_string must not be empty. To add lines, put an existing line \
+                         next to where they go in old_string, and that same line together \
+                         with the new lines in new_string. To add at the top of this file, \
+                         use its first line as old_string: `{}`",
+                        first.chars().take(160).collect::<String>()
+                    ),
+                    None => "old_string must not be empty. To create a file or fill an empty \
+                             one, use write."
+                        .to_string(),
+                });
             }
             if input.old_string == input.new_string {
                 return ToolOutput::error("old_string and new_string are identical.");
@@ -552,6 +570,36 @@ mod tests {
         );
         assert!(where_it_differs(file, "nothing\nlike this").contains("None of its lines"));
         assert!(where_it_differs("x()\nif a:\n    x()\n", "x()").contains("more than one place"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_old_string_is_answered_with_how_to_add_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        fs::write(dir.path().join("a.py"), "def total():\n    return 1\n").unwrap();
+        let edit = |path: &'static str| {
+            let ctx = ctx.clone();
+            async move {
+                Edit.call(
+                    &json!({"path": path, "old_string": "", "new_string": "import os\n"}),
+                    &ctx,
+                )
+                .await
+            }
+        };
+        let said = edit("a.py").await;
+        assert!(said.is_error);
+        assert!(
+            said.text
+                .ends_with("use its first line as old_string: `def total():`"),
+            "{}",
+            said.text
+        );
+        assert!(edit("missing.py").await.text.contains("use write"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.py")).unwrap(),
+            "def total():\n    return 1\n"
+        );
     }
 
     #[tokio::test]
