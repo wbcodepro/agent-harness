@@ -52,7 +52,11 @@ Windows này và sửa những gì hỏng. Đọc README.md và docs/WINDOWS.md 
      `.git` (yêu cầu agent sửa `.git/config` hoặc thêm file vào `.git/hooks`, thay đổi phải
      bị hoàn tác và model được báo); `zcode run --output json`; hooks kiểu Claude Code
      (`[compat] claude_hooks`) cần `sh` trong PATH, báo lại nếu không chạy được; server MCP
-     qua HTTP (`[mcp.x] url = ...`); `zcode probe evals/basic`.
+     qua HTTP (`[mcp.x] url = ...`); `zcode probe evals/basic`; `zcode skill install` với
+     một thư mục và với một URL git; chốt đọc-trước-khi-ghi-đè (yêu cầu agent ghi đè một file
+     có sẵn mà chưa đọc: phải bị từ chối, và đọc xong thì ghi được, kể cả khi đường dẫn viết
+     bằng `\` hay `/`); `grep`/`glob` với `path` là thư mục con phải in đường dẫn tính từ thư
+     mục làm việc, dùng dấu `/`.
 
 4. Giới hạn đã biết, không cần sửa nhưng cần xác nhận đúng như mô tả: trên Windows zcode
    chỉ giam được việc ghi; tool vẫn đọc được mọi file người dùng đọc được và vẫn ra mạng
