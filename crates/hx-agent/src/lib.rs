@@ -232,6 +232,14 @@ impl Agent {
                     continue;
                 };
                 called_tools = true;
+                if completion.stop == StopReason::Refusal {
+                    session.append(Event::ToolResult {
+                        call_id: id,
+                        content: vec![Block::text("Not run: the provider declined this response.")],
+                        is_error: true,
+                    })?;
+                    continue;
+                }
                 if completion.stop == StopReason::MaxTokens {
                     // The call may be cut short; running it would act on
                     // arguments the model never finished writing.
@@ -267,6 +275,15 @@ impl Agent {
                 self.checkpoint(session).await?;
             }
             session.append(Event::StepEnd { turn, step })?;
+            if completion.stop == StopReason::Refusal {
+                // Asking again would get the same answer; hand the turn
+                // back to the user with the refusal on record.
+                session.append(Event::TurnEnd {
+                    turn,
+                    reason: TurnEndReason::Completed,
+                })?;
+                return Ok(());
+            }
             if !called_tools {
                 let mut follow_up = None;
                 for hook in &self.hooks {

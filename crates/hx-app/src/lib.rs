@@ -28,8 +28,52 @@ pub use hx_policy::NetworkMode as NetworkChoice;
 pub use hx_policy::Prompter;
 pub use hx_sandbox::Mode as SandboxMode;
 
-const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
-const DEFAULT_MODEL: &str = "deepseek-flash";
+/// A model provider hx can talk to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Deepseek,
+    Openai,
+    Anthropic,
+}
+
+impl Provider {
+    pub fn parse(name: &str) -> Result<Self, String> {
+        match name.to_ascii_lowercase().as_str() {
+            "deepseek" => Ok(Self::Deepseek),
+            "openai" => Ok(Self::Openai),
+            "anthropic" | "claude" => Ok(Self::Anthropic),
+            other => Err(format!(
+                "unknown provider {other:?}: use deepseek, openai or anthropic"
+            )),
+        }
+    }
+
+    /// Environment variables (or secrets) searched for the key, in order.
+    fn key_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Deepseek => &["DEEPSEEK_API_KEY"],
+            Self::Openai => &["OPENAI_API_KEY"],
+            Self::Anthropic => &["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+        }
+    }
+
+    fn base_url(self) -> &'static str {
+        match self {
+            Self::Deepseek => "https://api.deepseek.com",
+            Self::Openai => "https://api.openai.com/v1",
+            Self::Anthropic => "https://api.anthropic.com",
+        }
+    }
+
+    fn default_model(self) -> Option<&'static str> {
+        match self {
+            Self::Deepseek => Some("deepseek-flash"),
+            Self::Anthropic => Some("claude-opus-5-5"),
+            // No safe default: model names here change often.
+            Self::Openai => None,
+        }
+    }
+}
 
 /// Per-invocation choices that override the configuration file.
 #[derive(Clone, Default)]
@@ -38,6 +82,9 @@ pub struct Options {
     pub network: Option<NetworkMode>,
     /// Answer every approval question with yes.
     pub yes: bool,
+    /// `deepseek`, `openai` or `anthropic`. Defaults to the configuration,
+    /// then to whichever provider a key is available for.
+    pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
     pub max_steps: u64,
@@ -98,8 +145,8 @@ pub fn load_secrets(home: &Path, cwd: &Path) -> Result<Secrets, String> {
 pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime, String> {
     let config = load_config(home)?;
     let secrets = load_secrets(home, cwd)?;
-    let llm = match &options.llm {
-        Some(llm) => Arc::clone(llm),
+    let (llm, summarizer) = match &options.llm {
+        Some(llm) => (Arc::clone(llm), Arc::clone(llm)),
         None => llm(&config, &secrets, options)?,
     };
 
@@ -205,7 +252,7 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
         };
 
     let mut hooks: Vec<Arc<dyn TurnHook>> = vec![Arc::new(Compactor {
-        llm: Arc::clone(&llm),
+        llm: summarizer,
         threshold_tokens: config.context.compact_at_tokens,
     })];
     let project = ProjectConfig::load(&cwd.join(".hx/config.toml")).map_err(|e| e.to_string())?;
@@ -291,7 +338,10 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
     )
 }
 
-fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Arc<dyn Llm>, String> {
+/// The agent's model, then the one that writes summaries.
+type Models = (Arc<dyn Llm>, Arc<dyn Llm>);
+
+fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, String> {
     // Replays recorded responses instead of calling a provider; for tests
     // and evals.
     if let Some(script) = std::env::var_os("HX_SCRIPT") {
@@ -300,32 +350,70 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Arc<dyn 
             .and_then(|ms| ms.parse().ok())
             .unwrap_or(0);
         let recording = Recording::load(&script).map_err(|e| e.to_string())?;
-        return Ok(Arc::new(
-            ScriptedLlm::new(recording).with_delay(Duration::from_millis(delay)),
-        ));
+        let scripted: Arc<dyn Llm> =
+            Arc::new(ScriptedLlm::new(recording).with_delay(Duration::from_millis(delay)));
+        return Ok((Arc::clone(&scripted), scripted));
     }
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let lookup = |name: &str| env(name).or_else(|| secrets.get(name).map(String::from));
+
+    let named = options
+        .provider
+        .clone()
+        .or_else(|| env("HX_PROVIDER"))
+        .or_else(|| config.model.provider.clone());
+    let provider = match named {
+        Some(name) => Provider::parse(&name)?,
+        // Whichever provider there is a key for.
+        None => [Provider::Deepseek, Provider::Anthropic, Provider::Openai]
+            .into_iter()
+            .find(|provider| {
+                provider
+                    .key_names()
+                    .iter()
+                    .any(|name| lookup(name).is_some())
+            })
+            .unwrap_or(Provider::Deepseek),
+    };
+
     let key_names: Vec<&str> = match &config.model.api_key_env {
         Some(name) => vec![name.as_str()],
-        None => vec!["HX_API_KEY", "DEEPSEEK_API_KEY"],
+        None => std::iter::once("HX_API_KEY")
+            .chain(provider.key_names().iter().copied())
+            .collect(),
     };
     let api_key = key_names
         .iter()
-        .find_map(|name| env(name).or_else(|| secrets.get(name).map(String::from)))
+        .find_map(|name| lookup(name))
         .ok_or_else(|| format!("no API key: set {}", key_names.join(" or ")))?;
     let base_url = options
         .base_url
         .clone()
         .or_else(|| env("HX_BASE_URL"))
         .or_else(|| config.model.base_url.clone())
-        .unwrap_or_else(|| DEFAULT_BASE_URL.into());
+        .unwrap_or_else(|| provider.base_url().into());
     let model = options
         .model
         .clone()
         .or_else(|| env("HX_MODEL"))
         .or_else(|| config.model.name.clone())
-        .unwrap_or_else(|| DEFAULT_MODEL.into());
-    Ok(Arc::new(ChatCompletions::new(&base_url, api_key, model)))
+        .or_else(|| provider.default_model().map(String::from))
+        .ok_or("no model chosen: pass --model, or set HX_MODEL or [model] name")?;
+    let summary_model = config.model.summary_model.clone().unwrap_or(model.clone());
+
+    let build = |model: String| -> Arc<dyn Llm> {
+        match provider {
+            Provider::Anthropic => Arc::new(
+                hx_llm::Anthropic::new(&base_url, api_key.clone(), model).with_effort(Some(
+                    config.model.effort.clone().unwrap_or_else(|| "high".into()),
+                )),
+            ),
+            Provider::Deepseek | Provider::Openai => {
+                Arc::new(ChatCompletions::new(&base_url, api_key.clone(), model))
+            }
+        }
+    };
+    Ok((build(model), build(summary_model)))
 }
 
 /// Gives every question the same answer.

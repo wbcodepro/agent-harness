@@ -5,10 +5,14 @@
 //! caller owns the sink, which is how the agent journals a response while it
 //! is still arriving.
 
+mod anthropic;
 mod chat_completions;
+#[cfg(test)]
+mod testing;
 
 use std::time::Duration;
 
+pub use anthropic::Anthropic;
 pub use chat_completions::ChatCompletions;
 pub use hx_kernel::BoxFuture;
 use hx_session::{Delta, History, Message, StopReason, ToolSpec, Usage};

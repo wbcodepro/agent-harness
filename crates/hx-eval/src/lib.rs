@@ -138,7 +138,16 @@ fn deltas_for(content: &[Block]) -> Vec<Delta> {
     for block in content {
         match block {
             Block::Text { text } => deltas.push(Delta::Text { text: text.clone() }),
-            Block::Thinking { text } => deltas.push(Delta::Thinking { text: text.clone() }),
+            Block::Thinking { text, signature } => {
+                if !text.is_empty() || signature.is_none() {
+                    deltas.push(Delta::Thinking { text: text.clone() });
+                }
+                if let Some(signature) = signature {
+                    deltas.push(Delta::ThinkingSignature {
+                        signature: signature.clone(),
+                    });
+                }
+            }
             Block::ToolUse { id, name, input } => {
                 deltas.push(Delta::ToolUseStart {
                     id: id.clone(),

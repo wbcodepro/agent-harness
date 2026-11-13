@@ -67,6 +67,23 @@ pub fn derive_history(records: &[Record]) -> History {
         _ => None,
     });
 
+    // A signed thinking block is only valid in the conversation that
+    // produced it: same system prompt, same tools, same earlier messages.
+    // Once any of those changed, blocks from before the change would be
+    // rejected by the provider, so they are left out from then on.
+    let context_changed_at = records
+        .iter()
+        .rev()
+        .find(|record| {
+            matches!(
+                record.event,
+                Event::Compaction { .. }
+                    | Event::SystemMessage { .. }
+                    | Event::ToolsDeclared { .. }
+            )
+        })
+        .map_or(0, |record| record.seq);
+
     let mut history = History::default();
     if let Some((summary, _)) = compaction {
         history.messages.push(Message {
@@ -92,10 +109,22 @@ pub fn derive_history(records: &[Record]) -> History {
                 role: Role::User,
                 content: content.clone(),
             }),
-            Event::AssistantMessage { content, .. } => history.messages.push(Message {
-                role: Role::Assistant,
-                content: content.clone(),
-            }),
+            Event::AssistantMessage { content, .. } => {
+                let stale = record.seq < context_changed_at;
+                let content: Vec<Block> = content
+                    .iter()
+                    .filter(|block| !(stale && matches!(block, Block::Thinking { .. })))
+                    .cloned()
+                    .collect();
+                // An assistant turn that was nothing but stale thinking has
+                // nothing left to show.
+                if !content.is_empty() {
+                    history.messages.push(Message {
+                        role: Role::Assistant,
+                        content,
+                    });
+                }
+            }
             Event::ToolResult {
                 call_id,
                 content,

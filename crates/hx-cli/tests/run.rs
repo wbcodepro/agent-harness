@@ -305,6 +305,9 @@ fn a_missing_api_key_is_reported_before_any_session_is_created() {
         .env_remove("HX_SCRIPT")
         .env_remove("HX_API_KEY")
         .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("CLAUDE_API_KEY")
+        .env_remove("OPENAI_API_KEY")
         .stdin(Stdio::null())
         .output()
         .unwrap();

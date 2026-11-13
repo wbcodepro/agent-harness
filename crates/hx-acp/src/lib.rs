@@ -377,7 +377,9 @@ impl Updates {
             match delta {
                 Delta::Text { text } => self.chunk("agent_message_chunk", text),
                 Delta::Thinking { text } => self.chunk("agent_thought_chunk", text),
-                Delta::ToolUseStart { .. } | Delta::ToolInput { .. } => {}
+                Delta::ThinkingSignature { .. }
+                | Delta::ToolUseStart { .. }
+                | Delta::ToolInput { .. } => {}
             }
         }
     }

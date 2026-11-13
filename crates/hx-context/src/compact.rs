@@ -33,7 +33,7 @@ fn block_chars(blocks: &[Block]) -> usize {
     blocks
         .iter()
         .map(|block| match block {
-            Block::Text { text } | Block::Thinking { text } => text.len(),
+            Block::Text { text } | Block::Thinking { text, .. } => text.len(),
             Block::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
             Block::ToolResult { content, .. } => block_chars(content),
         })

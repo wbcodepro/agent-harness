@@ -33,11 +33,16 @@ pub struct RunArgs {
     /// Working directory for a new session. Defaults to the current one.
     #[arg(long)]
     cwd: Option<PathBuf>,
-    /// Model name. Defaults to $HX_MODEL, then the configuration.
+    /// deepseek, openai or anthropic. Defaults to $HX_PROVIDER, then the
+    /// configuration, then whichever provider a key is set for.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Model name. Defaults to $HX_MODEL, then the configuration, then the
+    /// provider's default.
     #[arg(long)]
     model: Option<String>,
-    /// Root of an OpenAI-compatible API. Defaults to $HX_BASE_URL, then the
-    /// configuration, then https://api.deepseek.com.
+    /// Root of the provider's API. Defaults to $HX_BASE_URL, then the
+    /// configuration, then the provider's own.
     #[arg(long)]
     base_url: Option<String>,
     /// Most model requests allowed in the turn.
@@ -71,6 +76,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
             NetworkArg::Open => NetworkMode::Open,
         }),
         yes: args.yes,
+        provider: args.provider.clone(),
         model: args.model.clone(),
         base_url: args.base_url.clone(),
         max_steps: args.max_steps,
@@ -151,7 +157,16 @@ fn printer() -> impl FnMut(&Record) + Send + 'static {
             let _ = std::io::stdout().flush();
             line_open = !text.ends_with('\n');
         }
-        Event::AssistantMessage { .. } | Event::AssistantAttempt { .. } if line_open => {
+        Event::AssistantMessage { stop, .. } => {
+            if line_open {
+                println!();
+                line_open = false;
+            }
+            if *stop == hx_session::StopReason::Refusal {
+                eprintln!("hx: the model declined to answer this request");
+            }
+        }
+        Event::AssistantAttempt { .. } if line_open => {
             println!();
             line_open = false;
         }

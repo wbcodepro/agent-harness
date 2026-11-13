@@ -195,6 +195,8 @@ pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    /// The provider declined to answer.
+    Refusal,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +219,11 @@ pub enum Block {
     },
     Thinking {
         text: String,
+        /// The provider's opaque proof for this block. A provider that
+        /// issues one expects the block back unchanged, signature included,
+        /// in later requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     ToolUse {
         id: String,
@@ -247,6 +254,11 @@ pub enum Delta {
     Thinking {
         text: String,
     },
+    /// Completes the thinking block in progress with its signature. With no
+    /// thinking block in progress it stands for one whose text was withheld.
+    ThinkingSignature {
+        signature: String,
+    },
     /// Opens a tool call; following `ToolInput` deltas belong to it.
     ToolUseStart {
         id: String,
@@ -265,7 +277,10 @@ pub enum Delta {
 pub fn assemble<'a>(deltas: impl IntoIterator<Item = &'a Delta>) -> Vec<Block> {
     enum Open {
         Text(String),
-        Thinking(String),
+        Thinking {
+            text: String,
+            signature: Option<String>,
+        },
         Tool {
             id: String,
             name: String,
@@ -276,7 +291,7 @@ pub fn assemble<'a>(deltas: impl IntoIterator<Item = &'a Delta>) -> Vec<Block> {
     fn close(open: Open) -> Block {
         match open {
             Open::Text(text) => Block::Text { text },
-            Open::Thinking(text) => Block::Thinking { text },
+            Open::Thinking { text, signature } => Block::Thinking { text, signature },
             Open::Tool { id, name, json } => {
                 let input = if json.trim().is_empty() {
                     Value::Object(Default::default())
@@ -292,8 +307,23 @@ pub fn assemble<'a>(deltas: impl IntoIterator<Item = &'a Delta>) -> Vec<Block> {
     let mut open: Option<Open> = None;
     for delta in deltas {
         match (delta, &mut open) {
-            (Delta::Text { text }, Some(Open::Text(buf)))
-            | (Delta::Thinking { text }, Some(Open::Thinking(buf))) => buf.push_str(text),
+            (Delta::Text { text }, Some(Open::Text(buf))) => buf.push_str(text),
+            // A signed thinking block is finished; more thinking starts a
+            // new one.
+            (
+                Delta::Thinking { text },
+                Some(Open::Thinking {
+                    text: buf,
+                    signature: None,
+                }),
+            ) => buf.push_str(text),
+            (
+                Delta::ThinkingSignature { signature },
+                Some(Open::Thinking {
+                    signature: slot @ None,
+                    ..
+                }),
+            ) => *slot = Some(signature.clone()),
             (Delta::ToolInput { json }, Some(Open::Tool { json: buf, .. })) => buf.push_str(json),
             // Input with no open tool call has nothing to attach to.
             (Delta::ToolInput { .. }, _) => {}
@@ -301,7 +331,14 @@ pub fn assemble<'a>(deltas: impl IntoIterator<Item = &'a Delta>) -> Vec<Block> {
                 blocks.extend(open.take().map(close));
                 open = Some(match delta {
                     Delta::Text { text } => Open::Text(text.clone()),
-                    Delta::Thinking { text } => Open::Thinking(text.clone()),
+                    Delta::Thinking { text } => Open::Thinking {
+                        text: text.clone(),
+                        signature: None,
+                    },
+                    Delta::ThinkingSignature { signature } => Open::Thinking {
+                        text: String::new(),
+                        signature: Some(signature.clone()),
+                    },
                     Delta::ToolUseStart { id, name } => Open::Tool {
                         id: id.clone(),
                         name: name.clone(),
@@ -359,6 +396,46 @@ mod tests {
     }
 
     #[test]
+    fn signatures_close_thinking_blocks_and_survive_the_log() {
+        let deltas = [
+            Delta::Thinking {
+                text: "first".into(),
+            },
+            Delta::ThinkingSignature {
+                signature: "sig1".into(),
+            },
+            // Text withheld by the provider: only a signature arrives.
+            Delta::ThinkingSignature {
+                signature: "sig2".into(),
+            },
+            Delta::Thinking {
+                text: "third".into(),
+            },
+            Delta::Text {
+                text: "answer".into(),
+            },
+        ];
+        let thinking = |text: &str, signature: Option<&str>| Block::Thinking {
+            text: text.into(),
+            signature: signature.map(String::from),
+        };
+        let blocks = assemble(&deltas);
+        assert_eq!(
+            blocks,
+            vec![
+                thinking("first", Some("sig1")),
+                thinking("", Some("sig2")),
+                thinking("third", None),
+                Block::text("answer"),
+            ]
+        );
+        let wire = serde_json::to_string(&blocks).unwrap();
+        assert!(wire.contains(r#"{"type":"thinking","text":"first","signature":"sig1"}"#));
+        assert!(wire.contains(r#"{"type":"thinking","text":"third"}"#));
+        assert_eq!(serde_json::from_str::<Vec<Block>>(&wire).unwrap(), blocks);
+    }
+
+    #[test]
     fn assemble_merges_fragments_and_keeps_truncated_tool_input() {
         let deltas = [
             Delta::Thinking { text: "hm".into() },
@@ -385,7 +462,10 @@ mod tests {
         assert_eq!(
             assemble(&deltas),
             vec![
-                Block::Thinking { text: "hm".into() },
+                Block::Thinking {
+                    text: "hm".into(),
+                    signature: None,
+                },
                 Block::text("Hello"),
                 Block::ToolUse {
                     id: "c1".into(),

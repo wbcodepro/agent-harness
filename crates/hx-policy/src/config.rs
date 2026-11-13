@@ -65,6 +65,11 @@ pub struct ModelConfig {
     pub base_url: Option<String>,
     /// Name of the environment variable or secret holding the API key.
     pub api_key_env: Option<String>,
+    /// Reasoning effort for providers that take one: `low`, `medium`,
+    /// `high`, `xhigh` or `max`. Empty leaves the model's default.
+    pub effort: Option<String>,
+    /// A cheaper model, on the same provider, for summarizing history.
+    pub summary_model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

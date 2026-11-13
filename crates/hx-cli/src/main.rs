@@ -243,7 +243,7 @@ fn print_block(block: &Block, depth: usize) {
     let pad = "  ".repeat(depth);
     match block {
         Block::Text { text } => println!("{pad}{text}"),
-        Block::Thinking { text } => println!("{pad}(thinking) {text}"),
+        Block::Thinking { text, .. } => println!("{pad}(thinking) {text}"),
         Block::ToolUse { id, name, input } => println!("{pad}-> {name} {input} ({id})"),
         Block::ToolResult {
             call_id,
