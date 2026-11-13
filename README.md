@@ -42,7 +42,7 @@ Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lư�
 
 ## Tool có sẵn
 
-`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`, và `skill` khi có skill.
+`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill và `diagnostics` khi có cấu hình language server.
 
 Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song song. `subagent` giao việc cho một agent mới có ngữ cảnh riêng; với `isolate` nó làm trên một git worktree và nhánh riêng.
 
@@ -108,6 +108,10 @@ subagent_depth = 1
 command = "docs-server"
 args = ["--stdio"]
 
+[lsp.rust]                      # language server cho tool `diagnostics`
+command = "rust-analyzer"
+extensions = ["rs"]
+
 [[hook]]                        # lệnh chạy quanh mỗi lần gọi tool; thoát mã 2 = phản đối
 event = "pre_tool"
 tool = "bash"
@@ -136,7 +140,7 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 | `hx-checkpoint` | Checkpoint workspace bằng kho git riêng |
 | `hx-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
 | `hx-verify` | Cổng kiểm chứng trước khi kết thúc lượt |
-| `hx-ext` | MCP, skills, hooks, plugin WebAssembly |
+| `hx-ext` | MCP, chẩn đoán LSP, skills, hooks, plugin WebAssembly |
 | `hx-multi` | Subagent, worktree, bảng việc, ngân sách chung |
 | `hx-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
 | `hx-acp`, `hx-tui`, `hx-web`, `hx-cli` | Các giao diện |

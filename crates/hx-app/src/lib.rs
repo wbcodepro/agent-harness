@@ -328,6 +328,14 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             Err(e) => eprintln!("hx: {e}"),
         }
     }
+    if !config.lsp.is_empty() {
+        tools.insert(Arc::new(hx_ext::lsp::DiagnosticsTool::new(
+            &config.lsp,
+            policy.is_confined().then(|| policy.clone()),
+            helper.clone(),
+            cwd.to_path_buf(),
+        )));
+    }
     for (name, plugin) in &config.plugins {
         let loaded = hx_ext::wasm::WasmPlugin::load(name, plugin, cwd).and_then(|p| p.tools());
         match loaded {

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use hx_ext::hooks::Hook;
+use hx_ext::lsp::LspServerConfig;
 use hx_ext::mcp::McpServerConfig;
 use hx_ext::wasm::PluginConfig;
 
@@ -38,6 +39,8 @@ pub struct Config {
     pub rules: Vec<Rule>,
     /// Model Context Protocol servers, by name.
     pub mcp: BTreeMap<String, McpServerConfig>,
+    /// Language servers for the `diagnostics` tool, by name.
+    pub lsp: BTreeMap<String, LspServerConfig>,
     /// Commands run before and after tool calls.
     #[serde(rename = "hook")]
     pub hooks: Vec<Hook>,
