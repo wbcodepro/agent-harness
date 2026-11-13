@@ -439,7 +439,7 @@ impl ClaudeHooks {
                 command
             }
             None => {
-                let mut command = tokio::process::Command::new("sh");
+                let mut command = tokio::process::Command::new(zcode_kernel::sh_program());
                 command.arg("-c").arg(&entry.command);
                 command
             }

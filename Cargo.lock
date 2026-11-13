@@ -5130,6 +5130,7 @@ dependencies = [
 name = "zcode-kernel"
 version = "0.0.1"
 dependencies = [
+ "tempfile",
  "tokio",
 ]
 

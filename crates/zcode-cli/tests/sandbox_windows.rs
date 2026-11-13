@@ -260,3 +260,108 @@ fn commands_started_by_the_shell_tool_inherit_the_confinement() {
         "nothing was created outside"
     );
 }
+
+/// A junction: a directory link any user may create, privileged or not.
+fn junction(link: &Path, target: &Path) {
+    let status = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "mklink /J failed");
+}
+
+fn label_of(path: &Path) -> String {
+    let output = Command::new("icacls").arg(path).output().unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Every way out that was tried by hand on a real Windows machine: other
+/// shells, links that lead outside, and removing or renaming what is there.
+#[test]
+fn no_route_leads_out_of_the_workspace() {
+    let fx = Fixture::new();
+    let outside = fx.root.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("victim.txt"), "intact").unwrap();
+    fs::write(outside.join("victim2.txt"), "intact").unwrap();
+    // A link that is already in the workspace when it is first labelled:
+    // labelling must not follow it and make its target writable.
+    junction(&fx.work.join("old-link"), &outside);
+    let home = fx.home("home", "[sandbox]\nallow_partial = true\n");
+    let windows = outside.display().to_string();
+    let posix = windows.replace('\\', "/");
+
+    let (output, results) = fx.run(
+        &home,
+        vec![
+            ("write", json!({"path": "old-link/w.txt", "content": "x"})),
+            (
+                "bash",
+                json!({"command": "echo x > old-link/sh.txt; echo x >> old-link/victim.txt; rm -f old-link/victim2.txt; true"}),
+            ),
+            // A link the tool makes itself. Windows refuses a Low process a
+            // junction to a place it cannot write, so this one never exists.
+            (
+                "bash",
+                json!({"command": format!("cmd //c 'mklink /J new-link {windows}' && echo x > new-link/j.txt; true")}),
+            ),
+            ("write", json!({"path": "new-link/w.txt", "content": "x"})),
+            // A symbolic link, where the user is allowed to make one.
+            (
+                "bash",
+                json!({"command": format!("cmd //c 'mklink /D sym-link {windows}' && echo x > sym-link/s.txt; true")}),
+            ),
+            (
+                "bash",
+                json!({"command": format!("powershell -NoProfile -Command \"Set-Content -LiteralPath '{posix}/ps.txt' -Value x; Add-Content -LiteralPath '{posix}/victim.txt' -Value x\"; true")}),
+            ),
+            (
+                "bash",
+                json!({"command": format!("cmd //c 'echo x> {windows}\\cmd.txt'; cmd //c 'echo x>> {windows}\\victim.txt'; true")}),
+            ),
+            (
+                "bash",
+                json!({"command": format!("rm -f '{posix}/victim.txt'; mv '{posix}/victim.txt' '{posix}/moved.txt'; mv '{posix}/victim2.txt' taken.txt; cmd //c 'del /f /q {windows}\\victim.txt'; cmd //c 'ren {windows}\\victim2.txt gone.txt'; true")}),
+            ),
+            ("write", json!({"path": "sub/../../outside/dots.txt", "content": "x"})),
+            (
+                "bash",
+                json!({"command": "mkdir -p sub && echo x > sub/../../outside/dots2.txt; true"}),
+            ),
+        ],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(results.len(), 10, "{results:#?}\n{stderr}");
+    // The shell itself must have worked, or the commands proved nothing.
+    assert!(
+        results
+            .iter()
+            .all(|(text, _)| !text.contains("Cannot start bash")),
+        "{results:#?}"
+    );
+
+    let mut names: Vec<String> = fs::read_dir(&outside)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["victim.txt", "victim2.txt"], "{results:#?}");
+    for name in names {
+        assert_eq!(
+            fs::read_to_string(outside.join(&name)).unwrap(),
+            "intact",
+            "{name}: {results:#?}"
+        );
+    }
+    assert!(!fx.work.join("taken.txt").exists());
+    assert!(
+        !label_of(&outside).contains("Low Mandatory Level")
+            && !label_of(&outside.join("victim.txt")).contains("Low Mandatory Level"),
+        "labelling the workspace reached through a link"
+    );
+}

@@ -39,7 +39,7 @@ impl Hook {
 
     /// Runs the hook; returns its objection, if it made one.
     async fn run(&self, payload: &serde_json::Value, cwd: &std::path::Path) -> Option<String> {
-        let mut child = tokio::process::Command::new("sh")
+        let mut child = tokio::process::Command::new(zcode_kernel::sh_program())
             .arg("-c")
             .arg(&self.command)
             .current_dir(cwd)

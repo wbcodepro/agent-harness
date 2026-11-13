@@ -98,7 +98,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 /// minutes counts as failed: a check that runs the agent's code can hang on
 /// it.
 async fn shell(command: &str, cwd: &Path) -> bool {
-    let child = tokio::process::Command::new("bash")
+    let child = tokio::process::Command::new(zcode_kernel::bash_program())
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
@@ -148,7 +148,7 @@ async fn run_task(
 
     let mut command = match &args.command {
         Some(external) => {
-            let mut command = tokio::process::Command::new("bash");
+            let mut command = tokio::process::Command::new(zcode_kernel::bash_program());
             command
                 .arg("-c")
                 .arg(external)
