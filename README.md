@@ -61,6 +61,8 @@ Máy chủ được kiểm thử bằng runtime client chính thức của giao 
 
 `read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill và `diagnostics` khi có cấu hình language server. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
 
+`write` từ chối ghi đè một file đã tồn tại mà model chưa đọc trong phiên (nó phải đọc trước, vì nội dung file thường là thứ đề bài phụ thuộc vào); khi ghi làm file nhỏ đi quá nửa, kết quả nói rõ là cả file đã bị thay. `edit` không tìm thấy đoạn cần thay thì chỉ ra khớp tới dòng nào và khác ở đâu. `grep` ghi kèm tên hàm hoặc lớp bao quanh mỗi dòng khớp.
+
 `edit` và `apply_patch` chấp nhận sai lệch về khoảng trắng, thụt lề và kiểu xuống dòng khi chỉ có đúng một chỗ khớp; dòng không đổi luôn giữ nguyên như trong file. Tham số gọi tool bị bọc trong code fence hoặc lẫn chữ được gỡ ra trước khi chạy.
 
 Khi tool từ server MCP và plugin nhiều hơn `defer_tools_over`, chúng không nằm trong danh sách tool gửi cho model (mỗi tool khai báo tốn token ở mọi request). Model tìm bằng `tool_search` và chạy bằng `tool_call`; luật quyền và hook vẫn thấy tên thật của tool được gọi.
@@ -144,6 +146,7 @@ defer_tools_over = 20           # nhiều tool MCP/plugin hơn số này thì kh
 [verify]
 commands = ["cargo test -q"]    # phải đạt trước khi một lượt có sửa file được kết thúc
 checklist = false               # true: trước khi kết thúc, yêu cầu model rà lại từng điểm của đề bài
+stop_on_red = true              # lệnh test/build cuối cùng model chạy bị hỏng mà nó định dừng: nhắc nó làm tiếp (tối đa 2 lần mỗi lượt)
 
 [limits]
 tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn

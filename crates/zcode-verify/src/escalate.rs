@@ -103,7 +103,9 @@ pub fn trouble_this_turn(records: &[Record]) -> usize {
         .rev()
         .take_while(|record| !matches!(record.event, Event::TurnStart { .. }))
         .filter(|record| match &record.event {
-            Event::UserMessage { content } => starts_with(content, VERIFY_PREFIX),
+            Event::UserMessage { content } => {
+                starts_with(content, VERIFY_PREFIX) || starts_with(content, crate::CHECK_PREFIX)
+            }
             Event::ToolResult { content, .. } => content
                 .iter()
                 .any(|block| matches!(block, Block::Text { text } if text.contains(REPEAT_PREFIX))),

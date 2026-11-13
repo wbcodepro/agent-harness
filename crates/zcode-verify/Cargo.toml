@@ -12,6 +12,7 @@ zcode-kernel.workspace = true
 zcode-llm.workspace = true
 zcode-session.workspace = true
 zcode-tools.workspace = true
+regex.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

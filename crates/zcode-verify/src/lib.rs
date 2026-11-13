@@ -6,6 +6,7 @@
 //! the model has seen the failure and said why it stands.
 
 mod escalate;
+mod redcheck;
 
 use std::sync::Arc;
 
@@ -18,6 +19,8 @@ use zcode_tools::{Tool, ToolContext, ToolRunner};
 /// Starts every message the gate sends, so they can be told apart from what
 /// the user typed.
 pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, trouble_this_turn};
+
+pub use redcheck::{CHECK_PREFIX, RedCheck};
 
 pub const VERIFY_PREFIX: &str = "[zcode verify]";
 

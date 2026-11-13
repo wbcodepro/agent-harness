@@ -343,6 +343,9 @@ pub struct VerifyConfig {
     /// Before a turn that changed files ends, ask the model once to go
     /// through the request point by point and confirm each is done.
     pub checklist: bool,
+    /// Send the model back to work, at most twice a turn, when the last
+    /// test, build or lint command it ran failed and it is stopping.
+    pub stop_on_red: bool,
 }
 
 impl Default for VerifyConfig {
@@ -352,6 +355,7 @@ impl Default for VerifyConfig {
             max_rounds: 2,
             timeout_ms: 300_000,
             checklist: false,
+            stop_on_red: true,
         }
     }
 }

@@ -4,6 +4,7 @@
 mod config;
 mod gitguard;
 mod layers;
+mod readfirst;
 mod secrets;
 mod shell;
 
@@ -14,5 +15,6 @@ pub use config::{
 };
 pub use gitguard::{GIT_GUARD_PREFIX, GitGuard};
 pub use layers::{ApprovalLayer, Prompter, RedactLayer, glob_match};
+pub use readfirst::ReadFirst;
 pub use secrets::Secrets;
 pub use shell::shell_commands;

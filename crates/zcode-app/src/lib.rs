@@ -21,7 +21,7 @@ use zcode_eval::{Recording, ScriptedLlm};
 use zcode_kernel::BoxFuture;
 use zcode_llm::{ChatCompletions, Llm};
 use zcode_policy::{
-    ApprovalLayer, Config, EditFormat, GitGuard, HookSource, NetworkMode, ProjectConfig,
+    ApprovalLayer, Config, EditFormat, GitGuard, HookSource, NetworkMode, ProjectConfig, ReadFirst,
     RedactLayer, RuleAction, Secrets, ToolProfile,
 };
 use zcode_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
@@ -335,6 +335,10 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         prompter,
     });
 
+    // Inside the approval layer, so only calls that are let through count
+    // as having read a file.
+    pipeline.push(ReadFirst::new(cwd));
+
     if !config.hooks.is_empty() {
         pipeline.push(zcode_ext::hooks::HookLayer {
             hooks: config.hooks.clone(),
@@ -407,6 +411,9 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         }
         None => llm,
     };
+    if verify.stop_on_red {
+        hooks.push(Arc::new(zcode_verify::RedCheck));
+    }
     if !verify.commands.is_empty() || verify.checklist {
         hooks.push(Arc::new(Verifier {
             checklist: verify.checklist,
