@@ -76,6 +76,8 @@ struct Outcome {
     input_tokens: u64,
     cached_tokens: u64,
     output_tokens: u64,
+    /// Whether a stronger model took over at some point.
+    escalated: bool,
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -213,6 +215,7 @@ async fn run_task(
         input_tokens: 0,
         cached_tokens: 0,
         output_tokens: 0,
+        escalated: false,
     };
     let store = SessionStore::new(home.join("sessions"));
     for header in store.list().unwrap_or_default() {
@@ -225,6 +228,7 @@ async fn run_task(
                     outcome.output_tokens += usage.output_tokens;
                 }
                 Event::ToolCall { .. } => outcome.tool_calls += 1,
+                Event::ModelSwitched { .. } => outcome.escalated = true,
                 _ => {}
             }
         }
@@ -365,6 +369,15 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         sum(|o| o.output_tokens),
     );
 
+    let escalated = outcomes.iter().filter(|o| o.escalated).count();
+    if escalated > 0 {
+        println!(
+            "{escalated} of {} task runs were handed to the stronger model ({} of them passed)",
+            outcomes.len(),
+            outcomes.iter().filter(|o| o.escalated && o.passed).count()
+        );
+    }
+
     if let Some(path) = &args.json {
         let report = json!({
             "provider": args.provider,
@@ -376,7 +389,7 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
                 "name": o.name, "passed": o.passed, "note": o.note, "seconds": o.seconds,
                 "requests": o.requests, "tool_calls": o.tool_calls,
                 "input_tokens": o.input_tokens, "cached_tokens": o.cached_tokens,
-                "output_tokens": o.output_tokens,
+                "output_tokens": o.output_tokens, "escalated": o.escalated,
             })).collect::<Vec<_>>(),
         });
         std::fs::write(path, format!("{report:#}\n"))
