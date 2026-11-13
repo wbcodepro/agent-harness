@@ -139,6 +139,41 @@ Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình 
 - Leo thang: với `claude-haiku-5-5` leo lên `claude-opus-5-5`, sau hai lần lệnh kiểm tra hỏng thì model mạnh tiếp quản giữa lượt, API không báo lỗi về khối suy luận.
 - `prompt_cache_key` được OpenAI Responses chấp nhận; một tác vụ bảy request có 77% token đầu vào đọc từ cache (không có số đo trước khi thêm khóa để so).
 
+### Model yếu: đo bằng `gpt-4o-mini`, sửa theo log thất bại
+
+`deepseek-flash` đạt hết bộ `evals/harder` nên không cho biết gì. `gpt-4o-mini` (model cũ, nhỏ) thì không, nên nó được dùng làm thước đo. Cách làm: chạy `zcode probe evals/harder --model gpt-4o-mini --keep <thư mục>`, đọc `session.v1.jsonl` của từng tác vụ hỏng, tìm chỗ harness đã làm model lạc hướng hoặc không ngăn nó, sửa, rồi chạy lại.
+
+Tám tác vụ gốc của `evals/harder`, mỗi ô một lần chạy (nên sai số lớn; chỉ nên tin xu hướng chung):
+
+| Cấu hình | Trước (commit `fc55dea`) | Sau (commit `02fb8d2`) |
+|---|---|---|
+| search-replace, bộ tool đầy đủ | 5/8, 929.184 token, 784 s | 8/8, 369.788 token, 434 s |
+| whole-file, bộ tool đầy đủ | 4/8, 418.945 token, 501 s | 8/8, 440.584 token, 332 s |
+| apply-patch, bộ tool đầy đủ | 4/8, 949.383 token, 640 s | 6/8, 980.552 token, 633 s |
+| search-replace, bộ tool rút gọn | 6/8, 206.686 token, 273 s | 7/8, 375.863 token, 440 s |
+| Tổng | 19/32 | 29/32 |
+
+Trên cùng bản "sau", `deepseek-flash` và `claude-opus-5-5` vẫn đạt 8/8 (một lần chạy mỗi model), tức các thay đổi không làm model mạnh kém đi.
+
+Những lỗi của harness tìm ra theo cách này, mỗi cái đều đã thấy trong log thật trước khi sửa:
+
+| Hiện tượng trong log | Nguyên nhân phía harness | Sửa |
+|---|---|---|
+| Model trả lời `mod_37.py` thay vì `pkg/mod_37.py` | `grep`/`glob` in đường dẫn tương đối so với thư mục tìm, không dùng lại được | In đường dẫn theo thư mục làm việc |
+| Model đoán tên hàm từ dòng `grep` khớp, không đọc file | `grep` không cho biết dòng khớp nằm trong hàm nào | Ghi kèm `[in <tên>, line N]` lấy từ cây cú pháp |
+| Model ghi đè file test có sẵn bằng bài test tự bịa rồi sa lầy 50 bước | `write` thay cả file mà không cần đọc trước | Từ chối ghi đè file chưa đọc; báo khi file bị thu nhỏ quá nửa |
+| Sửa đúng một ký tự nhưng thành `IndentationError` | Khớp lỏng giữ nguyên thụt lề sai của model khi model thụt thừa | Đưa phần thay thế về thụt lề của file theo cả hai chiều |
+| Chạy test, thấy hỏng, liệt kê "bước tiếp theo" rồi dừng | Không có gì chặn lượt kết thúc khi lệnh kiểm tra cuối còn đỏ | `[verify] stop_on_red` nhắc làm tiếp, tối đa hai lần |
+| Sửa file test và file dữ liệu của đề cho khớp chương trình | Prompt hệ thống không nói gì về việc này | Ba câu trong prompt hệ thống |
+| `edit` báo "không tìm thấy" rồi model thử lại y nguyên | Thông báo không chỉ ra khác ở đâu | Nói khớp tới dòng nào và dòng nào khác |
+| Chèn `import` bằng `old_string` rỗng bị từ chối, model chuyển sang `sed` làm hỏng file | Thông báo lỗi không chỉ cách làm đúng | Thông báo nói cách thêm dòng, kèm dòng đầu của file |
+| Bản vá viết `@@ -19,7 +19,7 @@` áp vào sai chỗ | `apply_patch` coi số dòng là chữ để tìm | Dùng số dòng làm gợi ý vị trí |
+| Cùng một lệnh test hỏng 18 lần liên tiếp | Chỉ phát hiện lặp khi kết quả giống hệt | Báo khi một lời gọi hỏng bốn lần chưa lần nào đạt |
+
+Ba tác vụ thêm sau đó (`spec-hidden-tests`, `large-file-fix`, `api-change`): `deepseek-flash` đạt 3/3; `gpt-4o-mini` 0/3 trước khi sửa lỗi thụt lề, sau đó `large-file-fix` 2/2, `api-change` 1/2, `spec-hidden-tests` 0/2 (model viết một lần rồi báo xong, sót quy tắc về không dùng chung đối tượng; bật `[verify] checklist` không cứu được, 0/3).
+
+Điều chưa làm được: `rust-tokenizer` vẫn hỏng ở hai trên bốn cấu hình và là giới hạn của model, không thấy nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
+
 **Đợt 2: mức mặc định của thị trường**
 7. Hooks và gói plugin theo định dạng Claude Code.
 8. Đầu ra JSON cho headless; steering.
