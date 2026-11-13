@@ -10,29 +10,29 @@ license = "MIT"
 rust-version = "1.89"
 
 [workspace.dependencies]
-hx-kernel = { path = "crates/hx-kernel" }
-hx-multi = { path = "crates/hx-multi" }
-hx-policy = { path = "crates/hx-policy" }
-hx-sandbox = { path = "crates/hx-sandbox" }
-hx-session = { path = "crates/hx-session" }
-hx-acp = { path = "crates/hx-acp" }
-hx-agent = { path = "crates/hx-agent" }
-hx-app = { path = "crates/hx-app" }
-hx-checkpoint = { path = "crates/hx-checkpoint" }
-hx-context = { path = "crates/hx-context" }
-hx-eval = { path = "crates/hx-eval" }
-hx-ext = { path = "crates/hx-ext" }
-hx-llm = { path = "crates/hx-llm" }
-hx-tools = { path = "crates/hx-tools" }
-hx-tui = { path = "crates/hx-tui" }
+zcode-kernel = { path = "crates/zcode-kernel" }
+zcode-multi = { path = "crates/zcode-multi" }
+zcode-policy = { path = "crates/zcode-policy" }
+zcode-sandbox = { path = "crates/zcode-sandbox" }
+zcode-session = { path = "crates/zcode-session" }
+zcode-acp = { path = "crates/zcode-acp" }
+zcode-agent = { path = "crates/zcode-agent" }
+zcode-app = { path = "crates/zcode-app" }
+zcode-checkpoint = { path = "crates/zcode-checkpoint" }
+zcode-context = { path = "crates/zcode-context" }
+zcode-eval = { path = "crates/zcode-eval" }
+zcode-ext = { path = "crates/zcode-ext" }
+zcode-llm = { path = "crates/zcode-llm" }
+zcode-tools = { path = "crates/zcode-tools" }
+zcode-tui = { path = "crates/zcode-tui" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 toml = "1"
-hx-verify = { path = "crates/hx-verify" }
-hx-web = { path = "crates/hx-web" }
+zcode-verify = { path = "crates/zcode-verify" }
+zcode-web = { path = "crates/zcode-web" }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 uuid = { version = "1", features = ["v4", "v7"] }

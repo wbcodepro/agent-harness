@@ -1,0 +1,25 @@
+[package]
+name = "zcode-tui"
+description = "Interactive terminal interface for zcode."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zcode-acp.workspace = true
+serde_json.workspace = true
+zcode-app.workspace = true
+zcode-session.workspace = true
+ratatui = "0.30.2"
+tokio.workspace = true
+unicode-width = "0.2.3"
+
+[dev-dependencies]
+zcode-agent.workspace = true
+zcode-eval.workspace = true
+zcode-tools.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1544,290 +1544,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "hx-acp"
-version = "0.0.1"
-dependencies = [
- "agent-client-protocol",
- "hx-agent",
- "hx-app",
- "hx-eval",
- "hx-kernel",
- "hx-policy",
- "hx-session",
- "hx-tools",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "hx-agent"
-version = "0.0.1"
-dependencies = [
- "futures-util",
- "hx-eval",
- "hx-kernel",
- "hx-llm",
- "hx-session",
- "hx-tools",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "hx-app"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-checkpoint",
- "hx-context",
- "hx-eval",
- "hx-ext",
- "hx-kernel",
- "hx-llm",
- "hx-multi",
- "hx-policy",
- "hx-sandbox",
- "hx-session",
- "hx-tools",
- "hx-verify",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "hx-checkpoint"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-kernel",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "hx-cli"
-version = "0.0.1"
-dependencies = [
- "agent-client-protocol",
- "clap",
- "hx-acp",
- "hx-agent",
- "hx-app",
- "hx-checkpoint",
- "hx-eval",
- "hx-kernel",
- "hx-llm",
- "hx-sandbox",
- "hx-session",
- "hx-tools",
- "hx-tui",
- "hx-web",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml 1.2.1+spec-1.1.0",
-]
-
-[[package]]
-name = "hx-context"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-eval",
- "hx-kernel",
- "hx-llm",
- "hx-session",
- "hx-tools",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "hx-eval"
-version = "0.0.1"
-dependencies = [
- "hx-llm",
- "hx-session",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "hx-ext"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-kernel",
- "hx-sandbox",
- "hx-session",
- "hx-tools",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "wasmtime",
-]
-
-[[package]]
-name = "hx-kernel"
-version = "0.0.1"
-dependencies = [
- "tokio",
-]
-
-[[package]]
-name = "hx-llm"
-version = "0.0.1"
-dependencies = [
- "hx-kernel",
- "hx-session",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "hx-multi"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-eval",
- "hx-kernel",
- "hx-session",
- "hx-tools",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "hx-policy"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-ext",
- "hx-kernel",
- "hx-sandbox",
- "hx-tools",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml 1.2.1+spec-1.1.0",
-]
-
-[[package]]
-name = "hx-sandbox"
-version = "0.0.1"
-dependencies = [
- "hx-kernel",
- "hx-tools",
- "landlock",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "hx-session"
-version = "0.0.1"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "uuid",
-]
-
-[[package]]
-name = "hx-tools"
-version = "0.0.1"
-dependencies = [
- "globset",
- "hx-kernel",
- "hx-session",
- "ignore",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tree-sitter",
- "tree-sitter-go",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
-]
-
-[[package]]
-name = "hx-tui"
-version = "0.0.1"
-dependencies = [
- "hx-acp",
- "hx-agent",
- "hx-app",
- "hx-eval",
- "hx-session",
- "hx-tools",
- "ratatui",
- "serde_json",
- "tempfile",
- "tokio",
- "unicode-width",
-]
-
-[[package]]
-name = "hx-verify"
-version = "0.0.1"
-dependencies = [
- "hx-agent",
- "hx-kernel",
- "hx-session",
- "hx-tools",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "hx-web"
-version = "0.0.1"
-dependencies = [
- "axum",
- "futures-util",
- "hx-agent",
- "hx-app",
- "hx-eval",
- "hx-kernel",
- "hx-session",
- "hx-tools",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "hyper"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2461,9 +2177,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mio"
-version = "1.2.4"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+checksum = "20521a903f02b0a573cd6840e9d0a5a0cc043d361fe924092cd70f8556cc9c4a"
 dependencies = [
  "libc",
  "log",
@@ -3877,9 +3593,9 @@ dependencies = [
 
 [[package]]
 name = "target-lexicon"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+checksum = "8c447be3a2abfa84b2d91680c56600bd6b2873866de27b36ec911be705e291da"
 
 [[package]]
 name = "tempfile"
@@ -5270,6 +4986,290 @@ dependencies = [
  "quote",
  "syn 3.0.10",
  "synstructure",
+]
+
+[[package]]
+name = "zcode-acp"
+version = "0.0.1"
+dependencies = [
+ "agent-client-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zcode-agent",
+ "zcode-app",
+ "zcode-eval",
+ "zcode-kernel",
+ "zcode-policy",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-agent"
+version = "0.0.1"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "zcode-eval",
+ "zcode-kernel",
+ "zcode-llm",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-app"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zcode-agent",
+ "zcode-checkpoint",
+ "zcode-context",
+ "zcode-eval",
+ "zcode-ext",
+ "zcode-kernel",
+ "zcode-llm",
+ "zcode-multi",
+ "zcode-policy",
+ "zcode-sandbox",
+ "zcode-session",
+ "zcode-tools",
+ "zcode-verify",
+]
+
+[[package]]
+name = "zcode-checkpoint"
+version = "0.0.1"
+dependencies = [
+ "tempfile",
+ "tokio",
+ "zcode-agent",
+ "zcode-kernel",
+]
+
+[[package]]
+name = "zcode-cli"
+version = "0.0.1"
+dependencies = [
+ "agent-client-protocol",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 1.2.1+spec-1.1.0",
+ "zcode-acp",
+ "zcode-agent",
+ "zcode-app",
+ "zcode-checkpoint",
+ "zcode-eval",
+ "zcode-kernel",
+ "zcode-llm",
+ "zcode-sandbox",
+ "zcode-session",
+ "zcode-tools",
+ "zcode-tui",
+ "zcode-web",
+]
+
+[[package]]
+name = "zcode-context"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zcode-agent",
+ "zcode-eval",
+ "zcode-kernel",
+ "zcode-llm",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-eval"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "zcode-llm",
+ "zcode-session",
+]
+
+[[package]]
+name = "zcode-ext"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "wasmtime",
+ "zcode-agent",
+ "zcode-kernel",
+ "zcode-sandbox",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-kernel"
+version = "0.0.1"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
+name = "zcode-llm"
+version = "0.0.1"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "zcode-kernel",
+ "zcode-session",
+]
+
+[[package]]
+name = "zcode-multi"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zcode-agent",
+ "zcode-eval",
+ "zcode-kernel",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-policy"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 1.2.1+spec-1.1.0",
+ "zcode-agent",
+ "zcode-ext",
+ "zcode-kernel",
+ "zcode-sandbox",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-sandbox"
+version = "0.0.1"
+dependencies = [
+ "landlock",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "windows-sys 0.61.2",
+ "zcode-kernel",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-session"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "zcode-tools"
+version = "0.0.1"
+dependencies = [
+ "globset",
+ "ignore",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "zcode-kernel",
+ "zcode-session",
+]
+
+[[package]]
+name = "zcode-tui"
+version = "0.0.1"
+dependencies = [
+ "ratatui",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "unicode-width",
+ "zcode-acp",
+ "zcode-agent",
+ "zcode-app",
+ "zcode-eval",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-verify"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zcode-agent",
+ "zcode-kernel",
+ "zcode-session",
+ "zcode-tools",
+]
+
+[[package]]
+name = "zcode-web"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "zcode-agent",
+ "zcode-app",
+ "zcode-eval",
+ "zcode-kernel",
+ "zcode-session",
+ "zcode-tools",
 ]
 
 [[package]]

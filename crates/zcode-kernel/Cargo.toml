@@ -1,0 +1,13 @@
+[package]
+name = "zcode-kernel"
+description = "Service registry, event bus and middleware chains for the zcode harness."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

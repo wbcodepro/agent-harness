@@ -1,0 +1,21 @@
+[package]
+name = "zcode-verify"
+description = "Completion gate: runs the project checks before a turn that changed files may end."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zcode-agent.workspace = true
+zcode-kernel.workspace = true
+zcode-session.workspace = true
+zcode-tools.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "zcode-app"
+description = "Assembles a ready-to-run agent from the user's configuration."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zcode-agent.workspace = true
+zcode-checkpoint.workspace = true
+zcode-context.workspace = true
+zcode-verify.workspace = true
+zcode-eval.workspace = true
+zcode-ext.workspace = true
+zcode-kernel.workspace = true
+zcode-llm.workspace = true
+zcode-multi.workspace = true
+zcode-policy.workspace = true
+zcode-sandbox.workspace = true
+zcode-session.workspace = true
+serde_json.workspace = true
+zcode-tools.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

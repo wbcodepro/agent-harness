@@ -1,6 +1,6 @@
-# hx
+# zcode
 
-`hx` là một agent harness viết bằng Rust: một binary duy nhất chạy mô hình ngôn ngữ như một agent lập trình trong terminal, trong editor (ACP) hoặc trong trình duyệt.
+`zcode` là một agent harness viết bằng Rust: một binary duy nhất chạy mô hình ngôn ngữ như một agent lập trình trong terminal, trong editor (ACP) hoặc trong trình duyệt.
 
 Ba ý chính của thiết kế:
 
@@ -13,10 +13,10 @@ Ba ý chính của thiết kế:
 Cần Rust 1.89 trở lên và `git`.
 
 ```sh
-cargo build --release -p hx-cli      # tạo target/release/hx
+cargo build --release -p zcode-cli      # tạo target/release/zcode
 ```
 
-Đặt API key vào biến môi trường hoặc file `~/.hx/.env` (hoặc `.env` trong thư mục làm việc):
+Đặt API key vào biến môi trường hoặc file `~/.zcode/.env` (hoặc `.env` trong thư mục làm việc):
 
 ```sh
 DEEPSEEK_API_KEY=...     # hoặc ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API_KEY
@@ -25,28 +25,28 @@ DEEPSEEK_API_KEY=...     # hoặc ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API
 ## Dùng
 
 ```sh
-hx                                  # giao diện terminal
-hx run "sửa lỗi làm test_stats.py thất bại"     # một lượt, không tương tác
-hx run --session <id> "tiếp tục"    # nối tiếp một session
-hx run --plan "..."                 # chỉ khảo sát và đề xuất kế hoạch, không sửa gì
-hx web                              # giao diện web trên 127.0.0.1
-hx acp                              # máy chủ Agent Client Protocol cho editor
-hx sessions | show <id> | fork <id> | rewind <id> | recover <id>
-hx import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
-hx eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
-hx eval evals/harder --command 'codex exec "$HX_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
+zcode                                  # giao diện terminal
+zcode run "sửa lỗi làm test_stats.py thất bại"     # một lượt, không tương tác
+zcode run --session <id> "tiếp tục"    # nối tiếp một session
+zcode run --plan "..."                 # chỉ khảo sát và đề xuất kế hoạch, không sửa gì
+zcode web                              # giao diện web trên 127.0.0.1
+zcode acp                              # máy chủ Agent Client Protocol cho editor
+zcode sessions | show <id> | fork <id> | rewind <id> | recover <id>
+zcode import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
+zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
+zcode eval evals/harder --command 'codex exec "$ZCODE_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
 ```
 
-Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`, hoặc `HX_PROVIDER` / `HX_MODEL`. Mặc định: `deepseek-flash` với DeepSeek, `claude-opus-5-5` với Anthropic; OpenAI cần chỉ rõ model.
+Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`, hoặc `ZCODE_PROVIDER` / `ZCODE_MODEL`. Mặc định: `deepseek-flash` với DeepSeek, `claude-opus-5-5` với Anthropic; OpenAI cần chỉ rõ model.
 
 Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy.
 
 ### Trong editor (ACP)
 
-`hx acp` nói Agent Client Protocol qua stdin/stdout. Với Zed, thêm vào `settings.json` (theo tài liệu của Zed; cấu hình này chưa được thử trong Zed):
+`zcode acp` nói Agent Client Protocol qua stdin/stdout. Với Zed, thêm vào `settings.json` (theo tài liệu của Zed; cấu hình này chưa được thử trong Zed):
 
 ```json
-{ "agent_servers": { "hx": { "command": "/đường/dẫn/tới/hx", "args": ["acp"] } } }
+{ "agent_servers": { "zcode": { "command": "/đường/dẫn/tới/zcode", "args": ["acp"] } } }
 ```
 
 Máy chủ được kiểm thử bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
@@ -62,10 +62,10 @@ Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song
 Mặc định (`workspace-write`):
 
 - Chỉ ghi được trong thư mục làm việc và thư mục tạm.
-- Không đọc được `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`…, dữ liệu riêng của hx, và các file `.env`.
+- Không đọc được `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`…, dữ liệu riêng của zcode, và các file `.env`.
 - Mạng chỉ đi qua proxy cục bộ tới danh sách tên miền cho phép.
 - Biến môi trường của harness không tới được tool; secret chỉ tới khi bạn cấp (`[secrets] grant`), và giá trị của mọi secret bị thay bằng `[secret:TÊN]` trong đầu ra tool trước khi ghi log.
-- Trước mỗi lượt và sau mỗi bước có thay đổi, workspace được lưu vào một kho git riêng ngoài dự án; `hx rewind` khôi phục file và tạo session mới dừng ngay trước lượt đó.
+- Trước mỗi lượt và sau mỗi bước có thay đổi, workspace được lưu vào một kho git riêng ngoài dự án; `zcode rewind` khôi phục file và tạo session mới dừng ngay trước lượt đó.
 
 `--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
 
@@ -73,12 +73,12 @@ Giới hạn cần biết:
 
 - Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
 - Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
-- Windows chỉ giam được việc **ghi**: tiến trình chạy tool bị hạ xuống mức toàn vẹn Low nên chỉ ghi được trong thư mục dự án và một thư mục tạm riêng (`AppData\LocalLow\hx-tmp`). Tool vẫn đọc được mọi file bạn đọc được và vẫn ra mạng được, nên phải bật rõ ràng bằng `allow_partial = true` trong `[sandbox]`; không bật thì các chế độ giam từ chối khởi động. Thư mục dự án được gắn nhãn Low vĩnh viễn (chương trình Low khác của cùng người dùng cũng ghi được vào đó). Lệnh chạy qua tool `bash` trên Windows chưa được kiểm thử.
+- Windows chỉ giam được việc **ghi**: tiến trình chạy tool bị hạ xuống mức toàn vẹn Low nên chỉ ghi được trong thư mục dự án và một thư mục tạm riêng (`AppData\LocalLow\zcode-tmp`). Tool vẫn đọc được mọi file bạn đọc được và vẫn ra mạng được, nên phải bật rõ ràng bằng `allow_partial = true` trong `[sandbox]`; không bật thì các chế độ giam từ chối khởi động. Thư mục dự án được gắn nhãn Low vĩnh viễn (chương trình Low khác của cùng người dùng cũng ghi được vào đó). Lệnh chạy qua tool `bash` trên Windows chưa được kiểm thử.
 - Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
 
 ## Cấu hình
 
-`~/.hx/config.toml`. Mọi mục đều tùy chọn; khóa lạ là lỗi.
+`~/.zcode/config.toml`. Mọi mục đều tùy chọn; khóa lạ là lỗi.
 
 ```toml
 [model]
@@ -135,7 +135,7 @@ path = "plugins/wordcount.wasm"
 read = ["docs"]
 ```
 
-Dự án có thể tự khai báo lệnh kiểm tra trong `.hx/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.hx/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.hx/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.hx/skills/`.
+Dự án có thể tự khai báo lệnh kiểm tra trong `.zcode/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.zcode/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.zcode/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.zcode/skills/`.
 
 Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 
@@ -143,22 +143,22 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 
 | Crate | Việc |
 |---|---|
-| `hx-kernel` | Registry service, bus sự kiện, chuỗi middleware |
-| `hx-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection |
-| `hx-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích) |
-| `hx-tools` | Tool có sẵn và trait `Tool` |
-| `hx-agent` | Vòng turn/step, hook, checkpoint |
-| `hx-sandbox` | Chính sách, Seatbelt (macOS), Landlock (Linux), mức toàn vẹn (Windows), worker, proxy egress |
-| `hx-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
-| `hx-checkpoint` | Checkpoint workspace bằng kho git riêng |
-| `hx-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
-| `hx-verify` | Cổng kiểm chứng trước khi kết thúc lượt |
-| `hx-ext` | MCP, chẩn đoán LSP, skills, hooks, plugin WebAssembly |
-| `hx-multi` | Subagent, worktree, bảng việc, ngân sách chung |
-| `hx-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
-| `hx-acp` | Máy chủ Agent Client Protocol; giao diện terminal cũng là một client của nó |
-| `hx-tui`, `hx-web`, `hx-cli` | Các giao diện |
-| `hx-eval` | Model giả phát lại bản ghi, cho test và eval |
+| `zcode-kernel` | Registry service, bus sự kiện, chuỗi middleware |
+| `zcode-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection |
+| `zcode-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích) |
+| `zcode-tools` | Tool có sẵn và trait `Tool` |
+| `zcode-agent` | Vòng turn/step, hook, checkpoint |
+| `zcode-sandbox` | Chính sách, Seatbelt (macOS), Landlock (Linux), mức toàn vẹn (Windows), worker, proxy egress |
+| `zcode-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
+| `zcode-checkpoint` | Checkpoint workspace bằng kho git riêng |
+| `zcode-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
+| `zcode-verify` | Cổng kiểm chứng trước khi kết thúc lượt |
+| `zcode-ext` | MCP, chẩn đoán LSP, skills, hooks, plugin WebAssembly |
+| `zcode-multi` | Subagent, worktree, bảng việc, ngân sách chung |
+| `zcode-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
+| `zcode-acp` | Máy chủ Agent Client Protocol; giao diện terminal cũng là một client của nó |
+| `zcode-tui`, `zcode-web`, `zcode-cli` | Các giao diện |
+| `zcode-eval` | Model giả phát lại bản ghi, cho test và eval |
 
 ## Phát triển
 
@@ -167,4 +167,4 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Test của plugin cần `rustup target add wasm32-unknown-unknown`; một số test cần `python3` và `git`. Đặt `HX_SCRIPT=<file.jsonl>` để `hx` phát lại phản hồi đã ghi thay vì gọi nhà cung cấp.
+Test của plugin cần `rustup target add wasm32-unknown-unknown`; một số test cần `python3` và `git`. Đặt `ZCODE_SCRIPT=<file.jsonl>` để `zcode` phát lại phản hồi đã ghi thay vì gọi nhà cung cấp.

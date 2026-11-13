@@ -1,7 +1,9 @@
 name: ci
+# Started by hand only (Actions tab, or `gh workflow run ci`), to keep
+# within the account's Actions allowance. Run it before a release, or when a
+# change touches platform-specific code.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 jobs:
   check:
     strategy:

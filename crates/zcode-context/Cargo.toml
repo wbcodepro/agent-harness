@@ -1,0 +1,23 @@
+[package]
+name = "zcode-context"
+description = "Keeps the model context useful: output spilling, compaction, project instructions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zcode-agent.workspace = true
+zcode-kernel.workspace = true
+zcode-llm.workspace = true
+zcode-session.workspace = true
+zcode-tools.workspace = true
+
+[dev-dependencies]
+zcode-eval.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
