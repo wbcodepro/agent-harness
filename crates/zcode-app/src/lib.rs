@@ -664,6 +664,11 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
          Working directory: {}\n\
          Use the tools to inspect and change files and to run commands; do not guess at file \
          contents. Be concise. When the task is done, say what you did and what you verified.\n\
+         Before changing anything, read the files the request names and look at the data it \
+         refers to. Tests, fixtures and input data that came with the project say what is \
+         wanted: when a check fails, fix the code it checks, and do not edit or replace the \
+         check or its data unless that is what was asked. If you cannot make something work, \
+         say so; do not report it as done.\n\
          {confinement}",
         cwd.display()
     )
