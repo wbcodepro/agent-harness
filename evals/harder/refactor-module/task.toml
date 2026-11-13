@@ -1,0 +1,2 @@
+prompt = "pricing.py has one long function, price_order. Split it into three functions in the same file without changing behavior: subtotal(items), discount_for(subtotal, customer) and tax_on(amount, region); price_order must call them. python3 test_pricing.py must pass."
+check = "python3 test_pricing.py"

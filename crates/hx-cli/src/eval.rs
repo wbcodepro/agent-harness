@@ -2,8 +2,11 @@
 //!
 //! A suite is a directory of tasks. Each task is a directory holding a
 //! `task.toml` (the prompt and a shell command that decides pass or fail)
-//! and an optional `files/` tree copied into a fresh workspace. Every task
-//! runs through the real `hx run`, so what is measured is the product.
+//! and an optional `files/` tree copied into a fresh workspace. An optional
+//! `check/` tree is copied over the workspace before the check runs, so an
+//! agent cannot pass by editing the tests. Every task runs through the real
+//! `hx run`, so what is measured is the product; `--command` runs another
+//! agent on the same tasks for comparison.
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
@@ -28,6 +31,10 @@ pub struct EvalArgs {
     /// Seconds allowed per task.
     #[arg(long, default_value_t = 600)]
     timeout: u64,
+    /// Run this shell command in each workspace instead of hx, to measure
+    /// another agent on the same tasks. The prompt is in $HX_EVAL_PROMPT.
+    #[arg(long)]
+    command: Option<String>,
     /// Also write the results as JSON to this file.
     #[arg(long)]
     json: Option<PathBuf>,
@@ -108,25 +115,36 @@ async fn run_task(
         return Err(format!("{name}: setup failed"));
     }
 
-    let mut command =
-        tokio::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    let mut command = match &args.command {
+        Some(external) => {
+            let mut command = tokio::process::Command::new("bash");
+            command
+                .arg("-c")
+                .arg(external)
+                .env("HX_EVAL_PROMPT", &task.prompt);
+            command
+        }
+        None => {
+            let mut command =
+                tokio::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+            command.arg("--home").arg(&home).args(["run", "--yes"]);
+            if let Some(provider) = &args.provider {
+                command.args(["--provider", provider]);
+            }
+            if let Some(model) = &args.model {
+                command.args(["--model", model]);
+            }
+            command.arg(&task.prompt);
+            command
+        }
+    };
     command
-        .arg("--home")
-        .arg(&home)
-        .args(["run", "--yes"])
         .current_dir(&work)
         .envs(keys.iter().cloned())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(provider) = &args.provider {
-        command.args(["--provider", provider]);
-    }
-    if let Some(model) = &args.model {
-        command.args(["--model", model]);
-    }
-    command.arg(&task.prompt);
 
     let started = Instant::now();
     let child = command.spawn().map_err(|e| e.to_string())?;
@@ -140,11 +158,14 @@ async fn run_task(
             .lines()
             .rev()
             .find(|line| line.starts_with("hx:"))
-            .unwrap_or("hx failed")
+            .unwrap_or("the agent exited with an error")
             .to_string(),
         Ok(Ok(_)) => String::new(),
     };
 
+    if dir.join("check").is_dir() {
+        copy_tree(&dir.join("check"), &work).map_err(|e| e.to_string())?;
+    }
     let passed = shell(&task.check, &work).await;
     if !passed && note.is_empty() {
         note = "check failed".into();

@@ -201,7 +201,10 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
             Block::Thinking {
                 text,
                 signature: Some(signature),
-            } if with_thinking && message.role == Role::Assistant => {
+            } if with_thinking
+                && message.role == Role::Assistant
+                && !signature.starts_with(crate::responses::SIGNATURE_PREFIX) =>
+            {
                 out.push(json!({"type": "thinking", "thinking": text, "signature": signature}));
             }
             Block::Thinking { .. } => {}

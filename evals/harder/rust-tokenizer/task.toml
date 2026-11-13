@@ -1,0 +1,2 @@
+prompt = "This is a Rust crate. `cargo test --offline` fails. Implement `tokenize` in src/lib.rs so that all tests pass. Do not change the tests."
+check = "cargo test --offline -q 2>&1 | tail -3 | grep -q 'test result: ok'"

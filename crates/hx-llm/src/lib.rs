@@ -7,6 +7,7 @@
 
 mod anthropic;
 mod chat_completions;
+mod responses;
 #[cfg(test)]
 mod testing;
 
@@ -16,6 +17,7 @@ pub use anthropic::Anthropic;
 pub use chat_completions::ChatCompletions;
 pub use hx_kernel::BoxFuture;
 use hx_session::{Delta, History, Message, StopReason, ToolSpec, Usage};
+pub use responses::Responses;
 
 /// Everything one model call is built from.
 #[derive(Debug, Clone, Default, PartialEq)]

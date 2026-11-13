@@ -85,6 +85,9 @@ pub struct ModelConfig {
     /// Reasoning effort for providers that take one: `low`, `medium`,
     /// `high`, `xhigh` or `max`. Empty leaves the model's default.
     pub effort: Option<String>,
+    /// Wire protocol for the `openai` provider: `responses` (default) or
+    /// `chat-completions` for OpenAI-compatible servers that lack it.
+    pub api: Option<String>,
     /// A cheaper model, on the same provider, for summarizing history.
     pub summary_model: Option<String>,
 }

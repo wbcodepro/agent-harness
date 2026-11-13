@@ -526,12 +526,29 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         .ok_or("no model chosen: pass --model, or set HX_MODEL or [model] name")?;
     let summary_model = config.model.summary_model.clone().unwrap_or(model.clone());
 
+    // OpenAI's own API is spoken through Responses; a compatible server at
+    // another address is assumed to offer only chat completions unless the
+    // configuration says otherwise.
+    let chat_only = match config.model.api.as_deref() {
+        Some("chat-completions") => true,
+        Some("responses") => false,
+        Some(other) => {
+            return Err(format!(
+                "unknown [model] api {other:?}: use responses or chat-completions"
+            ));
+        }
+        None => base_url != provider.base_url(),
+    };
     let build = |model: String| -> Arc<dyn Llm> {
         match provider {
             Provider::Anthropic => Arc::new(
                 hx_llm::Anthropic::new(&base_url, api_key.clone(), model).with_effort(Some(
                     config.model.effort.clone().unwrap_or_else(|| "high".into()),
                 )),
+            ),
+            Provider::Openai if !chat_only => Arc::new(
+                hx_llm::Responses::new(&base_url, api_key.clone(), model)
+                    .with_effort(config.model.effort.clone()),
             ),
             Provider::Deepseek | Provider::Openai => {
                 Arc::new(ChatCompletions::new(&base_url, api_key.clone(), model))

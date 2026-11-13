@@ -1,0 +1,2 @@
+prompt = "Implement validate(value, schema) in schema.py returning a list of error strings (empty when valid). Support the keywords type (object, array, string, integer, number, boolean, null), required, properties, items, enum, minimum and maxLength. Each error must start with the JSON path of the offending value, such as `$.user.age: ...`. python3 test_schema.py must pass."
+check = "python3 test_schema.py"

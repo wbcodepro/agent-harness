@@ -1,0 +1,2 @@
+prompt = "This project has many modules under pkg/. Exactly one function in them can raise TimeoutBudgetExceeded. Write the name of that function and the relative path of its file to answer.txt as `<function> <path>` on one line."
+check = "test \"$(tr -d '\\n' < answer.txt | sed 's#^\\./##; s# \\./# #')\" = 'drain_queue pkg/mod_37.py'"

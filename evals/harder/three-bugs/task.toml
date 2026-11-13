@@ -1,0 +1,2 @@
+prompt = "python3 test_inventory.py fails. inventory.py has several independent bugs; find and fix all of them without changing the test."
+check = "python3 test_inventory.py"

@@ -1,0 +1,2 @@
+prompt = "Implement the LRUCache class in lru.py so that python3 test_lru.py passes. get and put must be O(1). Do not change the test."
+check = "python3 test_lru.py"

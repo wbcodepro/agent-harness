@@ -1,0 +1,2 @@
+prompt = "The last page of results is sometimes missing: python3 test_listing.py fails. The bug is somewhere in the app package. Fix it without changing the test."
+check = "python3 test_listing.py"

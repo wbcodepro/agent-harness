@@ -33,7 +33,8 @@ hx web                              # giao diện web trên 127.0.0.1
 hx acp                              # máy chủ Agent Client Protocol cho editor
 hx sessions | show <id> | fork <id> | rewind <id> | recover <id>
 hx import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
-hx eval evals/basic                 # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
+hx eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
+hx eval evals/harder --command 'codex exec "$HX_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
 ```
 
 Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`, hoặc `HX_PROVIDER` / `HX_MODEL`. Mặc định: `deepseek-flash` với DeepSeek, `claude-opus-5-5` với Anthropic; OpenAI cần chỉ rõ model.
@@ -73,7 +74,8 @@ Giới hạn cần biết:
 [model]
 provider = "anthropic"          # deepseek | openai | anthropic
 name = "claude-opus-5-5"
-effort = "high"                 # low | medium | high | xhigh | max (Anthropic)
+effort = "high"                 # mức suy luận (Anthropic, OpenAI)
+api = "responses"               # với openai: responses (mặc định) | chat-completions
 summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch sử
 
 [sandbox]
@@ -132,7 +134,7 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 |---|---|
 | `hx-kernel` | Registry service, bus sự kiện, chuỗi middleware |
 | `hx-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection |
-| `hx-llm` | Adapter chat-completions (DeepSeek, OpenAI) và Anthropic Messages |
+| `hx-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích) |
 | `hx-tools` | Tool có sẵn và trait `Tool` |
 | `hx-agent` | Vòng turn/step, hook, checkpoint |
 | `hx-sandbox` | Chính sách, Seatbelt, Landlock, worker, proxy egress |

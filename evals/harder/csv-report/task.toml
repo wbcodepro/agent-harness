@@ -1,0 +1,2 @@
+prompt = "Write report.py. Run as `python3 report.py sales.csv` it prints one line per region, sorted by total descending then region name: `<region>: <total with 2 decimals> (<n> orders)`. Rows whose amount is not a number are skipped. Fields may be quoted and contain commas. python3 test_report.py must pass."
+check = "python3 test_report.py"
