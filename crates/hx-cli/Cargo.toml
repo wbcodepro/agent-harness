@@ -30,6 +30,7 @@ toml.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+agent-client-protocol = { version = "5.2.0", features = ["process"] }
 tempfile.workspace = true
 
 [lints]
