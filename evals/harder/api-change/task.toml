@@ -1,0 +1,2 @@
+prompt = "In the shop package, change pricing.total(items, tax) so that it takes a keyword-only argument currency (default \"USD\") and returns Money(amount, currency), a namedtuple defined in shop/pricing.py, instead of a float. Update every caller in the package to match. The tests in tests/ already expect the new behavior and must not be changed; python3 -m unittest discover -s tests -q must pass."
+check = "python3 -m unittest discover -s tests -q"

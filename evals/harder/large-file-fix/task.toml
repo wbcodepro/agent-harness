@@ -1,0 +1,2 @@
+prompt = "python3 test_ledger.py fails. Exactly one of the settlement rules in ledger.py is wrong. Fix that rule and nothing else; do not change the test."
+check = "python3 test_ledger.py && test \"$(grep -c 'entry\\[\"amount\"\\] >= limit' ledger.py)\" = 40"

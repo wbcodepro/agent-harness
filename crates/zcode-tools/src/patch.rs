@@ -95,8 +95,16 @@ impl Hunk {
 
     /// What replaces them. Unchanged lines are taken from the file, not
     /// from the patch: the patch may have matched them only loosely, and
-    /// must not rewrite their whitespace.
+    /// must not rewrite their whitespace. For the same reason added lines
+    /// are moved to the file's indentation when the patch's is off.
     fn replacement(&self, found: &[String]) -> Vec<String> {
+        let old = self.old();
+        let (theirs, ours) = match (old.first(), found.first()) {
+            (Some(theirs), Some(ours)) => {
+                (crate::files::indent(theirs), crate::files::indent(ours))
+            }
+            _ => ("", ""),
+        };
         let mut found = found.iter();
         let mut out = Vec::new();
         for line in &self.lines {
@@ -105,7 +113,7 @@ impl Hunk {
                 Line::Remove(_) => {
                     found.next();
                 }
-                Line::Add(text) => out.push(text.clone()),
+                Line::Add(text) => out.push(crate::files::reindent(text, theirs, ours)),
             }
         }
         out
@@ -537,12 +545,13 @@ mod tests {
         )
         .unwrap();
 
-        // A code fence around the patch, wrong indentation in the context,
+        // A code fence around the patch, the indentation left off every line
+        // (added lines are moved to the file's depth along with the rest),
         // an empty context line without its leading space, no end marker,
         // and a file with Windows line endings.
         let out = apply(
             dir.path(),
-            "```\n*** Begin Patch\n*** Update File: w.rs\n let x = 1;\n\n-print(x);\n+    println!(\"{x}\");\n",
+            "```\n*** Begin Patch\n*** Update File: w.rs\n let x = 1;\n\n-print(x);\n+println!(\"{x}\");\n",
         )
         .await;
         assert!(!out.is_error, "{}", out.text);

@@ -1,0 +1,2 @@
+prompt = "Implement merge(base, override) in merge.py exactly as SPEC.md describes. There are no tests in this directory; your work will be checked against the spec afterwards."
+check = "python3 test_merge.py"

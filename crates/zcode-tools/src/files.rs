@@ -179,21 +179,45 @@ impl Tool for Write {
     }
 }
 
+/// The leading whitespace of a line.
+pub(crate) fn indent(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// Moves a line written at indentation `theirs` to where the file has
+/// `ours`: adds what is missing, or takes away what is extra.
+pub(crate) fn reindent(line: &str, theirs: &str, ours: &str) -> String {
+    if theirs == ours || line.trim().is_empty() {
+        line.to_string()
+    } else if let Some(missing) = ours.strip_suffix(theirs) {
+        format!("{missing}{line}")
+    } else if let Some(extra) = theirs.strip_suffix(ours) {
+        // A line indented less than the surplus loses what it has.
+        let surplus = line
+            .char_indices()
+            .take_while(|(at, c)| *at < extra.len() && c.is_whitespace())
+            .count();
+        line[surplus..].to_string()
+    } else if let Some(rest) = line.strip_prefix(theirs) {
+        // Tabs against spaces: swap the leading run.
+        format!("{ours}{rest}")
+    } else {
+        line.to_string()
+    }
+}
+
 /// Finds `old` in `text` when it differs only in whitespace, and replaces it.
 ///
 /// Models often get indentation, trailing spaces or line endings slightly
 /// wrong when quoting code. Two passes, each accepted only when exactly one
 /// place matches: lines equal after trimming their ends, then lines equal
-/// after trimming both sides. In the second case the replacement is shifted
-/// by the indentation the model left out.
+/// after trimming both sides. In the second case the replacement is moved
+/// to the indentation the file has there.
 fn lenient_replace(text: &str, old: &str, new: &str) -> Option<String> {
     let file: Vec<&str> = text.split('\n').collect();
     let wanted: Vec<&str> = old.trim_matches('\n').split('\n').collect();
     if wanted.iter().all(|line| line.trim().is_empty()) || wanted.len() > file.len() {
         return None;
-    }
-    fn indent(line: &str) -> &str {
-        &line[..line.len() - line.trim_start().len()]
     }
     for both_sides in [false, true] {
         let key = |line: &str| -> String {
@@ -217,12 +241,19 @@ fn lenient_replace(text: &str, old: &str, new: &str) -> Option<String> {
             }
             continue;
         };
-        // Indentation present in the file but missing from what the model
-        // quoted is added back to every replacement line.
-        let missing = indent(file[at])
-            .strip_suffix(indent(wanted[0]))
-            .filter(|_| both_sides)
-            .unwrap_or("");
+        // The replacement is written at the model's idea of the
+        // indentation, which the match has just shown to be off. Move it
+        // to the file's: add what the model left out, or take away what it
+        // added. Without this a correct change lands at the wrong depth,
+        // which in Python is a syntax error.
+        let (theirs, ours) = (indent(wanted[0]), indent(file[at]));
+        let reindent = |line: &str| -> String {
+            if both_sides {
+                reindent(line, theirs, ours)
+            } else {
+                line.to_string()
+            }
+        };
         let ending = if file[at].ends_with('\r') { "\r" } else { "" };
         let mut out: Vec<String> = file[..at].iter().map(|line| line.to_string()).collect();
         for line in new.trim_matches('\n').split('\n') {
@@ -230,7 +261,7 @@ fn lenient_replace(text: &str, old: &str, new: &str) -> Option<String> {
             if line.trim().is_empty() {
                 out.push(format!("{line}{ending}"));
             } else {
-                out.push(format!("{missing}{line}{ending}"));
+                out.push(format!("{}{ending}", reindent(line)));
             }
         }
         out.extend(
@@ -470,6 +501,22 @@ mod tests {
             )
             .unwrap(),
             "fn main() {\n    if ready {\n        begin();\n        log();\n    }\n}\n"
+        );
+        // Indentation the model added: the replacement is shifted out
+        // again, keeping the shape the model gave it.
+        assert_eq!(
+            lenient_replace(
+                file,
+                "            if ready {\n                start();\n            }",
+                "            if ready && armed {\n                start();\n            }"
+            )
+            .unwrap(),
+            "fn main() {\n    if ready && armed {\n        start();\n    }\n}\n"
+        );
+        // Tabs where the file has spaces.
+        assert_eq!(
+            lenient_replace(file, "\t\tstart();", "\t\tbegin();").unwrap(),
+            "fn main() {\n    if ready {\n        begin();\n    }\n}\n"
         );
         // Windows line endings are kept.
         assert_eq!(
