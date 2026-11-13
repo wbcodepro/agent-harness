@@ -73,7 +73,7 @@ Giới hạn cần biết:
 
 - Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
 - Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
-- Windows: `hx` biên dịch được và qua bộ test trên CI, nhưng chưa có sandbox gốc. Ở đó các chế độ giam từ chối chạy; chỉ dùng được `--sandbox danger-full-access` (mọi thay đổi phải được bạn đồng ý), hoặc chạy bản Linux trong WSL2 (cần kernel 6.7 trở lên).
+- Windows chỉ giam được việc **ghi**: tiến trình chạy tool bị hạ xuống mức toàn vẹn Low nên chỉ ghi được trong thư mục dự án và một thư mục tạm riêng (`AppData\LocalLow\hx-tmp`). Tool vẫn đọc được mọi file bạn đọc được và vẫn ra mạng được, nên phải bật rõ ràng bằng `allow_partial = true` trong `[sandbox]`; không bật thì các chế độ giam từ chối khởi động. Thư mục dự án được gắn nhãn Low vĩnh viễn (chương trình Low khác của cùng người dùng cũng ghi được vào đó). Lệnh chạy qua tool `bash` trên Windows chưa được kiểm thử.
 - Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
 
 ## Cấu hình
@@ -90,6 +90,7 @@ summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch s
 
 [sandbox]
 mode = "workspace-write"        # read-only | workspace-write | danger-full-access
+allow_partial = false           # Windows: chấp nhận chỉ giam việc ghi
 writable = ["/data/cache"]
 unreadable = ["/data/private"]
 
@@ -147,7 +148,7 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 | `hx-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích) |
 | `hx-tools` | Tool có sẵn và trait `Tool` |
 | `hx-agent` | Vòng turn/step, hook, checkpoint |
-| `hx-sandbox` | Chính sách, Seatbelt, Landlock, worker, proxy egress |
+| `hx-sandbox` | Chính sách, Seatbelt (macOS), Landlock (Linux), mức toàn vẹn (Windows), worker, proxy egress |
 | `hx-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
 | `hx-checkpoint` | Checkpoint workspace bằng kho git riêng |
 | `hx-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
