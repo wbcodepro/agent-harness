@@ -16,6 +16,8 @@ serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+serde.workspace = true
+agent-client-protocol = "5.2.0"
 hx-eval.workspace = true
 hx-tools.workspace = true
 tempfile.workspace = true
