@@ -29,6 +29,7 @@ zcode                                  # giao diện terminal
 zcode run "sửa lỗi làm test_stats.py thất bại"     # một lượt, không tương tác
 zcode run --session <id> "tiếp tục"    # nối tiếp một session
 zcode run --plan "..."                 # chỉ khảo sát và đề xuất kế hoạch, không sửa gì
+zcode run --output json "..."          # một đối tượng JSON khi xong (stream-json: thêm từng sự kiện một dòng)
 zcode web                              # giao diện web trên 127.0.0.1
 zcode acp                              # máy chủ Agent Client Protocol cho editor
 zcode sessions | show <id> | fork <id> | rewind <id> | recover <id>
@@ -72,6 +73,9 @@ Mặc định (`workspace-write`):
 - Biến môi trường của harness không tới được tool; secret chỉ tới khi bạn cấp (`[secrets] grant`), và giá trị của mọi secret bị thay bằng `[secret:TÊN]` trong đầu ra tool trước khi ghi log.
 - Trước mỗi lượt và sau mỗi bước có thay đổi, workspace được lưu vào một kho git riêng ngoài dự án; `zcode rewind` khôi phục file và tạo session mới dừng ngay trước lượt đó.
 
+- Thay đổi mà một lần gọi tool gây ra cho `.git/hooks` và `.git/config` của repo ở thư mục làm việc bị hoàn tác ngay sau lần gọi đó và model được báo (`[sandbox] protect_git = false` để tắt). Đây là phát hiện rồi hoàn tác, không phải ngăn chặn: hook vẫn tồn tại trong lúc lệnh đang chạy. Repo do chính lần gọi đó tạo ra (`git init`) không được bảo vệ.
+- Luật quyền cho `bash` được so với từng lệnh trong dòng (các phần ngăn bởi `;`, `&&`, `||`, `|`, phần trong `$(...)` và backtick, lệnh sau `sudo`/`env`…): luật `deny`/`ask` có hiệu lực dù lệnh nằm ở đâu trong dòng, còn luật `allow` chỉ áp dụng khi mọi lệnh trong dòng đều được cho phép. Bộ tách lệnh không phải là một trình phân tích shell đầy đủ.
+
 `--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
 
 Giới hạn cần biết:
@@ -102,6 +106,7 @@ escalate_after = 2              # sau bấy nhiêu lần kiểm tra hỏng hoặ
 [sandbox]
 mode = "workspace-write"        # read-only | workspace-write | danger-full-access
 allow_partial = false           # Windows: chấp nhận chỉ giam việc ghi
+protect_git = true              # hoàn tác thay đổi của tool vào .git/hooks và .git/config
 writable = ["/data/cache"]
 unreadable = ["/data/private"]
 

@@ -19,8 +19,8 @@ use zcode_eval::{Recording, ScriptedLlm};
 use zcode_kernel::BoxFuture;
 use zcode_llm::{ChatCompletions, Llm};
 use zcode_policy::{
-    ApprovalLayer, Config, EditFormat, NetworkMode, ProjectConfig, RedactLayer, RuleAction,
-    Secrets, ToolProfile,
+    ApprovalLayer, Config, EditFormat, GitGuard, NetworkMode, ProjectConfig, RedactLayer,
+    RuleAction, Secrets, ToolProfile,
 };
 use zcode_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
 use zcode_session::{CreateOptions, Event, SessionId, SessionStore};
@@ -278,7 +278,8 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     };
 
     // Layers, outermost first: spill what is left after redaction, notice
-    // calls that keep coming back the same, redact
+    // calls that keep coming back the same, undo changes to git's own
+    // settings, redact
     // (so refusals are covered too), then decide whether the call runs.
     let pipeline = ToolPipeline::new();
     pipeline.push(SpillLayer {
@@ -290,6 +291,11 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         preview: config.context.spill_at_bytes / 4,
     });
     pipeline.push(zcode_verify::RepeatGuard::default());
+    if config.sandbox.protect_git {
+        pipeline.push(GitGuard {
+            cwd: cwd.to_path_buf(),
+        });
+    }
     pipeline.push(RedactLayer {
         secrets: secrets.clone(),
     });

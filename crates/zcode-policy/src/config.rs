@@ -164,6 +164,8 @@ pub struct SandboxConfig {
     pub unreadable: Vec<PathBuf>,
     /// Hide `.env` files from tools.
     pub hide_env_files: bool,
+    /// Undo changes tools make to `.git/hooks` and `.git/config`.
+    pub protect_git: bool,
     /// Windows only: accept confinement of writes alone. Windows cannot
     /// hide files from tools or limit their network access, so without
     /// this the confined modes refuse to start there.
@@ -178,6 +180,7 @@ impl Default for SandboxConfig {
             writable_tmp: true,
             unreadable: Vec::new(),
             hide_env_files: true,
+            protect_git: true,
             allow_partial: false,
         }
     }

@@ -23,6 +23,18 @@ pub enum NetworkArg {
     Open,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, ValueEnum)]
+pub enum OutputArg {
+    /// The answer on stdout, a trace of tool activity on stderr.
+    #[default]
+    Text,
+    /// One JSON object on stdout when the turn is over.
+    Json,
+    /// Every event as a JSON line on stdout as it is logged, then the
+    /// same final object.
+    StreamJson,
+}
+
 #[derive(Args)]
 pub struct RunArgs {
     /// What to ask the agent.
@@ -61,6 +73,9 @@ pub struct RunArgs {
     /// Plan mode: investigate and propose a plan without changing anything.
     #[arg(long)]
     plan: bool,
+    /// What to print: text for people, json or stream-json for programs.
+    #[arg(long, value_enum, default_value_t)]
+    output: OutputArg,
 }
 
 pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
@@ -119,8 +134,22 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         }
     };
     let mut session = Session::new(records, writer);
-    eprintln!("session: {}", session.id());
-    session.observe(printer());
+    match args.output {
+        OutputArg::Text => {
+            eprintln!("session: {}", session.id());
+            session.observe(printer());
+        }
+        OutputArg::Json => {}
+        OutputArg::StreamJson => session.observe(|record: &Record| {
+            // Partial text is for people watching; a program reads the
+            // whole message that follows.
+            if !matches!(record.event, Event::AssistantDelta { .. })
+                && let Ok(line) = serde_json::to_string(record)
+            {
+                println!("{line}");
+            }
+        }),
+    }
     let logged_before = session.records().len();
 
     let outcome = tokio::select! {
@@ -133,6 +162,33 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         }
     }
     let spent = Spent::of(&session.records()[logged_before..]);
+    if args.output != OutputArg::Text {
+        let (status, error, code) = match &outcome {
+            Some(Ok(())) => ("completed", None, ExitCode::SUCCESS),
+            Some(Err(e)) => ("error", Some(e.to_string()), ExitCode::FAILURE),
+            None => {
+                session
+                    .close_open_turn(TurnEndReason::Cancelled)
+                    .map_err(display)?;
+                ("cancelled", None, ExitCode::from(130))
+            }
+        };
+        let new = &session.records()[logged_before..];
+        let result = serde_json::json!({
+            "type": "result",
+            "session": session.id().to_string(),
+            "status": status,
+            "error": error,
+            "text": final_text(new),
+            "requests": spent.requests,
+            "tool_calls": new.iter().filter(|r| matches!(r.event, Event::ToolCall { .. })).count(),
+            "input_tokens": spent.input,
+            "cached_tokens": spent.cached,
+            "output_tokens": spent.output,
+        });
+        println!("{result}");
+        return Ok(code);
+    }
     if spent.requests > 0 {
         eprintln!("{spent}");
         if spent.cache_is_cold() {
@@ -154,6 +210,26 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
             Ok(ExitCode::from(130))
         }
     }
+}
+
+/// The text of the last answer in a stretch of log.
+fn final_text(records: &[Record]) -> String {
+    records
+        .iter()
+        .rev()
+        .find_map(|record| match &record.event {
+            Event::AssistantMessage { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|block| match block {
+                        Block::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// What the model requests in a stretch of log cost.

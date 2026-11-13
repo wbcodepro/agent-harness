@@ -152,6 +152,87 @@ fn a_scripted_run_edits_the_workspace_and_prints_the_answer() {
 }
 
 #[test]
+fn programs_can_read_the_outcome_as_json() {
+    let fx = Fixture::new();
+    let responses = || {
+        vec![
+            tool_call("c1", "write", json!({"path": "out.txt", "content": "hi\n"})),
+            ScriptedResponse::text("Wrote out.txt."),
+        ]
+    };
+
+    let script = fx.script("json.jsonl", responses());
+    let output = fx
+        .zcode(&script, 0, &["--yes", "--output", "json", "Make out.txt"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let result: Value = serde_json::from_str(text(&output.stdout).trim()).unwrap();
+    assert_eq!(result["type"], "result");
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["text"], "Wrote out.txt.");
+    assert_eq!(result["requests"], 2);
+    assert_eq!(result["tool_calls"], 1);
+    assert_eq!(result["error"], Value::Null);
+    let id = result["session"].as_str().unwrap().to_string();
+    assert!(fx.store().read(&SessionId::parse(&id).unwrap()).is_ok());
+    assert!(
+        !text(&output.stderr).contains("> write"),
+        "no trace for programs"
+    );
+
+    // The stream is the session's own records, then the same result.
+    let script = fx.script("stream.jsonl", responses());
+    let output = fx
+        .zcode(
+            &script,
+            0,
+            &[
+                "--yes",
+                "--output",
+                "stream-json",
+                "--session",
+                &id,
+                "Again",
+            ],
+        )
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let lines: Vec<Value> = text(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let types: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line["type"].as_str())
+        .collect();
+    assert_eq!(types.first(), Some(&"turn/start"), "{types:?}");
+    assert!(
+        types.contains(&"tool/call") && types.contains(&"tool/result"),
+        "{types:?}"
+    );
+    assert!(!types.contains(&"assistant/delta"), "{types:?}");
+    assert_eq!(types.last(), Some(&"result"));
+    assert_eq!(lines.last().unwrap()["session"], id.as_str());
+
+    // A failed turn is still one parseable object, with a failing status.
+    let script = fx.script("empty.jsonl", Vec::new());
+    let output = fx
+        .zcode(
+            &script,
+            0,
+            &["--yes", "--output", "json", "Nothing scripted"],
+        )
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let result: Value = serde_json::from_str(text(&output.stdout).trim()).unwrap();
+    assert_eq!(result["status"], "error");
+    assert!(result["error"].is_string());
+}
+
+#[test]
 fn unconfined_tools_need_approval_and_nobody_is_there_to_give_it() {
     let fx = Fixture::new();
     fs::write(fx.work.join("in.txt"), "data\n").unwrap();
