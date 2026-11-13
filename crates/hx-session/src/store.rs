@@ -9,6 +9,7 @@ use crate::model::{Event, FORMAT_VERSION, Header, ParentRef, Record, SessionId};
 use crate::recover::plan_recovery;
 
 const LOG_FILE: &str = "session.v1.jsonl";
+const LOCK_FILE: &str = "lock";
 
 /// Source of record timestamps. Injected so tests and replays are
 /// deterministic.
@@ -77,14 +78,15 @@ impl SessionStore {
             }
             Err(e) => return Err(e.into()),
         }
+        let held = lock(&dir, &id)?;
         let file = OpenOptions::new()
             .read(true)
             .append(true)
             .create_new(true)
             .open(dir.join(LOG_FILE))?;
-        lock(&file, &id)?;
         let mut writer = SessionWriter {
             file,
+            _lock: held,
             id: id.clone(),
             next_seq: 0,
             clock: Arc::clone(&self.clock),
@@ -125,6 +127,9 @@ impl SessionStore {
     /// left open (see [`plan_recovery`]) is closed, so the returned records
     /// always describe a well-formed session with no turn in progress.
     pub fn open(&self, id: &SessionId) -> Result<(Vec<Record>, SessionWriter), SessionError> {
+        // The lock comes first, so two processes cannot both repair and
+        // extend the log.
+        let held = lock(&self.root.join(id.as_str()), id)?;
         let mut file = match OpenOptions::new()
             .read(true)
             .append(true)
@@ -136,7 +141,6 @@ impl SessionStore {
             }
             Err(e) => return Err(e.into()),
         };
-        lock(&file, id)?;
 
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
@@ -149,6 +153,7 @@ impl SessionStore {
         let mut records = parsed.records;
         let mut writer = SessionWriter {
             file,
+            _lock: held,
             id: id.clone(),
             next_seq: records.len() as u64,
             clock: Arc::clone(&self.clock),
@@ -217,6 +222,8 @@ impl SessionStore {
 /// exclusive lock until dropped.
 pub struct SessionWriter {
     file: File,
+    /// Holds the session's exclusive lock for as long as the writer lives.
+    _lock: File,
     id: SessionId,
     next_seq: u64,
     clock: Arc<dyn Clock>,
@@ -346,9 +353,26 @@ fn read_header(path: &Path) -> Option<Header> {
     }
 }
 
-fn lock(file: &File, id: &SessionId) -> Result<(), SessionError> {
+/// Takes the session's exclusive lock.
+///
+/// The lock is on a file of its own, not on the log: where file locks are
+/// mandatory (Windows), a locked log could not be read by anyone else, and
+/// readers must never be blocked.
+fn lock(dir: &Path, id: &SessionId) -> Result<File, SessionError> {
+    let file = match OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join(LOCK_FILE))
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(SessionError::NotFound(id.clone()));
+        }
+        Err(e) => return Err(e.into()),
+    };
     match file.try_lock() {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(file),
         Err(TryLockError::WouldBlock) => Err(SessionError::Locked(id.clone())),
         Err(TryLockError::Error(e)) => Err(e.into()),
     }

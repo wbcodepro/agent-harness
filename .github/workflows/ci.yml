@@ -27,4 +27,4 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo build --workspace
-      - run: cargo test --workspace
+      - run: cargo test --workspace --no-fail-fast
