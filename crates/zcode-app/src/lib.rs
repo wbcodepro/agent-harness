@@ -5,6 +5,8 @@
 
 mod import;
 
+mod reviewer;
+
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -304,14 +306,24 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     pipeline.push(RedactLayer {
         secrets: secrets.clone(),
     });
-    let prompter: Arc<dyn Prompter> = if options.yes {
-        Arc::new(Always(Some(true)))
-    } else if let Some(prompter) = &options.prompter {
+    let human: Arc<dyn Prompter> = if let Some(prompter) = &options.prompter {
         Arc::clone(prompter)
     } else if std::io::stdin().is_terminal() {
         Arc::new(Terminal)
     } else {
         Arc::new(Always(None))
+    };
+    let prompter: Arc<dyn Prompter> = if options.yes {
+        Arc::new(Always(Some(true)))
+    } else if config.approval.reviewer {
+        Arc::new(reviewer::Reviewer {
+            llm: Arc::clone(&summarizer),
+            human,
+            cwd: cwd.to_path_buf(),
+            log: home.join("approvals.jsonl"),
+        })
+    } else {
+        human
     };
     pipeline.push(ApprovalLayer {
         rules: config.rules.clone(),

@@ -147,6 +147,8 @@ Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình 
 
 Trạng thái đợt 2 (2026-11-14): mục 8 có `zcode run --output json|stream-json` và steering (nhắn cho lượt đang chạy, trong giao diện terminal và qua `_zcode/steer`); mục 10 đã làm (hoàn tác thay đổi vào `.git/hooks` và `.git/config`; luật quyền so với từng lệnh trong dòng shell). Mục 7: chạy được hooks định dạng Claude Code cho bốn sự kiện (`[compat] claude_hooks`), chưa có gói plugin. Mục 9: đã hoãn nạp tool MCP/plugin (`tool_search` + `tool_call`, `[context] defer_tools_over`); MCP qua HTTP đã có (streamable HTTP, header tĩnh; đã thử với một server công khai thật), chưa có OAuth và bản đặc tả `2026-07-28`.
 
+Trạng thái đợt 3 (2026-11-14): mục 11 đã có (`[approval] reviewer`; với `deepseek-flash` thật nó phán đúng 7/7 lệnh thử: cho phép `ls`, ghi và đọc file trong dự án; chuyển cho người dùng lệnh xóa ngoài dự án, `curl`, `git push` và mã bị mã hóa base64). Mục 12, 13, 14 chưa làm.
+
 **Đợt 3: khác biệt hóa**
 11. Agent duyệt lệnh chỉ cho các lệnh muốn thoát sandbox.
 12. Thay thế secret tại proxy.

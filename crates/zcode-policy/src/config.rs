@@ -250,6 +250,11 @@ pub struct ApprovalConfig {
     /// What to do with a call no rule matches. Defaults to allowing calls
     /// that run confined, and asking for ones that do not.
     pub default: Option<RuleAction>,
+    /// Let a model answer approval questions first: it approves calls that
+    /// are plainly harmless, and everything else still goes to the user.
+    /// It uses the summary model. Its verdicts are logged in
+    /// `approvals.jsonl` in the data directory.
+    pub reviewer: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
