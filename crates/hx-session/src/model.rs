@@ -130,6 +130,10 @@ pub enum Event {
     /// `summary` from here on. The earlier records stay in the log.
     #[serde(rename = "compaction")]
     Compaction { summary: String, up_to_seq: u64 },
+    /// The workspace as it was at this point is saved under `commit` in the
+    /// session's checkpoint store.
+    #[serde(rename = "checkpoint")]
+    Checkpoint { commit: String },
 }
 
 impl Event {

@@ -151,7 +151,7 @@ fn a_scripted_run_edits_the_workspace_and_prints_the_answer() {
 }
 
 #[test]
-fn without_approval_nothing_but_reads_can_run() {
+fn unconfined_tools_need_approval_and_nobody_is_there_to_give_it() {
     let fx = Fixture::new();
     fs::write(fx.work.join("in.txt"), "data\n").unwrap();
     let script = fx.script(
@@ -164,8 +164,15 @@ fn without_approval_nothing_but_reads_can_run() {
         ],
     );
 
-    // No --yes, and stdin is not a terminal.
-    let output = fx.hx(&script, 0, &["Change things"]).output().unwrap();
+    // Full access, no --yes, and stdin is not a terminal.
+    let output = fx
+        .hx(
+            &script,
+            0,
+            &["--sandbox", "danger-full-access", "Change things"],
+        )
+        .output()
+        .unwrap();
 
     assert_success(&output);
     assert!(!fx.work.join("out.txt").exists());

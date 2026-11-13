@@ -1,0 +1,22 @@
+[package]
+name = "hx-app"
+description = "Assembles a ready-to-run agent from the user's configuration."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hx-agent.workspace = true
+hx-checkpoint.workspace = true
+hx-eval.workspace = true
+hx-kernel.workspace = true
+hx-llm.workspace = true
+hx-policy.workspace = true
+hx-sandbox.workspace = true
+hx-session.workspace = true
+hx-tools.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

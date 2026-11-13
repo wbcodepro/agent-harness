@@ -11,7 +11,7 @@ use hx_session::{
     AttemptReason, Block, Clock, CreateOptions, Delta, Event, Role, SessionId, SessionStore,
     StopReason, TurnEndReason, Usage, plan_recovery,
 };
-use hx_tools::{Effect, ToolContext, ToolOutput, ToolSet};
+use hx_tools::{Effect, InProcess, ToolContext, ToolOutput, ToolSet};
 use serde_json::{Value, json};
 
 struct TickClock(AtomicU64);
@@ -60,9 +60,9 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
         llm,
         tools: ToolSet::builtin(),
         pipeline: ToolPipeline::new(),
-        tool_context: ToolContext {
-            cwd: workspace.to_path_buf(),
-        },
+        tool_context: ToolContext::new(workspace),
+        runner: Arc::new(InProcess),
+        checkpointer: None,
         system: "You are hx.".into(),
         max_steps: 8,
         max_tokens: None,
@@ -104,6 +104,7 @@ fn kinds(session: &Session) -> Vec<&'static str> {
             Event::ToolCall { .. } => "tool/call",
             Event::ToolResult { .. } => "tool/result",
             Event::Compaction { .. } => "compaction",
+            Event::Checkpoint { .. } => "checkpoint",
         })
         .collect()
 }

@@ -1,21 +1,27 @@
-use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
 
-use clap::Args;
-use hx_agent::{Agent, Session, ToolPipeline, ToolRequest};
-use hx_eval::{Recording, ScriptedLlm};
-use hx_kernel::{BoxFuture, Layer, Next};
-use hx_llm::{ChatCompletions, Llm};
+use clap::{Args, ValueEnum};
+use hx_agent::Session;
+use hx_app::{NetworkChoice as NetworkMode, Options, SandboxMode as Mode};
 use hx_session::{Block, CreateOptions, Delta, Event, Record, SessionStore, TurnEndReason};
-use hx_tools::{Effect, ToolContext, ToolOutput, ToolSet};
 
 use crate::{cwd_of, display, parse_id};
 
-const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
-const DEFAULT_MODEL: &str = "deepseek-flash";
+#[derive(Clone, Copy, ValueEnum)]
+pub enum SandboxArg {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum NetworkArg {
+    Off,
+    Allowlist,
+    Open,
+}
 
 #[derive(Args)]
 pub struct RunArgs {
@@ -27,35 +33,71 @@ pub struct RunArgs {
     /// Working directory for a new session. Defaults to the current one.
     #[arg(long)]
     cwd: Option<PathBuf>,
-    /// Model name. Defaults to $HX_MODEL, then deepseek-flash.
+    /// Model name. Defaults to $HX_MODEL, then the configuration.
     #[arg(long)]
     model: Option<String>,
-    /// Root of an OpenAI-compatible API. Defaults to $HX_BASE_URL, then
-    /// https://api.deepseek.com. The key is read from $HX_API_KEY, then
-    /// $DEEPSEEK_API_KEY.
+    /// Root of an OpenAI-compatible API. Defaults to $HX_BASE_URL, then the
+    /// configuration, then https://api.deepseek.com.
     #[arg(long)]
     base_url: Option<String>,
     /// Most model requests allowed in the turn.
     #[arg(long, default_value_t = 50)]
     max_steps: u64,
-    /// Let the agent write files and run commands without asking.
+    /// How tools are confined. Defaults to the configuration
+    /// (workspace-write unless changed).
+    #[arg(long, value_enum)]
+    sandbox: Option<SandboxArg>,
+    /// What confined tools may reach on the network.
+    #[arg(long, value_enum)]
+    network: Option<NetworkArg>,
+    /// Answer yes to every approval question.
     #[arg(long)]
     yes: bool,
 }
 
-pub async fn run(store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
-    let llm = llm(&args)?;
+pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
+    let options = Options {
+        sandbox: args.sandbox.map(|mode| match mode {
+            SandboxArg::ReadOnly => Mode::ReadOnly,
+            SandboxArg::WorkspaceWrite => Mode::WorkspaceWrite,
+            SandboxArg::DangerFullAccess => Mode::DangerFullAccess,
+        }),
+        network: args.network.map(|mode| match mode {
+            NetworkArg::Off => NetworkMode::Off,
+            NetworkArg::Allowlist => NetworkMode::Allowlist,
+            NetworkArg::Open => NetworkMode::Open,
+        }),
+        yes: args.yes,
+        model: args.model.clone(),
+        base_url: args.base_url.clone(),
+        max_steps: args.max_steps,
+    };
 
-    let (records, writer) = match &args.session {
-        Some(id) => store.open(&parse_id(id)?).map_err(display)?,
+    // Resolve the working directory first: a new session uses the flag or
+    // the current directory, an existing one keeps its own.
+    let existing = match &args.session {
+        Some(id) => Some(parse_id(id)?),
+        None => None,
+    };
+    let cwd = match &existing {
+        Some(id) => PathBuf::from(cwd_of(&store.read(id).map_err(display)?)),
         None => {
             let cwd = match &args.cwd {
                 Some(cwd) => cwd.clone(),
                 None => std::env::current_dir().map_err(display)?,
             };
-            let cwd = cwd
-                .canonicalize()
-                .map_err(|e| format!("cannot use {} as working directory: {e}", cwd.display()))?;
+            cwd.canonicalize()
+                .map_err(|e| format!("cannot use {} as working directory: {e}", cwd.display()))?
+        }
+    };
+
+    // Build the agent before touching the store, so a configuration problem
+    // does not leave an empty session behind.
+    let runtime = hx_app::build(home, &cwd, &options).await?;
+
+    let (records, writer) = match &existing {
+        Some(id) => store.open(id).map_err(display)?,
+        None => {
             let writer = store
                 .create(CreateOptions {
                     id: None,
@@ -65,42 +107,19 @@ pub async fn run(store: &SessionStore, args: RunArgs) -> Result<ExitCode, String
             (store.read(writer.id()).map_err(display)?, writer)
         }
     };
-    let cwd = cwd_of(&records);
     let mut session = Session::new(records, writer);
     eprintln!("session: {}", session.id());
     session.observe(printer());
 
-    let agent = Agent {
-        llm,
-        tools: ToolSet::builtin(),
-        pipeline: ToolPipeline::new(),
-        tool_context: ToolContext {
-            cwd: PathBuf::from(&cwd),
-        },
-        system: format!(
-            "You are hx, a coding agent working in the user's terminal.\n\
-             Working directory: {cwd}\n\
-             Use the tools to inspect and change files and to run commands; do not guess at \
-             file contents. Be concise. When the task is done, say what you did and what you \
-             verified."
-        ),
-        max_steps: args.max_steps,
-        max_tokens: None,
-    };
-    agent.pipeline.push(Approval {
-        mode: if args.yes {
-            ApprovalMode::Allow
-        } else if std::io::stdin().is_terminal() {
-            ApprovalMode::Ask
-        } else {
-            ApprovalMode::Deny
-        },
-    });
-
     let outcome = tokio::select! {
-        result = agent.run_turn(&mut session, vec![Block::text(args.prompt)]) => Some(result),
+        result = runtime.agent.run_turn(&mut session, vec![Block::text(args.prompt)]) => Some(result),
         _ = tokio::signal::ctrl_c() => None,
     };
+    if let Some(proxy) = &runtime.proxy {
+        for decision in proxy.decisions().iter().filter(|d| !d.allowed) {
+            eprintln!("network: blocked {}:{}", decision.host, decision.port);
+        }
+    }
     match outcome {
         Some(Ok(())) => Ok(ExitCode::SUCCESS),
         Some(Err(e)) => Err(e.to_string()),
@@ -113,36 +132,6 @@ pub async fn run(store: &SessionStore, args: RunArgs) -> Result<ExitCode, String
             Ok(ExitCode::from(130))
         }
     }
-}
-
-fn llm(args: &RunArgs) -> Result<Arc<dyn Llm>, String> {
-    // Replays recorded responses instead of calling a provider; for tests
-    // and evals.
-    if let Some(script) = std::env::var_os("HX_SCRIPT") {
-        let delay = std::env::var("HX_SCRIPT_DELAY_MS")
-            .ok()
-            .and_then(|ms| ms.parse().ok())
-            .unwrap_or(0);
-        let recording = Recording::load(&script).map_err(display)?;
-        return Ok(Arc::new(
-            ScriptedLlm::new(recording).with_delay(Duration::from_millis(delay)),
-        ));
-    }
-    let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let api_key = env("HX_API_KEY")
-        .or_else(|| env("DEEPSEEK_API_KEY"))
-        .ok_or("no API key: set HX_API_KEY or DEEPSEEK_API_KEY")?;
-    let base_url = args
-        .base_url
-        .clone()
-        .or_else(|| env("HX_BASE_URL"))
-        .unwrap_or_else(|| DEFAULT_BASE_URL.into());
-    let model = args
-        .model
-        .clone()
-        .or_else(|| env("HX_MODEL"))
-        .unwrap_or_else(|| DEFAULT_MODEL.into());
-    Ok(Arc::new(ChatCompletions::new(&base_url, api_key, model)))
 }
 
 /// Streams the answer to stdout and a one-line trace of tool activity to
@@ -192,58 +181,4 @@ fn one_line(text: &str) -> String {
         shown.push_str(" ...");
     }
     shown
-}
-
-enum ApprovalMode {
-    Allow,
-    Ask,
-    Deny,
-}
-
-/// Gates every tool that can change something. These tools run with the
-/// user's full privileges, so nothing but a read happens unasked.
-struct Approval {
-    mode: ApprovalMode,
-}
-
-impl Layer<ToolRequest, ToolOutput> for Approval {
-    fn call<'a>(
-        &'a self,
-        request: ToolRequest,
-        next: Next<'a, ToolRequest, ToolOutput>,
-    ) -> BoxFuture<'a, ToolOutput> {
-        Box::pin(async move {
-            if request.effect == Effect::ReadOnly {
-                return next.run(request).await;
-            }
-            match self.mode {
-                ApprovalMode::Allow => next.run(request).await,
-                ApprovalMode::Deny => ToolOutput::error(
-                    "Denied: this tool needs the user's approval and nobody is at the terminal \
-                     to give it. Do not retry; tell the user to rerun with --yes if they want \
-                     this allowed.",
-                ),
-                ApprovalMode::Ask => {
-                    let question = format!(
-                        "Allow {} {}? [y/N] ",
-                        request.name,
-                        one_line(&describe(&request.name, &request.input))
-                    );
-                    let allowed = tokio::task::spawn_blocking(move || {
-                        eprint!("{question}");
-                        let mut answer = String::new();
-                        std::io::stdin().read_line(&mut answer).is_ok()
-                            && matches!(answer.trim(), "y" | "Y" | "yes")
-                    })
-                    .await
-                    .unwrap_or(false);
-                    if allowed {
-                        next.run(request).await
-                    } else {
-                        ToolOutput::error("Denied by the user.")
-                    }
-                }
-            }
-        })
-    }
 }

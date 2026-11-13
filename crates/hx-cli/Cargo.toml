@@ -13,6 +13,9 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 hx-agent.workspace = true
+hx-app.workspace = true
+hx-checkpoint.workspace = true
+hx-sandbox.workspace = true
 hx-eval.workspace = true
 hx-kernel.workspace = true
 hx-llm.workspace = true

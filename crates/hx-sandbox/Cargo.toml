@@ -1,0 +1,24 @@
+[package]
+name = "hx-sandbox"
+description = "OS-level confinement for tool execution: policy, platform backends, worker protocol and egress proxy."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hx-kernel.workspace = true
+hx-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

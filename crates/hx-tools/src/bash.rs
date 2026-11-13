@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hx_session::ToolSpec;
@@ -7,7 +8,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
-use crate::{BoxFuture, Effect, Tool, ToolContext, ToolOutput, parse_input, truncate_middle};
+use crate::{
+    BoxFuture, Effect, GroupGuard, Tool, ToolContext, ToolOutput, parse_input, truncate_middle,
+};
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
@@ -71,35 +74,44 @@ impl Tool for Bash {
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
             // Its own process group, so everything it starts can be killed
-            // together.
+            // together. Inside a worker the group is the worker's.
             #[cfg(unix)]
-            command.process_group(0);
+            if !ctx.shared_group {
+                command.process_group(0);
+            }
 
             let mut child = match command.spawn() {
                 Ok(child) => child,
                 Err(e) => return ToolOutput::error(format!("Cannot start bash: {e}")),
             };
-            let mut group = GroupGuard(child.id());
-            let stdout = child.stdout.take().expect("stdout is piped");
-            let stderr = child.stderr.take().expect("stderr is piped");
+            let mut group = if ctx.shared_group {
+                GroupGuard::disarmed()
+            } else {
+                GroupGuard::new(child.id())
+            };
+            let stdout = Capture::start(child.stdout.take().expect("stdout is piped"));
+            let stderr = Capture::start(child.stderr.take().expect("stderr is piped"));
 
-            let run = async { tokio::join!(child.wait(), capture(stdout), capture(stderr)) };
-            let (status, stdout, stderr) =
-                match tokio::time::timeout(Duration::from_millis(timeout), run).await {
-                    Ok((Ok(status), stdout, stderr)) => (status, stdout, stderr),
-                    Ok((Err(e), _, _)) => {
+            let status =
+                match tokio::time::timeout(Duration::from_millis(timeout), child.wait()).await {
+                    Ok(Ok(status)) => status,
+                    Ok(Err(e)) => {
                         return ToolOutput::error(format!("Lost track of the command: {e}"));
                     }
-                    // `group` is dropped on return and kills the process group.
                     Err(_) => {
+                        // Our own group dies when `group` drops; a shared one is
+                        // killed by its owner.
+                        ctx.request_group_kill();
                         return ToolOutput::error(format!(
                             "The command did not finish within {timeout} ms and was killed."
                         ));
                     }
                 };
             // The shell exited by itself. Leave anything it deliberately put
-            // in the background running.
+            // in the background running, and do not wait for it to close the
+            // output pipes.
             group.disarm();
+            let (stdout, stderr) = tokio::join!(stdout.finish(), stderr.finish());
 
             let mut text = String::new();
             if !stdout.is_empty() {
@@ -131,50 +143,52 @@ impl Tool for Bash {
     }
 }
 
-/// Reads a stream to its end, keeping at most [`CAPTURE_LIMIT`] bytes so a
-/// runaway command cannot exhaust memory.
-async fn capture(mut stream: impl AsyncRead + Unpin) -> String {
-    let mut kept = Vec::new();
-    let mut dropped = 0usize;
-    let mut chunk = [0u8; 8192];
-    loop {
-        match stream.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let room = CAPTURE_LIMIT.saturating_sub(kept.len()).min(n);
-                kept.extend_from_slice(&chunk[..room]);
-                dropped += n - room;
+/// Collects a stream in the background, keeping at most [`CAPTURE_LIMIT`]
+/// bytes so a runaway command cannot exhaust memory.
+struct Capture {
+    state: Arc<Mutex<(Vec<u8>, usize)>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Capture {
+    fn start(mut stream: impl AsyncRead + Unpin + Send + 'static) -> Self {
+        let state = Arc::new(Mutex::new((Vec::new(), 0usize)));
+        let shared = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match stream.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let mut state = shared.lock().expect("capture lock poisoned");
+                        let room = CAPTURE_LIMIT.saturating_sub(state.0.len()).min(n);
+                        state.0.extend_from_slice(&chunk[..room]);
+                        state.1 += n - room;
+                    }
+                }
             }
+        });
+        Self { state, task }
+    }
+
+    /// What was captured. Called after the command exited: waits briefly for
+    /// the pipe to drain, but not for a background process that kept it open.
+    async fn finish(mut self) -> String {
+        if tokio::time::timeout(Duration::from_millis(300), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
         }
-    }
-    let mut text = String::from_utf8_lossy(&kept).into_owned();
-    if dropped > 0 {
-        text.push_str(&format!("\n[... {dropped} more bytes not captured ...]\n"));
-    }
-    text
-}
-
-/// Kills the command's whole process group when dropped, unless disarmed.
-/// Dropping happens on timeout and when the tool call itself is cancelled.
-struct GroupGuard(Option<u32>);
-
-impl GroupGuard {
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for GroupGuard {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(pid) = self.0 {
-            let _ = std::process::Command::new("kill")
-                .args(["-KILL", "--", &format!("-{pid}")])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+        let state = self.state.lock().expect("capture lock poisoned");
+        let mut text = String::from_utf8_lossy(&state.0).into_owned();
+        if state.1 > 0 {
+            text.push_str(&format!(
+                "\n[... {} more bytes not captured ...]\n",
+                state.1
+            ));
         }
+        text
     }
 }
 
@@ -184,9 +198,7 @@ mod tests {
     use std::time::Instant;
 
     fn ctx(dir: &std::path::Path) -> ToolContext {
-        ToolContext {
-            cwd: dir.to_path_buf(),
-        }
+        ToolContext::new(dir)
     }
 
     #[tokio::test]
@@ -237,6 +249,20 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert!(!dir.path().join("survived").exists());
+    }
+
+    #[tokio::test]
+    async fn a_background_process_does_not_hold_the_call_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let out = Bash
+            .call(
+                &json!({"command": "sleep 20 & echo started"}),
+                &ctx(dir.path()),
+            )
+            .await;
+        assert_eq!(out, ToolOutput::ok("started\n"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[tokio::test]

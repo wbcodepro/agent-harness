@@ -65,7 +65,8 @@ pub fn plan_close(records: &[Record], reason: TurnEndReason) -> Vec<Event> {
             | Event::SystemMessage { .. }
             | Event::ToolsDeclared { .. }
             | Event::UserMessage { .. }
-            | Event::Compaction { .. } => {}
+            | Event::Compaction { .. }
+            | Event::Checkpoint { .. } => {}
         }
     }
 

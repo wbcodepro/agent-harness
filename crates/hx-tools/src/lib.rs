@@ -6,14 +6,17 @@
 
 mod bash;
 mod files;
+mod process;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use bash::Bash;
 pub use files::{Edit, Read, Write};
 pub use hx_kernel::BoxFuture;
 use hx_session::ToolSpec;
+pub use process::GroupGuard;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -55,9 +58,22 @@ impl ToolOutput {
 pub struct ToolContext {
     /// Directory relative paths resolve against and commands start in.
     pub cwd: PathBuf,
+    /// Set when the tool runs inside a worker process whose process group
+    /// the caller manages. Commands then stay in that group instead of
+    /// getting their own.
+    pub shared_group: bool,
+    kill_group: Arc<AtomicBool>,
 }
 
 impl ToolContext {
+    pub fn new(cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            cwd: cwd.into(),
+            shared_group: false,
+            kill_group: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn resolve(&self, path: &str) -> PathBuf {
         let path = Path::new(path);
         if path.is_absolute() {
@@ -66,12 +82,49 @@ impl ToolContext {
             self.cwd.join(path)
         }
     }
+
+    /// Asks whoever owns the shared process group to kill it once this
+    /// call's output has been delivered.
+    pub fn request_group_kill(&self) {
+        self.kill_group.store(true, Ordering::Relaxed);
+    }
+
+    pub fn group_kill_requested(&self) -> bool {
+        self.kill_group.load(Ordering::Relaxed)
+    }
 }
 
 pub trait Tool: Send + Sync {
     fn spec(&self) -> ToolSpec;
     fn effect(&self) -> Effect;
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput>;
+}
+
+/// Where and how a tool body actually executes.
+///
+/// The default runs it in this process. A sandboxed runner ships the call to
+/// a confined worker process instead.
+pub trait ToolRunner: Send + Sync {
+    fn run<'a>(
+        &'a self,
+        tool: &'a Arc<dyn Tool>,
+        input: &'a Value,
+        ctx: &'a ToolContext,
+    ) -> BoxFuture<'a, ToolOutput>;
+}
+
+/// Runs tools in the harness process, with its full privileges.
+pub struct InProcess;
+
+impl ToolRunner for InProcess {
+    fn run<'a>(
+        &'a self,
+        tool: &'a Arc<dyn Tool>,
+        input: &'a Value,
+        ctx: &'a ToolContext,
+    ) -> BoxFuture<'a, ToolOutput> {
+        tool.call(input, ctx)
+    }
 }
 
 /// An ordered collection of tools with unique names.

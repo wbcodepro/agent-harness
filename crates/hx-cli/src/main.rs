@@ -22,6 +22,26 @@ enum Command {
     Run(run::RunArgs),
     /// List sessions.
     Sessions,
+    /// Undo a turn: restore the workspace to how it was when the turn began
+    /// and continue in a new session that ends just before it.
+    Rewind {
+        id: String,
+        /// Turn to undo, together with everything after it. Defaults to the
+        /// last turn.
+        #[arg(long)]
+        turn: Option<u64>,
+    },
+    /// Runs one tool call inside the sandbox. Internal.
+    #[command(hide = true)]
+    ToolWorker,
+    /// Applies a sandbox policy to itself, then executes a program. Internal.
+    #[command(hide = true)]
+    SandboxExec {
+        #[arg(long)]
+        policy: String,
+        #[arg(last = true, required = true)]
+        command: Vec<std::ffi::OsString>,
+    },
     /// Print what the model would see for a session.
     Show {
         id: String,
@@ -53,6 +73,16 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<ExitCode, String> {
+    // The internal commands run confined and must not touch the data
+    // directory.
+    match &cli.command {
+        Command::ToolWorker => {
+            let code = hx_sandbox::worker_main(&hx_tools::ToolSet::builtin()).await;
+            return Ok(ExitCode::from(code));
+        }
+        Command::SandboxExec { policy, command } => return sandbox_exec(policy, command),
+        _ => {}
+    }
     let home = cli
         .home
         .or_else(|| std::env::var_os("HX_HOME").map(PathBuf::from))
@@ -61,7 +91,56 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
     let store = SessionStore::new(home.join("sessions"));
 
     match cli.command {
-        Command::Run(args) => return run::run(&store, args).await,
+        Command::Run(args) => return run::run(&home, &store, args).await,
+        Command::ToolWorker | Command::SandboxExec { .. } => unreachable!("handled above"),
+        Command::Rewind { id, turn } => {
+            let id = parse_id(&id)?;
+            let records = store.read(&id).map_err(display)?;
+            let turn = match turn {
+                Some(turn) => turn,
+                None => records
+                    .iter()
+                    .filter_map(|record| match record.event {
+                        Event::TurnStart { turn } => Some(turn),
+                        _ => None,
+                    })
+                    .max()
+                    .ok_or("the session has no turns")?,
+            };
+            let start = records
+                .iter()
+                .position(|record| record.event == Event::TurnStart { turn })
+                .ok_or(format!("the session has no turn {turn}"))?;
+            // The checkpoint taken as the turn began, before it changed
+            // anything.
+            let commit = records[start..]
+                .iter()
+                .take_while(|record| !matches!(record.event, Event::TurnEnd { .. }))
+                .find_map(|record| match &record.event {
+                    Event::Checkpoint { commit } => Some(commit.clone()),
+                    _ => None,
+                })
+                .ok_or(format!("turn {turn} has no checkpoint to rewind to"))?;
+            let cwd = PathBuf::from(cwd_of(&records));
+            let checkpoints =
+                hx_checkpoint::GitCheckpoints::new(hx_app::checkpoint_dir(&home, &cwd), &cwd);
+            let restored = checkpoints.restore(&commit).await?;
+            let options = hx_session::CreateOptions {
+                id: None,
+                cwd: cwd.to_string_lossy().into_owned(),
+            };
+            let (_records, writer) = store
+                .fork(&id, records[start].seq - 1, options)
+                .map_err(display)?;
+            for name in &restored.removed {
+                eprintln!("removed {name}");
+            }
+            eprintln!(
+                "workspace restored to the start of turn {turn}; to undo: checkpoint {}",
+                restored.before
+            );
+            println!("{}", writer.id());
+        }
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);
@@ -101,6 +180,26 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
+    use std::os::unix::process::CommandExt;
+    let policy: hx_sandbox::SandboxPolicy =
+        serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
+    hx_sandbox::apply_to_current_process(&policy).map_err(display)?;
+    let error = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .exec();
+    Err(format!(
+        "cannot execute {}: {error}",
+        command[0].to_string_lossy()
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sandbox_exec(_policy: &str, _command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
+    Err("sandbox-exec is only used on Linux".into())
 }
 
 fn parse_id(raw: &str) -> Result<SessionId, String> {

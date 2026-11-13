@@ -8,13 +8,14 @@
 
 use std::sync::Arc;
 
+use hx_kernel::BoxFuture;
 use hx_kernel::Chain;
 use hx_llm::{Llm, LlmError, Request, SinkError};
 use hx_session::{
     Block, Delta, Event, History, Record, SessionError, SessionId, SessionWriter, StopReason,
     TurnEndReason, assemble, derive_history, plan_close,
 };
-use hx_tools::{Effect, ToolContext, ToolOutput, ToolSet};
+use hx_tools::{Effect, ToolContext, ToolOutput, ToolRunner, ToolSet};
 use serde_json::Value;
 
 type Observer = Box<dyn FnMut(&Record) + Send>;
@@ -99,11 +100,22 @@ pub enum AgentError {
     StepLimit(u64),
 }
 
+/// Saves the state of the workspace so a session can be rewound to it.
+pub trait Checkpointer: Send + Sync {
+    /// Returns an id for the saved state.
+    fn snapshot(&self) -> BoxFuture<'_, Result<String, String>>;
+}
+
 pub struct Agent {
     pub llm: Arc<dyn Llm>,
     pub tools: ToolSet,
     pub pipeline: ToolPipeline,
     pub tool_context: ToolContext,
+    /// Executes tool bodies, in process or in a confined worker.
+    pub runner: Arc<dyn ToolRunner>,
+    /// When set, the workspace is saved at the start of each turn and after
+    /// every step that ran a tool able to change it.
+    pub checkpointer: Option<Arc<dyn Checkpointer>>,
     /// System prompt. Empty means none.
     pub system: String,
     /// Upper bound on model requests in one turn.
@@ -155,6 +167,7 @@ impl Agent {
             session.append(Event::ToolsDeclared { tools: specs })?;
         }
         session.append(Event::UserMessage { content: input })?;
+        self.checkpoint(session).await?;
 
         for step in 1..=self.max_steps {
             session.append(Event::StepStart { turn, step })?;
@@ -182,6 +195,7 @@ impl Agent {
             })?;
 
             let mut called_tools = false;
+            let mut may_have_changed = false;
             for block in content {
                 let Block::ToolUse { id, name, input } = block else {
                     continue;
@@ -205,6 +219,10 @@ impl Agent {
                     name: name.clone(),
                     input: input.clone(),
                 })?;
+                may_have_changed |= self
+                    .tools
+                    .get(&name)
+                    .is_some_and(|tool| tool.effect() != Effect::ReadOnly);
                 let output = self.execute(id.clone(), name, input).await;
                 session.append(Event::ToolResult {
                     call_id: id,
@@ -213,6 +231,9 @@ impl Agent {
                 })?;
             }
 
+            if may_have_changed {
+                self.checkpoint(session).await?;
+            }
             session.append(Event::StepEnd { turn, step })?;
             if !called_tools {
                 session.append(Event::TurnEnd {
@@ -223,6 +244,19 @@ impl Agent {
             }
         }
         Err(AgentError::StepLimit(self.max_steps))
+    }
+
+    /// A checkpoint that cannot be taken is reported and skipped: losing the
+    /// ability to rewind is not a reason to stop the work.
+    async fn checkpoint(&self, session: &mut Session) -> Result<(), AgentError> {
+        let Some(checkpointer) = &self.checkpointer else {
+            return Ok(());
+        };
+        match checkpointer.snapshot().await {
+            Ok(commit) => session.append(Event::Checkpoint { commit })?,
+            Err(reason) => eprintln!("hx: checkpoint skipped: {reason}"),
+        }
+        Ok(())
     }
 
     async fn execute(&self, call_id: String, name: String, input: Value) -> ToolOutput {
@@ -239,7 +273,7 @@ impl Agent {
         self.pipeline
             .run(request, |request: ToolRequest| {
                 let tool = Arc::clone(&tool);
-                async move { tool.call(&request.input, context).await }
+                async move { self.runner.run(&tool, &request.input, context).await }
             })
             .await
     }
