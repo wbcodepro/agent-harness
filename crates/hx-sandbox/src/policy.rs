@@ -43,7 +43,13 @@ impl SandboxPolicy {
     /// credential locations hidden, no network.
     pub fn workspace(cwd: &Path) -> Self {
         let mut writable = vec![real(cwd)];
-        for tmp in [std::env::temp_dir(), PathBuf::from("/tmp")] {
+        // On Windows a writable root gets a standing label, so the shared
+        // temp directory is left alone and tools get one of their own.
+        #[cfg(windows)]
+        let temp_dirs: Vec<PathBuf> = crate::windows::low_temp_dir().into_iter().collect();
+        #[cfg(not(windows))]
+        let temp_dirs = [std::env::temp_dir(), PathBuf::from("/tmp")];
+        for tmp in temp_dirs {
             let tmp = real(&tmp);
             if !writable.contains(&tmp) {
                 writable.push(tmp);
@@ -109,7 +115,7 @@ pub fn default_unreadable(home: &Path) -> Vec<PathBuf> {
 /// The path with symlinks resolved, when it exists. Platform rules match
 /// real paths, and e.g. `/tmp` is a symlink on macOS.
 pub(crate) fn real(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    hx_kernel::real_path(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -171,13 +177,15 @@ fn platform_wrap(
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn platform_wrap(
     policy: &SandboxPolicy,
     helper: &Path,
     program: &Path,
     args: &[OsString],
 ) -> Result<Wrapped, SandboxError> {
+    #[cfg(windows)]
+    crate::windows::check(policy)?;
     let encoded = serde_json::to_string(policy)
         .map_err(|e| SandboxError::Unavailable(format!("cannot encode the policy: {e}")))?;
     let mut wrapped = vec![
@@ -194,7 +202,7 @@ fn platform_wrap(
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn platform_wrap(
     _policy: &SandboxPolicy,
     _helper: &Path,

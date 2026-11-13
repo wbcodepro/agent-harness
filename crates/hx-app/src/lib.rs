@@ -201,7 +201,26 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         Mode::DangerFullAccess => SandboxPolicy::full_access(),
     };
     let mut proxy = None;
-    if policy.is_confined() {
+    let writes_only = cfg!(windows) && policy.is_confined();
+    if writes_only {
+        if !config.sandbox.allow_partial {
+            return Err(
+                "on Windows hx can confine where tools write, but cannot hide credential \
+                 files from them or limit their network access. To accept that, set \
+                 `allow_partial = true` under [sandbox] in config.toml; or run with \
+                 --sandbox danger-full-access, where every change needs your approval"
+                    .into(),
+            );
+        }
+        eprintln!(
+            "hx: tools are confined for writes only; they can read any file you can and \
+             reach the network"
+        );
+        policy.unreadable.clear();
+        policy.hide_env_files = false;
+        policy.network = Network::Open;
+        hx_sandbox::prepare(&policy).map_err(|e| e.to_string())?;
+    } else if policy.is_confined() {
         policy.unreadable.extend(config.sandbox.unreadable.clone());
         // The harness's own data: credentials, settings, other sessions.
         // The spill directory stays readable; tools are pointed at it.

@@ -104,6 +104,10 @@ pub struct SandboxConfig {
     pub unreadable: Vec<PathBuf>,
     /// Hide `.env` files from tools.
     pub hide_env_files: bool,
+    /// Windows only: accept confinement of writes alone. Windows cannot
+    /// hide files from tools or limit their network access, so without
+    /// this the confined modes refuse to start there.
+    pub allow_partial: bool,
 }
 
 impl Default for SandboxConfig {
@@ -114,6 +118,7 @@ impl Default for SandboxConfig {
             writable_tmp: true,
             unreadable: Vec::new(),
             hide_env_files: true,
+            allow_partial: false,
         }
     }
 }

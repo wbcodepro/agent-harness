@@ -30,7 +30,33 @@ struct WorkerResponse {
 /// Environment variables a worker inherits. Everything else, including any
 /// credential the harness itself holds, is dropped.
 const INHERITED_ENV: &[&str] = &[
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "TZ",
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "TERM",
+    "TMPDIR",
+    "TZ",
+    // Windows programs do not start without these.
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "USERNAME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
 ];
 
 /// Body of the hidden `hx tool-worker` command: runs one tool call read from
@@ -89,8 +115,11 @@ impl SandboxedRunner {
     fn environment(&self) -> Vec<(OsString, OsString)> {
         let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
             .filter(|(name, _)| {
-                name.to_str()
-                    .is_some_and(|name| INHERITED_ENV.contains(&name) || name.starts_with("LC_"))
+                name.to_str().is_some_and(|name| {
+                    // Windows spells variable names in any case.
+                    let name = name.to_ascii_uppercase();
+                    INHERITED_ENV.contains(&name.as_str()) || name.starts_with("LC_")
+                })
             })
             .collect();
         if let Network::Proxy { port } = self.policy.network {
@@ -106,6 +135,16 @@ impl SandboxedRunner {
             }
             for name in ["NO_PROXY", "no_proxy"] {
                 env.push((name.into(), "localhost,127.0.0.1,::1".into()));
+            }
+        }
+        // Confined tools on Windows cannot write to the shared temp
+        // directory; point them at the one prepared for them.
+        #[cfg(windows)]
+        if self.policy.is_confined()
+            && let Some(tmp) = crate::windows::low_temp_dir()
+        {
+            for name in ["TEMP", "TMP"] {
+                env.push((name.into(), tmp.clone().into()));
             }
         }
         for (name, value) in &self.env {

@@ -241,9 +241,25 @@ fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode
     ))
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows has no `exec`: lower this process, run the program as a child
+/// (which inherits the lowered level), and pass its exit status on.
+#[cfg(windows)]
+fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
+    let policy: hx_sandbox::SandboxPolicy =
+        serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
+    hx_sandbox::apply_to_current_process(&policy).map_err(display)?;
+    let status = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .status()
+        .map_err(|e| format!("cannot execute {}: {e}", command[0].to_string_lossy()))?;
+    Ok(ExitCode::from(
+        status.code().unwrap_or(1).clamp(0, 255) as u8
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn sandbox_exec(_policy: &str, _command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
-    Err("sandbox-exec is only used on Linux".into())
+    Err("sandbox-exec is not used on this platform".into())
 }
 
 fn parse_id(raw: &str) -> Result<SessionId, String> {
