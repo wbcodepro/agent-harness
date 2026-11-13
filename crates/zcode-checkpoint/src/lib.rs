@@ -97,6 +97,8 @@ impl GitCheckpoints {
     /// nothing changed since the last checkpoint, returns that one.
     pub async fn snapshot(&self) -> Result<String, String> {
         self.ensure_repository().await?;
+        let links = linked_dirs(&self.work_tree);
+        self.leave_out(&links).await?;
         self.git(&["add", "-A", "."]).await?;
         let tree = self.git(&["write-tree"]).await?;
         let parent = self
@@ -132,6 +134,21 @@ impl GitCheckpoints {
             .map_err(|_| format!("checkpoint {commit} does not exist"))?;
         let before = self.snapshot().await?;
 
+        // Where the checkpoint has a real directory and the workspace now
+        // has a link, restoring would write through the link. Take the link
+        // away (not what it leads to) so the directory can come back.
+        let links = linked_dirs(&self.work_tree);
+        if !links.is_empty() {
+            let wanted = self
+                .git(&["ls-tree", "-r", "-z", "--name-only", commit])
+                .await?;
+            let wanted: Vec<&str> = wanted.split('\0').collect();
+            for link in links.iter().filter(|link| any_inside(&wanted, link)) {
+                std::fs::remove_dir(self.work_tree.join(link))
+                    .map_err(|e| format!("cannot remove the link {link}: {e}"))?;
+            }
+        }
+
         let added = self
             .git(&[
                 "diff",
@@ -153,6 +170,9 @@ impl GitCheckpoints {
             {
                 continue;
             }
+            if links.iter().any(|link| any_inside(&[name], link)) {
+                continue;
+            }
             if std::fs::remove_file(self.work_tree.join(relative)).is_ok() {
                 removed.push(name.to_string());
             }
@@ -163,6 +183,100 @@ impl GitCheckpoints {
         self.snapshot().await?;
         Ok(Restored { before, removed })
     }
+}
+
+impl GitCheckpoints {
+    /// Keeps `links`, and whatever is reached through them, out of the next
+    /// `git add`, and drops what earlier checkpoints recorded under them.
+    async fn leave_out(&self, links: &[String]) -> Result<(), String> {
+        let exclude = self.git_dir.join("info").join("exclude");
+        let patterns: String = links
+            .iter()
+            .map(|link| format!("/{}\n", escape_pattern(link)))
+            .collect();
+        if std::fs::read_to_string(&exclude).unwrap_or_default() != patterns {
+            std::fs::create_dir_all(self.git_dir.join("info"))
+                .and_then(|()| std::fs::write(&exclude, patterns))
+                .map_err(|e| format!("cannot write {}: {e}", exclude.display()))?;
+        }
+        if links.is_empty() {
+            return Ok(());
+        }
+        let tracked = self.git(&["ls-files", "-z"]).await?;
+        let tracked: Vec<&str> = tracked.split('\0').collect();
+        let stale: Vec<String> = links
+            .iter()
+            .filter(|link| any_inside(&tracked, link))
+            .map(|link| format!(":(literal){link}"))
+            .collect();
+        // In batches: a command line has a length limit.
+        for batch in stale.chunks(50) {
+            let mut args = vec!["rm", "--cached", "-r", "-f", "-q", "--ignore-unmatch", "--"];
+            args.extend(batch.iter().map(String::as_str));
+            self.git(&args).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether one of `names` (paths with `/`) lies inside the directory `dir`.
+fn any_inside(names: &[&str], dir: &str) -> bool {
+    names.iter().any(|name| {
+        name.len() > dir.len()
+            && name.as_bytes()[dir.len()] == b'/'
+            && name[..dir.len()].eq_ignore_ascii_case(dir)
+    })
+}
+
+/// A path as a literal `.gitignore` pattern.
+fn escape_pattern(path: &str) -> String {
+    let mut pattern = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[' | ' ') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern
+}
+
+/// Directories in the workspace that are links to somewhere else, as paths
+/// from `root` with `/`. Links are not looked into.
+///
+/// Only Windows needs this. Git there walks into a junction as if it were a
+/// plain directory, so a checkpoint would copy what is behind it and a
+/// restore would overwrite and delete files outside the workspace, with the
+/// harness's rights rather than the confined tool's. Elsewhere git records a
+/// symbolic link as a link and never writes through one.
+#[cfg(windows)]
+fn linked_dirs(root: &Path) -> Vec<String> {
+    use std::os::windows::fs::FileTypeExt;
+
+    let mut links = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), String::new())];
+    while let Some((dir, prefix)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let (Ok(kind), Ok(name)) = (entry.file_type(), entry.file_name().into_string()) else {
+                continue;
+            };
+            let relative = format!("{prefix}{name}");
+            if kind.is_symlink_dir() {
+                links.push(relative);
+            } else if kind.is_dir() && name != ".git" {
+                pending.push((entry.path(), format!("{relative}/")));
+            }
+        }
+    }
+    links.sort();
+    links
+}
+
+#[cfg(not(windows))]
+fn linked_dirs(_root: &Path) -> Vec<String> {
+    Vec::new()
 }
 
 impl Checkpointer for GitCheckpoints {
@@ -283,5 +397,66 @@ mod tests {
             head_before
         );
         assert_eq!(work.join(".git/index").exists(), index_existed);
+    }
+
+    /// Git on Windows walks into a junction as if it were a directory.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_link_out_of_the_workspace_is_neither_saved_nor_restored_through() {
+        let junction = |link: &Path, target: &Path| {
+            assert!(
+                std::process::Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(link)
+                    .arg(target)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (work, outside) = (dir.path().join("work"), dir.path().join("outside"));
+        fs::create_dir_all(work.join("data")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(work.join("data/real.txt"), "one").unwrap();
+        fs::write(outside.join("theirs.txt"), "v1").unwrap();
+        junction(&work.join("sub link [1]"), &outside);
+        let checkpoints = GitCheckpoints::new(dir.path().join("store"), &work);
+
+        let first = checkpoints.snapshot().await.unwrap();
+        let saved = checkpoints
+            .git(&["ls-tree", "-r", "--name-only", &first])
+            .await
+            .unwrap();
+        assert_eq!(
+            saved, "data/real.txt",
+            "what is behind the link is not saved"
+        );
+
+        // Outside changes on its own; the workspace changes too.
+        fs::write(outside.join("theirs.txt"), "v2").unwrap();
+        fs::write(outside.join("new.txt"), "new").unwrap();
+        fs::write(work.join("data/real.txt"), "two").unwrap();
+        // A directory of the checkpoint is replaced by a link leading out.
+        fs::remove_dir_all(work.join("data")).unwrap();
+        junction(&work.join("data"), &outside);
+        fs::write(outside.join("real.txt"), "theirs as well").unwrap();
+
+        checkpoints.restore(&first).await.unwrap();
+        assert_eq!(
+            fs::read_to_string(work.join("data/real.txt")).unwrap(),
+            "one"
+        );
+        assert!(
+            work.join("sub link [1]/theirs.txt").exists(),
+            "the link stays"
+        );
+        let read = |name: &str| fs::read_to_string(outside.join(name)).unwrap();
+        assert_eq!(
+            (read("theirs.txt"), read("new.txt"), read("real.txt")),
+            ("v2".into(), "new".into(), "theirs as well".into()),
+            "nothing outside the workspace was restored or removed"
+        );
     }
 }
