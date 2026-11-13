@@ -71,6 +71,8 @@ Windows này và sửa những gì hỏng. Đọc README.md và docs/WINDOWS.md 
 
 ## Đã kiểm trên GitHub Actions (Windows Server)
 
+Lần chạy gần nhất: commit `57faf2c` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Những gì thêm sau commit đó chưa được chạy trên Windows.
+
 - Build cả workspace và toàn bộ test chạy được trên Windows.
 - Ghi và sửa file trong thư mục dự án được, kể cả file có sẵn từ trước.
 - Ghi ra ngoài bằng đường dẫn tuyệt đối hoặc `..` bị chặn; sửa file bên ngoài bị chặn.
