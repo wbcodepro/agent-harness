@@ -119,6 +119,10 @@ pub trait TurnHook: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Runs right after a model response is logged, before its tool calls
+    /// run. The response is the last record.
+    fn after_response(&self, _records: &[Record]) {}
+
     /// Runs when the model has stopped calling tools and the turn is about
     /// to end, with the session's records. `changed` says whether any tool that can change the workspace
     /// ran this turn. Returning input keeps the turn going with that input
@@ -225,49 +229,77 @@ impl Agent {
                 usage: completion.usage,
             })?;
 
-            let mut called_tools = false;
+            for hook in &self.hooks {
+                hook.after_response(session.records());
+            }
+
+            let calls: Vec<(String, String, Value)> = content
+                .into_iter()
+                .filter_map(|block| match block {
+                    Block::ToolUse { id, name, input } => Some((id, name, input)),
+                    _ => None,
+                })
+                .collect();
+            let called_tools = !calls.is_empty();
             let mut may_have_changed = false;
-            for block in content {
-                let Block::ToolUse { id, name, input } = block else {
-                    continue;
-                };
-                called_tools = true;
-                if completion.stop == StopReason::Refusal {
+
+            let not_run = match completion.stop {
+                StopReason::Refusal => Some("Not run: the provider declined this response."),
+                // The call may be cut short; running it would act on
+                // arguments the model never finished writing.
+                StopReason::MaxTokens => Some(
+                    "Not run: the response hit its token limit before this tool call was \
+                     complete. Send the call again.",
+                ),
+                StopReason::EndTurn | StopReason::ToolUse => None,
+            };
+            if let Some(reason) = not_run {
+                for (id, _, _) in calls {
                     session.append(Event::ToolResult {
                         call_id: id,
-                        content: vec![Block::text("Not run: the provider declined this response.")],
+                        content: vec![Block::text(reason)],
                         is_error: true,
                     })?;
-                    continue;
                 }
-                if completion.stop == StopReason::MaxTokens {
-                    // The call may be cut short; running it would act on
-                    // arguments the model never finished writing.
-                    session.append(Event::ToolResult {
-                        call_id: id,
-                        content: vec![Block::text(
-                            "Not run: the response hit its token limit before this tool call \
-                             was complete. Send the call again.",
-                        )],
-                        is_error: true,
-                    })?;
-                    continue;
+            } else {
+                // Neighbouring calls that are safe to overlap run together;
+                // everything else runs alone, in the order the model gave.
+                let mut remaining = calls.into_iter().peekable();
+                while let Some(first) = remaining.next() {
+                    let overlaps =
+                        |name: &str| self.tools.get(name).is_some_and(|t| t.concurrent());
+                    let mut batch = vec![first];
+                    if overlaps(&batch[0].1) {
+                        while let Some(next) = remaining.next_if(|(_, name, _)| overlaps(name)) {
+                            batch.push(next);
+                        }
+                    }
+                    for (id, name, input) in &batch {
+                        session.append(Event::ToolCall {
+                            call_id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        })?;
+                        may_have_changed |= self
+                            .tools
+                            .get(name)
+                            .is_some_and(|tool| tool.effect() != Effect::ReadOnly);
+                    }
+                    let ids: Vec<String> = batch.iter().map(|(id, _, _)| id.clone()).collect();
+                    let outputs = futures_util::future::join_all(
+                        batch
+                            .into_iter()
+                            .map(|(id, name, input)| self.execute(id, name, input)),
+                    )
+                    .await;
+                    for (id, output) in ids.into_iter().zip(outputs) {
+                        session.append(Event::ToolResult {
+                            call_id: id,
+                            content: vec![Block::text(output.text)],
+                            is_error: output.is_error,
+                        })?;
+                    }
                 }
-                session.append(Event::ToolCall {
-                    call_id: id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                })?;
-                may_have_changed |= self
-                    .tools
-                    .get(&name)
-                    .is_some_and(|tool| tool.effect() != Effect::ReadOnly);
-                let output = self.execute(id.clone(), name, input).await;
-                session.append(Event::ToolResult {
-                    call_id: id,
-                    content: vec![Block::text(output.text)],
-                    is_error: output.is_error,
-                })?;
             }
 
             if may_have_changed {

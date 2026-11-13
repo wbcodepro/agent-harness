@@ -461,3 +461,106 @@ async fn a_hook_can_keep_the_turn_going_when_the_model_tries_to_stop() {
     agent.run_turn(&mut session, user("Hi")).await.unwrap();
     assert_eq!(kinds(&session).iter().filter(|k| **k == "user").count(), 3);
 }
+
+/// A read-only tool that takes a while and notes when it ran.
+struct Slow(Arc<Mutex<Vec<(std::time::Instant, std::time::Instant)>>>);
+
+impl hx_tools::Tool for Slow {
+    fn spec(&self) -> hx_session::ToolSpec {
+        hx_session::ToolSpec {
+            name: "slow".into(),
+            description: String::new(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    fn effect(&self) -> Effect {
+        Effect::ReadOnly
+    }
+
+    fn call<'a>(&'a self, _input: &'a Value, _ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
+        Box::pin(async move {
+            let started = std::time::Instant::now();
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            self.0
+                .lock()
+                .unwrap()
+                .push((started, std::time::Instant::now()));
+            ToolOutput::ok("done")
+        })
+    }
+}
+
+#[tokio::test]
+async fn read_only_calls_issued_together_overlap_and_writes_stay_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let call = |id: &str, name: &str, input: Value| {
+        vec![
+            Delta::ToolUseStart {
+                id: id.into(),
+                name: name.into(),
+            },
+            Delta::ToolInput {
+                json: input.to_string(),
+            },
+        ]
+    };
+    let mut deltas = Vec::new();
+    deltas.extend(call("s1", "slow", json!({})));
+    deltas.extend(call("s2", "slow", json!({})));
+    deltas.extend(call("s3", "slow", json!({})));
+    deltas.extend(call(
+        "w1",
+        "write",
+        json!({"path": "a.txt", "content": "1"}),
+    ));
+    deltas.extend(call(
+        "w2",
+        "edit",
+        json!({"path": "a.txt", "old_string": "1", "new_string": "2"}),
+    ));
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            ScriptedResponse {
+                deltas,
+                stop: StopReason::ToolUse,
+                usage: Usage::default(),
+            },
+            ScriptedResponse::text("Done."),
+        ],
+    }));
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = agent(llm, dir.path());
+    agent.tools.insert(Arc::new(Slow(Arc::clone(&runs))));
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent.run_turn(&mut session, user("Go")).await.unwrap();
+
+    // The three slow calls ran at the same time.
+    let runs = runs.lock().unwrap();
+    let latest_start = runs.iter().map(|(start, _)| *start).max().unwrap();
+    let earliest_end = runs.iter().map(|(_, end)| *end).min().unwrap();
+    assert!(latest_start < earliest_end, "the calls did not overlap");
+    // The write and the edit that depends on it ran one after the other.
+    assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "2");
+    let step: Vec<&str> = kinds(&session)
+        .into_iter()
+        .filter(|kind| kind.starts_with("tool/"))
+        .collect();
+    assert_eq!(
+        step,
+        [
+            "tool/call",
+            "tool/call",
+            "tool/call",
+            "tool/result",
+            "tool/result",
+            "tool/result",
+            "tool/call",
+            "tool/result",
+            "tool/call",
+            "tool/result",
+        ]
+    );
+    assert!(session.history().dangling_tool_calls().is_empty());
+}

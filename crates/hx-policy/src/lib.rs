@@ -6,9 +6,9 @@ mod layers;
 mod secrets;
 
 pub use config::{
-    ApprovalConfig, CheckpointConfig, Config, ConfigError, ContextConfig, ModelConfig,
-    NetworkConfig, NetworkMode, ProjectConfig, Rule, RuleAction, SandboxConfig, SecretsConfig,
-    VerifyConfig,
+    ApprovalConfig, CheckpointConfig, Config, ConfigError, ContextConfig, LimitsConfig,
+    ModelConfig, NetworkConfig, NetworkMode, ProjectConfig, Rule, RuleAction, SandboxConfig,
+    SecretsConfig, VerifyConfig,
 };
 pub use layers::{ApprovalLayer, Prompter, RedactLayer, glob_match};
 pub use secrets::Secrets;

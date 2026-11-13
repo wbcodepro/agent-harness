@@ -99,6 +99,18 @@ pub struct Options {
     /// Tool runner to use instead of confined worker processes. For
     /// embedding and tests; it bypasses the sandbox.
     pub runner: Option<Arc<dyn ToolRunner>>,
+    /// Set by the harness when it builds a subagent: how deep the agent is,
+    /// and what it shares with the agents above it.
+    pub lineage: Option<Lineage>,
+}
+
+/// What a subagent inherits from the agent that started it.
+#[derive(Clone)]
+pub struct Lineage {
+    depth: u32,
+    budget: Option<Arc<hx_multi::TreeBudget>>,
+    /// The task board of the root agent's workspace.
+    board: hx_multi::TaskBoard,
 }
 
 const PLAN_MODE: &str = "\n\nYou are in plan mode. Investigate with the read-only tools, then \
@@ -142,7 +154,18 @@ pub fn load_secrets(home: &Path, cwd: &Path) -> Result<Secrets, String> {
     Ok(secrets)
 }
 
-pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime, String> {
+/// Assembles an agent for `cwd` from the configuration under `home`.
+pub fn build<'a>(
+    home: &'a Path,
+    cwd: &'a Path,
+    options: &'a Options,
+) -> BoxFuture<'a, Result<Runtime, String>> {
+    // Boxed because building an agent registers a factory that builds its
+    // subagents with this same function.
+    Box::pin(build_inner(home, cwd, options))
+}
+
+async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime, String> {
     let config = load_config(home)?;
     let secrets = load_secrets(home, cwd)?;
     let (llm, summarizer) = match &options.llm {
@@ -308,6 +331,58 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
             Ok(plugin_tools) => plugin_tools.into_iter().for_each(|tool| tools.insert(tool)),
             Err(e) => eprintln!("hx: {e}"),
         }
+    }
+    // Working with other agents: a shared board, a shared budget, and the
+    // ability to start subagents until the depth limit.
+    let lineage = options.lineage.clone().unwrap_or_else(|| Lineage {
+        depth: 0,
+        budget: (config.limits.tree_tokens > 0)
+            .then(|| hx_multi::TreeBudget::new(config.limits.tree_tokens)),
+        board: hx_multi::TaskBoard::new(
+            home.join("tasks")
+                .join(checkpoint_dir(home, cwd).file_name().unwrap_or_default())
+                .with_extension("json"),
+        ),
+    });
+    for tool in hx_multi::board_tools(&lineage.board) {
+        tools.insert(tool);
+    }
+    if let Some(budget) = &lineage.budget {
+        hooks.push(Arc::new(hx_multi::BudgetHook::new(Arc::clone(budget))));
+    }
+    if lineage.depth < config.limits.subagent_depth {
+        let (child_home, parent_options, parent_lineage) =
+            (home.to_path_buf(), options.clone(), lineage.clone());
+        let factory: hx_multi::ChildFactory = Arc::new(move |spec: hx_multi::ChildSpec| {
+            let (home, mut options) = (child_home.clone(), parent_options.clone());
+            options.lineage = Some(Lineage {
+                depth: spec.depth,
+                ..parent_lineage.clone()
+            });
+            if spec.read_only {
+                options.sandbox = Some(Mode::ReadOnly);
+            }
+            Box::pin(async move {
+                let mut runtime = build(&home, &spec.cwd, &options).await?;
+                if spec.read_only {
+                    runtime
+                        .agent
+                        .tools
+                        .retain(|tool| tool.effect() != Effect::Write);
+                }
+                Ok(hx_multi::Child {
+                    agent: runtime.agent,
+                    keep_alive: Box::new(runtime.proxy),
+                })
+            })
+        });
+        tools.insert(Arc::new(hx_multi::SubagentTool {
+            factory,
+            store: session_store(home),
+            cwd: cwd.to_path_buf(),
+            worktrees: home.join("worktrees"),
+            depth: lineage.depth,
+        }));
     }
     if options.plan {
         tools.retain(|tool| tool.effect() != Effect::Write);

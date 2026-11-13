@@ -107,6 +107,12 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Whether calls the model issued together may run at the same time.
+    /// True by default for tools that change nothing.
+    fn concurrent(&self) -> bool {
+        self.effect() == Effect::ReadOnly
+    }
+
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput>;
 }
 

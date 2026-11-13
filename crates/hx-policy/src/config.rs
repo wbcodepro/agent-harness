@@ -32,6 +32,7 @@ pub struct Config {
     pub checkpoints: CheckpointConfig,
     pub context: ContextConfig,
     pub verify: VerifyConfig,
+    pub limits: LimitsConfig,
     /// Permission rules, first match wins.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
@@ -230,6 +231,25 @@ impl Default for VerifyConfig {
             commands: Vec::new(),
             max_rounds: 2,
             timeout_ms: 300_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LimitsConfig {
+    /// Tokens an agent and all its subagents may spend on one run of the
+    /// harness. Zero means no limit.
+    pub tree_tokens: u64,
+    /// How many levels of subagents may be nested. Zero turns subagents off.
+    pub subagent_depth: u32,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            tree_tokens: 0,
+            subagent_depth: 1,
         }
     }
 }

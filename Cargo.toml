@@ -11,6 +11,7 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 hx-kernel = { path = "crates/hx-kernel" }
+hx-multi = { path = "crates/hx-multi" }
 hx-policy = { path = "crates/hx-policy" }
 hx-sandbox = { path = "crates/hx-sandbox" }
 hx-session = { path = "crates/hx-session" }

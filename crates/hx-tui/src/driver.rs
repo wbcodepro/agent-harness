@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -59,7 +60,9 @@ struct Driver {
     live: Arc<tokio::sync::Mutex<Live>>,
     session_id: SessionId,
     cancel: Arc<Notify>,
-    pending_approval: Option<oneshot::Sender<Option<bool>>>,
+    /// Questions awaiting an answer, oldest first. Calls that run at the
+    /// same time can each ask.
+    approvals: VecDeque<(String, oneshot::Sender<Option<bool>>)>,
 }
 
 impl Driver {
@@ -214,7 +217,7 @@ where
             runtime: live.runtime,
         })),
         cancel: Arc::new(Notify::new()),
-        pending_approval: None,
+        approvals: VecDeque::new(),
     };
     app.status = driver.status(&*driver.live.lock().await);
     if app.input.is_empty() && resume.is_none() {
@@ -237,8 +240,11 @@ where
                 }
             }
             Msg::Approval(question, answer) => {
-                app.approval = Some(question);
-                driver.pending_approval = Some(answer);
+                driver.approvals.push_back((question, answer));
+                app.approval = driver
+                    .approvals
+                    .front()
+                    .map(|(question, _)| question.clone());
             }
             Msg::Terminal(TermEvent::Key(key)) if key.kind != KeyEventKind::Release => {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -249,10 +255,13 @@ where
                         _ => None,
                     };
                     if let Some(decision) = decision {
-                        app.approval = None;
-                        if let Some(answer) = driver.pending_approval.take() {
+                        if let Some((_, answer)) = driver.approvals.pop_front() {
                             let _ = answer.send(Some(decision));
                         }
+                        app.approval = driver
+                            .approvals
+                            .front()
+                            .map(|(question, _)| question.clone());
                     }
                     continue;
                 }
