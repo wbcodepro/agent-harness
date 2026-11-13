@@ -277,7 +277,7 @@ fn lenient_replace(text: &str, old: &str, new: &str) -> Option<String> {
 /// Says how far `old` gets in `text` before it stops matching, for the
 /// error shown when an edit finds nothing. "Not found" alone sends a model
 /// back to retry the same text; the line where it goes wrong does not.
-fn where_it_differs(text: &str, old: &str) -> String {
+pub(crate) fn where_it_differs(text: &str, old: &str) -> String {
     let clip = |line: &str| -> String { line.trim().chars().take(160).collect() };
     let file: Vec<&str> = text.lines().collect();
     let wanted: Vec<&str> = old.trim_matches('\n').lines().collect();

@@ -66,6 +66,9 @@ enum Line {
 struct Hunk {
     /// Text after `@@`: a line somewhere above the change, to find it by.
     anchor: Option<String>,
+    /// The line number from a `@@ -12,7 +12,7 @@` header, 1-based: about
+    /// where the change is, as a model that writes ordinary diffs gives it.
+    near_line: Option<usize>,
     lines: Vec<Line>,
     /// The hunk ends at the end of the file.
     at_end: bool,
@@ -73,7 +76,7 @@ struct Hunk {
 
 impl Hunk {
     fn is_empty(&self) -> bool {
-        self.anchor.is_none() && self.lines.is_empty()
+        self.anchor.is_none() && self.near_line.is_none() && self.lines.is_empty()
     }
 
     fn changes_something(&self) -> bool {
@@ -200,7 +203,19 @@ fn parse(patch: &str) -> Result<Vec<Op>, String> {
                             hunks.push(Hunk::default());
                         }
                         if let Some(hunk) = hunks.last_mut() {
-                            hunk.anchor = (!anchor.is_empty()).then(|| anchor.to_string());
+                            // `-12,7 +12,7` is a position, not a line of text.
+                            let line = anchor
+                                .strip_prefix('-')
+                                .filter(|_| anchor.contains(" +"))
+                                .and_then(|rest| {
+                                    rest.split([',', ' ']).next()?.parse::<usize>().ok()
+                                });
+                            match line {
+                                Some(line) => hunk.near_line = Some(line),
+                                None => {
+                                    hunk.anchor = (!anchor.is_empty()).then(|| anchor.to_string());
+                                }
+                            }
                         }
                     } else if let Some(hunk) = hunks.last_mut() {
                         hunk.lines.push(if let Some(text) = line.strip_prefix('+') {
@@ -249,6 +264,26 @@ fn find(lines: &[String], needle: &[&str], from: usize) -> Option<usize> {
     })
 }
 
+/// Like [`find`], but among all the places `needle` occurs, the one
+/// closest to row `target`.
+fn find_near(lines: &[String], needle: &[&str], target: usize) -> Option<usize> {
+    if needle.len() > lines.len() {
+        return None;
+    }
+    let last = lines.len() - needle.len();
+    let passes: [fn(&str) -> &str; 3] = [|line| line, str::trim_end, str::trim];
+    passes.iter().find_map(|normalize| {
+        (0..=last)
+            .filter(|&start| {
+                needle
+                    .iter()
+                    .zip(&lines[start..])
+                    .all(|(want, have)| normalize(want) == normalize(have))
+            })
+            .min_by_key(|&start| start.abs_diff(target))
+    })
+}
+
 fn apply_hunks(path: &str, text: &str, hunks: &[Hunk]) -> Result<String, String> {
     let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let ends_with_newline = text.ends_with('\n') || text.is_empty();
@@ -277,13 +312,19 @@ fn apply_hunks(path: &str, text: &str, hunks: &[Hunk]) -> Result<String, String>
             }
         }
         let at = if old.is_empty() {
-            if hunk.anchor.is_some() && !hunk.at_end {
+            if let Some(line) = hunk.near_line.filter(|_| !hunk.at_end) {
+                line.saturating_sub(1).min(lines.len())
+            } else if hunk.anchor.is_some() && !hunk.at_end {
                 (from + 1).min(lines.len())
             } else {
                 lines.len()
             }
         } else {
-            let found = if hunk.at_end {
+            let found = if let Some(line) = hunk.near_line {
+                // A line number is a hint: of the places that match, take
+                // the one closest to it.
+                find_near(&lines, &old, line.saturating_sub(1))
+            } else if hunk.at_end {
                 // Search from the end of the file first.
                 let tail = lines.len().saturating_sub(old.len());
                 find(&lines, &old, tail.max(from)).or_else(|| find(&lines, &old, from))
@@ -294,10 +335,9 @@ fn apply_hunks(path: &str, text: &str, hunks: &[Hunk]) -> Result<String, String>
             match found.or_else(|| find(&lines, &old, 0)) {
                 Some(at) => at,
                 None => {
-                    let first = old.iter().find(|line| !line.trim().is_empty());
+                    let detail = crate::files::where_it_differs(&lines.join("\n"), &old.join("\n"));
                     return Err(describe(&format!(
-                        "these lines are not in the file (first one: {:?}).",
-                        first.copied().unwrap_or_default()
+                        "its unchanged and removed lines are not in the file as written.{detail}"
                     )));
                 }
             }
@@ -510,7 +550,11 @@ mod tests {
         .await;
         assert!(out.is_error);
         assert!(out.text.contains("b.txt"), "{}", out.text);
-        assert!(out.text.contains("\"delta\""), "{}", out.text);
+        assert!(
+            out.text.contains("None of its lines are in the file"),
+            "{}",
+            out.text
+        );
         assert_eq!(
             fs::read_to_string(dir.path().join("a.txt")).unwrap(),
             "alpha\nbeta\n"
@@ -558,6 +602,21 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.path().join("w.rs")).unwrap(),
             "fn main() {\r\n    let x = 1;\r\n\r\n    println!(\"{x}\");\r\n}\r\n"
+        );
+
+        // A model used to ordinary diffs writes line ranges after @@. They
+        // say where to look: the second of two identical lines is the one
+        // changed, and lines added with only a range go at that line.
+        fs::write(dir.path().join("dup.txt"), "x = 1\ny = 2\nx = 1\ny = 2\n").unwrap();
+        let out = apply(
+            dir.path(),
+            "*** Begin Patch\n*** Update File: dup.txt\n@@ -3,2 +3,2 @@\n x = 1\n-y = 2\n+y = 3\n@@ -1,0 +1,1 @@\n+# header\n*** End Patch",
+        )
+        .await;
+        assert!(!out.is_error, "{}", out.text);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("dup.txt")).unwrap(),
+            "# header\nx = 1\ny = 2\nx = 1\ny = 3\n"
         );
 
         // Lines added with no context go to the end of the file.
