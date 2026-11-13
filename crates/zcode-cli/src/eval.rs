@@ -45,6 +45,10 @@ pub struct EvalArgs {
     /// directory, to see what went wrong.
     #[arg(long)]
     keep: Option<PathBuf>,
+    /// Run every task with this file as the agent's config.toml, to
+    /// measure a configuration.
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -292,7 +296,12 @@ async fn run_suite(
 
 pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
     let tasks = tasks_in(&args.suite, args.filter.as_deref())?;
-    let outcomes = run_suite(home, &args, &tasks, "", args.keep.as_deref()).await?;
+    let config = match &args.config {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?,
+        None => String::new(),
+    };
+    let outcomes = run_suite(home, &args, &tasks, &config, args.keep.as_deref()).await?;
 
     println!(
         "{:<24} {:>6} {:>7} {:>5} {:>6} {:>9} {:>9} {:>8}",
@@ -416,6 +425,7 @@ pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
         command: None,
         json: None,
         keep: None,
+        config: None,
     };
     let mut trials: Vec<Trial> = Vec::new();
     let try_setting = async |edit_format: &'static str, tools: &'static str| {
