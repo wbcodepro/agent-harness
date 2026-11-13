@@ -207,3 +207,56 @@ fn read_only_mode_writes_nothing_and_partial_confinement_must_be_accepted() {
     );
     assert!(!fx.work.join("d.txt").exists());
 }
+
+#[test]
+fn commands_started_by_the_shell_tool_inherit_the_confinement() {
+    let fx = Fixture::new();
+    let outside = fx.root.join("outside");
+    fs::create_dir(&outside).unwrap();
+    let home = fx.home("home", "[sandbox]\nallow_partial = true\n");
+    // Forward slashes: the path goes through a POSIX shell.
+    let target = outside
+        .join("from-shell.txt")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+
+    let (output, results) = fx.run(
+        &home,
+        vec![
+            (
+                "bash",
+                json!({"command": "echo inside > shell.txt && cat shell.txt"}),
+            ),
+            (
+                "bash",
+                json!({"command": format!("echo escaped > '{target}'")}),
+            ),
+            // A grandchild process is confined as well.
+            (
+                "bash",
+                json!({"command": format!("bash -c \"echo escaped > '{target}'\"")}),
+            ),
+        ],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(results.len(), 3, "{stderr}");
+    assert!(
+        !results[0].1,
+        "the shell must work inside the workspace: {results:#?}"
+    );
+    assert!(results[0].0.contains("inside"));
+    assert!(
+        fs::read_to_string(fx.work.join("shell.txt"))
+            .unwrap()
+            .contains("inside")
+    );
+    assert!(results[1].1 && results[2].1, "{results:#?}");
+    assert_eq!(
+        fs::read_dir(&outside).unwrap().count(),
+        0,
+        "nothing was created outside"
+    );
+}
