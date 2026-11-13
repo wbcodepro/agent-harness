@@ -34,7 +34,7 @@ zcode web                              # giao diện web trên 127.0.0.1
 zcode acp                              # máy chủ Agent Client Protocol cho editor
 zcode sessions | show <id> | fork <id> | rewind <id> | recover <id>
 zcode import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
-zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
+zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token (--keep <thư mục>: giữ log của tác vụ hỏng)
 zcode eval evals/harder --command 'codex exec "$ZCODE_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
 zcode skill install <thư mục | URL git> [--path thư/mục/con]   # quét rồi cài một skill vào ~/.zcode/skills
 zcode skill list
@@ -78,10 +78,8 @@ Mặc định (`workspace-write`):
 - Mạng chỉ đi qua proxy cục bộ tới danh sách tên miền cho phép.
 - Biến môi trường của harness không tới được tool; secret chỉ tới khi bạn cấp (`[secrets] grant`), và giá trị của mọi secret bị thay bằng `[secret:TÊN]` trong đầu ra tool trước khi ghi log.
 - Trước mỗi lượt và sau mỗi bước có thay đổi, workspace được lưu vào một kho git riêng ngoài dự án; `zcode rewind` khôi phục file và tạo session mới dừng ngay trước lượt đó.
-
 - Thay đổi mà một lần gọi tool gây ra cho `.git/hooks` và `.git/config` của repo ở thư mục làm việc bị hoàn tác ngay sau lần gọi đó và model được báo (`[sandbox] protect_git = false` để tắt). Đây là phát hiện rồi hoàn tác, không phải ngăn chặn: hook vẫn tồn tại trong lúc lệnh đang chạy. Repo do chính lần gọi đó tạo ra (`git init`) không được bảo vệ.
 - Luật quyền cho `bash` được so với từng lệnh trong dòng (các phần ngăn bởi `;`, `&&`, `||`, `|`, phần trong `$(...)` và backtick, lệnh sau `sudo`/`env`…): luật `deny`/`ask` có hiệu lực dù lệnh nằm ở đâu trong dòng, còn luật `allow` chỉ áp dụng khi mọi lệnh trong dòng đều được cho phép. Bộ tách lệnh không phải là một trình phân tích shell đầy đủ.
-
 - Với `[approval] reviewer = true`, một model thứ hai xem từng lời gọi cần xin phép (chỉ thấy tên tool, tham số và thư mục làm việc, không thấy hội thoại) và chỉ tự đồng ý khi lời gọi rõ ràng vô hại; mọi trường hợp khác, kể cả khi nó trả lời không rõ, vẫn được hỏi bạn. Mọi phán quyết được ghi vào `~/.zcode/approvals.jsonl`. Đây là một model, có thể phán sai: nó giảm số lần bị hỏi, không thay cho sandbox.
 
 `--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
@@ -90,7 +88,7 @@ Giới hạn cần biết:
 
 - Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
 - Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
-- Windows chỉ giam được việc **ghi**: tiến trình chạy tool bị hạ xuống mức toàn vẹn Low nên chỉ ghi được trong thư mục dự án và một thư mục tạm riêng (`AppData\LocalLow\zcode-tmp`). Tool vẫn đọc được mọi file bạn đọc được và vẫn ra mạng được, nên phải bật rõ ràng bằng `allow_partial = true` trong `[sandbox]`; không bật thì các chế độ giam từ chối khởi động. Thư mục dự án được gắn nhãn Low vĩnh viễn (chương trình Low khác của cùng người dùng cũng ghi được vào đó). Lệnh chạy qua tool `bash` trên Windows chưa được kiểm thử.
+- Windows chỉ giam được việc **ghi**: tiến trình chạy tool bị hạ xuống mức toàn vẹn Low nên chỉ ghi được trong thư mục dự án và một thư mục tạm riêng (`AppData\LocalLow\zcode-tmp`). Tool vẫn đọc được mọi file bạn đọc được và vẫn ra mạng được, nên phải bật rõ ràng bằng `allow_partial = true` trong `[sandbox]`; không bật thì các chế độ giam từ chối khởi động. Thư mục dự án được gắn nhãn Low vĩnh viễn (chương trình Low khác của cùng người dùng cũng ghi được vào đó). Phần Windows mới chỉ được kiểm trên máy của GitHub Actions (kể cả lệnh chạy qua tool `bash`), chưa trên một máy Windows có người dùng thật; xem `docs/WINDOWS.md`.
 - Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
 
 ## Cấu hình
