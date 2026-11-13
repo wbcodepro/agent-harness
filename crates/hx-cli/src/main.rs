@@ -34,6 +34,17 @@ enum Command {
     Acp,
     /// List sessions.
     Sessions,
+    /// Import a session recorded by another harness.
+    Import {
+        /// Where the session comes from. Supported: dsh (DeepSeek Harness).
+        format: String,
+        /// The session log file.
+        file: PathBuf,
+        /// Working directory for the imported session. Defaults to the one
+        /// it was recorded in.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
     /// Undo a turn: restore the workspace to how it was when the turn began
     /// and continue in a new session that ends just before it.
     Rewind {
@@ -144,6 +155,10 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             );
             println!("{}", rewound.session);
         }
+        Command::Import { format, file, cwd } => match format.as_str() {
+            "dsh" => println!("{}", hx_app::import_dsh(&store, &file, cwd.as_deref())?),
+            other => return Err(format!("cannot import {other:?} sessions; supported: dsh")),
+        },
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);

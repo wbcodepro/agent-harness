@@ -3,6 +3,8 @@
 //! Every front end (one-shot CLI, TUI, server) builds its agent here so they
 //! all enforce the same policy.
 
+mod import;
+
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +29,7 @@ use hx_verify::Verifier;
 pub use hx_policy::NetworkMode as NetworkChoice;
 pub use hx_policy::Prompter;
 pub use hx_sandbox::Mode as SandboxMode;
+pub use import::import_dsh;
 
 /// A model provider hx can talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
