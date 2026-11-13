@@ -47,6 +47,13 @@ Windows này và sửa những gì hỏng. Đọc README.md và docs/WINDOWS.md 
    - Thư mục dự án bị gắn nhãn Low vĩnh viễn (icacls <thư mục> để xem). Xác nhận điều đó
      không làm hỏng việc dùng thư mục bằng các công cụ khác.
 
+   - Các phần thêm ngày 2026-11-14, chưa từng biên dịch hay chạy trên Windows: tool
+     `apply_patch` (đặt `[model] edit_format = "apply-patch"`) với file dùng CRLF; bảo vệ
+     `.git` (yêu cầu agent sửa `.git/config` hoặc thêm file vào `.git/hooks`, thay đổi phải
+     bị hoàn tác và model được báo); `zcode run --output json`; hooks kiểu Claude Code
+     (`[compat] claude_hooks`) cần `sh` trong PATH, báo lại nếu không chạy được; server MCP
+     qua HTTP (`[mcp.x] url = ...`); `zcode probe evals/basic`.
+
 4. Giới hạn đã biết, không cần sửa nhưng cần xác nhận đúng như mô tả: trên Windows zcode
    chỉ giam được việc ghi; tool vẫn đọc được mọi file người dùng đọc được và vẫn ra mạng
    được. Nếu bạn thấy cách khả thi để ẩn file bí mật hoặc chặn mạng mà không cần quyền

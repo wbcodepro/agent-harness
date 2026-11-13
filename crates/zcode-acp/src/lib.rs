@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Notify, mpsc, oneshot};
-use zcode_agent::{AgentError, Session, ToolRequest};
+use zcode_agent::{AgentError, Session, Steering, ToolRequest};
 use zcode_app::{Options, Prompter, Runtime};
 use zcode_kernel::BoxFuture;
 use zcode_session::{Block, Delta, Event, Record, SessionId, TurnEndReason};
@@ -36,6 +36,9 @@ struct Entry {
     state: tokio::sync::Mutex<(Session, Runtime)>,
     cancel: Notify,
     cwd: PathBuf,
+    /// Messages for the running turn. Kept outside `state`, which is
+    /// locked for as long as a turn runs.
+    steering: Steering,
 }
 
 struct Server {
@@ -128,6 +131,17 @@ where
             (Some("session/cancel"), None) => {
                 if let Some(entry) = server.entry(message["params"]["sessionId"].as_str()) {
                     entry.cancel.notify_waiters();
+                }
+            }
+            // Extension: say something to the turn that is running.
+            (Some("_zcode/steer"), None) => {
+                let params = &message["params"];
+                if let Some(entry) = server.entry(params["sessionId"].as_str())
+                    && let Some(text) = params["text"]
+                        .as_str()
+                        .filter(|text| !text.trim().is_empty())
+                {
+                    entry.steering.push(text);
                 }
             }
             (Some(_), None) => {}
@@ -225,9 +239,16 @@ impl Server {
         }))
     }
 
-    async fn runtime(&self, id: &str, cwd: &Path, plan: bool) -> Result<Runtime, RpcError> {
+    async fn runtime(
+        &self,
+        id: &str,
+        cwd: &Path,
+        plan: bool,
+        steering: &Steering,
+    ) -> Result<Runtime, RpcError> {
         let mut options = self.options.clone();
         options.plan = plan;
+        options.steering = Some(steering.clone());
         options.prompter = Some(Arc::new(PermissionPrompter {
             session_id: id.to_string(),
             outbox: self.outbox.clone(),
@@ -250,7 +271,7 @@ impl Server {
             Some("act") => false,
             other => return Err(RpcError::invalid(format!("unknown mode {other:?}"))),
         };
-        let runtime = self.runtime(id, &entry.cwd, plan).await?;
+        let runtime = self.runtime(id, &entry.cwd, plan, &entry.steering).await?;
         entry.state.lock().await.1 = runtime;
         Ok(json!({}))
     }
@@ -293,7 +314,8 @@ impl Server {
             zcode_app::open_session(&store, existing, &cwd).map_err(RpcError::internal)?;
         let id = session.id().to_string();
 
-        let runtime = self.runtime(&id, &cwd, plan).await?;
+        let steering = Steering::default();
+        let runtime = self.runtime(&id, &cwd, plan, &steering).await?;
         let sandbox = format!("{:?}", runtime.policy.mode);
 
         let mut updates = Updates {
@@ -314,6 +336,7 @@ impl Server {
                 state: tokio::sync::Mutex::new((session, runtime)),
                 cancel: Notify::new(),
                 cwd,
+                steering,
             }),
         );
         Ok((id, sandbox))

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use zcode_agent::{Agent, Checkpointer, ToolPipeline, TurnHook};
-use zcode_agent::{Session, ToolRequest};
+use zcode_agent::{Session, Steering, ToolRequest};
 use zcode_checkpoint::GitCheckpoints;
 use zcode_checkpoint::Restored;
 use zcode_context::{Compactor, SpillLayer, load_instructions};
@@ -106,6 +106,9 @@ pub struct Options {
     /// Set by the harness when it builds a subagent: how deep the agent is,
     /// and what it shares with the agents above it.
     pub lineage: Option<Lineage>,
+    /// The queue of messages sent while a turn runs. Give the same one to
+    /// every agent built for a session, so the interface keeps one handle.
+    pub steering: Option<Steering>,
 }
 
 /// What a subagent inherits from the agent that started it.
@@ -128,6 +131,8 @@ pub struct Runtime {
     /// Present when the network is limited to an allowlist.
     pub proxy: Option<EgressProxy>,
     pub secrets: Secrets,
+    /// Push a message here to hand it to the running turn.
+    pub steering: Steering,
 }
 
 /// The directory where checkpoints of `cwd` are kept.
@@ -495,6 +500,8 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             if spec.read_only {
                 options.sandbox = Some(Mode::ReadOnly);
             }
+            // What the user types is for the agent they are talking to.
+            options.steering = None;
             Box::pin(async move {
                 let mut runtime = build(&home, &spec.cwd, &options).await?;
                 if spec.read_only {
@@ -545,6 +552,10 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
 
     zcode_agent::deferred::declare_deferred(&mut tools, &deferred);
+    // Last, so every other hook has had its say before a queued message
+    // is added to the conversation.
+    let steering = options.steering.clone().unwrap_or_default();
+    hooks.push(Arc::new(steering.clone()));
 
     let agent = Agent {
         llm,
@@ -565,6 +576,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         policy,
         proxy,
         secrets,
+        steering,
     })
 }
 

@@ -41,6 +41,7 @@ fn an_editor_can_run_a_confined_turn_over_stdio() {
             call("in", "inside.txt".into()),
             call("out", root.join("outside.txt").display().to_string()),
             ScriptedResponse::text("One written, one blocked."),
+            ScriptedResponse::text("Spaces it is."),
         ],
     }
     .save(&script)
@@ -97,6 +98,31 @@ fn an_editor_can_run_a_confined_turn_over_stdio() {
     );
     assert!(work.join("inside.txt").exists());
     assert!(!root.join("outside.txt").exists());
+
+    // The steering extension: a message for the turn in progress. Sent
+    // just ahead of the prompt here so the order is certain; it is handed
+    // to the model with that turn.
+    request(json!({"jsonrpc": "2.0", "method": "_zcode/steer",
+        "params": {"sessionId": session, "text": "Use spaces, not tabs."}}));
+    request(
+        json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+        "params": {"sessionId": session, "prompt": [{"type": "text", "text": "indent it"}]}}),
+    );
+    assert_eq!(response_to(4).0["result"]["stopReason"], "end_turn");
+    let store = zcode_session::SessionStore::new(home.join("sessions"));
+    let said: Vec<String> = store
+        .read(&zcode_session::SessionId::parse(&session).unwrap())
+        .unwrap()
+        .iter()
+        .filter_map(|record| match &record.event {
+            zcode_session::Event::UserMessage { content } => match &content[0] {
+                zcode_session::Block::Text { text } => Some(text.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(said, ["write", "indent it", "Use spaces, not tabs."]);
 
     drop(request);
     drop(stdin);

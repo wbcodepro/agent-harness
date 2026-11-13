@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
-use zcode_agent::{Agent, AgentError, Session, ToolPipeline, ToolRequest};
+use zcode_agent::{Agent, AgentError, Session, Steering, ToolPipeline, ToolRequest};
 use zcode_eval::{Recording, ScriptedLlm, ScriptedResponse};
 use zcode_kernel::{BoxFuture, Layer, Next};
 use zcode_llm::{Completion, DeltaSink, Llm, LlmError, Request};
@@ -334,6 +334,83 @@ async fn deferred_tools_are_found_by_search_and_run_under_their_own_names() {
         results[3].0.contains("no tool named \"launch\"") && results[3].1,
         "{}",
         results[3].0
+    );
+}
+
+/// Has the user say something while the first tool call is running.
+struct Interject(Steering);
+
+impl Layer<ToolRequest, ToolOutput> for Interject {
+    fn call<'a>(
+        &'a self,
+        request: ToolRequest,
+        next: Next<'a, ToolRequest, ToolOutput>,
+    ) -> BoxFuture<'a, ToolOutput> {
+        if request.call_id == "c1" {
+            self.0.push("Also add a README.");
+        }
+        next.run(request)
+    }
+}
+
+#[tokio::test]
+async fn a_message_sent_mid_turn_reaches_the_model_at_the_next_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            tool_call("c1", "write", json!({"path": "a.txt", "content": "x"})),
+            ScriptedResponse::text("Done, with a README."),
+            ScriptedResponse::text("Stopped as asked."),
+        ],
+    }));
+    let steering = Steering::default();
+    let mut agent = agent(llm, dir.path());
+    agent.hooks.push(Arc::new(steering.clone()));
+    agent.pipeline.push(Interject(steering.clone()));
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent
+        .run_turn(&mut session, user("Make a.txt"))
+        .await
+        .unwrap();
+
+    // The message sits after the tool result it arrived during, and before
+    // the model's next answer.
+    let order: Vec<String> = session
+        .history()
+        .messages
+        .iter()
+        .map(|message| match &message.content[0] {
+            Block::Text { text } => text.clone(),
+            Block::ToolUse { name, .. } => format!("call {name}"),
+            Block::ToolResult { .. } => "result".into(),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "Make a.txt",
+            "call write",
+            "result",
+            "Also add a README.",
+            "Done, with a README."
+        ]
+    );
+
+    // One that arrives as the model stops keeps the turn going.
+    steering.push("Actually, stop there.");
+    use zcode_agent::TurnHook;
+    let follow_up = steering
+        .before_stop(session.records(), false)
+        .await
+        .unwrap();
+    assert!(matches!(&follow_up[0], Block::Text { text } if text == "Actually, stop there."));
+    assert!(
+        steering
+            .before_stop(session.records(), false)
+            .await
+            .is_none()
     );
 }
 

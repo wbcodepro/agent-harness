@@ -7,6 +7,9 @@
 //! saw and did.
 
 pub mod deferred;
+mod steer;
+
+pub use steer::Steering;
 
 use std::sync::Arc;
 

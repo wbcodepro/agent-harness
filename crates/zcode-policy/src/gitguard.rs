@@ -127,6 +127,7 @@ impl Layer<ToolRequest, ToolOutput> for GitGuard {
                             .unwrap_or(path)
                             .display()
                             .to_string()
+                            .replace('\\', "/")
                     })
                     .collect();
                 output.text.push_str(&format!(

@@ -43,7 +43,7 @@ Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`,
 
 Cuối mỗi lần `zcode run`, một dòng tổng kết in ra stderr: số token gửi đi, bao nhiêu phần trăm được đọc từ cache của nhà cung cấp, số token nhận về và số request. Nếu phần lớn prompt không được dùng lại giữa các request, zcode cảnh báo.
 
-Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy.
+Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy. Gõ rồi Enter trong lúc một lượt đang chạy sẽ gửi lời nhắn đó cho chính lượt ấy: model nhận nó ở request kế tiếp, không phải đợi lượt kết thúc (qua ACP là thông báo mở rộng `_zcode/steer`).
 
 ### Trong editor (ACP)
 

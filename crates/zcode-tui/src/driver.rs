@@ -23,7 +23,7 @@ const HELP: &str = "/plan  toggle plan mode (read-only, proposes a plan)\n\
 /rewind  undo the last turn, files included\n\
 /new  start a new session\n\
 /quit  leave (Ctrl-D)\n\
-Esc cancels a running turn. PageUp and PageDown scroll.";
+Esc cancels a running turn; Enter while one runs sends your message to it. PageUp and PageDown scroll.";
 
 /// What a request we sent was for, so its response can be acted on.
 enum Sent {
@@ -390,6 +390,19 @@ where
                         app.input.pop();
                     }
                     KeyCode::Char(c) if !ctrl => app.input.push(c),
+                    // While a turn runs, what is typed goes to that turn.
+                    KeyCode::Enter
+                        if app.busy
+                            && !app.input.trim().is_empty()
+                            && !app.input.starts_with('/')
+                            && !driver.session.is_empty() =>
+                    {
+                        let line = std::mem::take(&mut app.input);
+                        driver.client.notify(
+                            "_zcode/steer",
+                            json!({"sessionId": driver.session, "text": line}),
+                        );
+                    }
                     KeyCode::Enter
                         if !app.busy
                             && !app.input.trim().is_empty()
