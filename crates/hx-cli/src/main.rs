@@ -12,14 +12,26 @@ struct Cli {
     /// Data directory. Defaults to $HX_HOME, then ~/.hx.
     #[arg(long, global = true)]
     home: Option<PathBuf>,
+    /// With no command, opens the interactive interface.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Run one turn: send a prompt and let the agent work until it answers.
     Run(run::RunArgs),
+    /// Open the interactive interface (the default).
+    Tui {
+        /// Continue this session instead of starting a new one.
+        #[arg(long)]
+        session: Option<String>,
+        /// Start in plan mode.
+        #[arg(long)]
+        plan: bool,
+    },
+    /// Serve the Agent Client Protocol on stdin/stdout, for editors.
+    Acp,
     /// List sessions.
     Sessions,
     /// Undo a turn: restore the workspace to how it was when the turn began
@@ -75,7 +87,11 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<ExitCode, String> {
     // The internal commands run confined and must not touch the data
     // directory.
-    match &cli.command {
+    let command = cli.command.unwrap_or(Command::Tui {
+        session: None,
+        plan: false,
+    });
+    match &command {
         Command::ToolWorker => {
             let code = hx_sandbox::worker_main(&hx_tools::ToolSet::builtin()).await;
             return Ok(ExitCode::from(code));
@@ -90,56 +106,43 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         .ok_or("cannot find a home directory; pass --home or set HX_HOME")?;
     let store = SessionStore::new(home.join("sessions"));
 
-    match cli.command {
+    match command {
+        Command::Tui { session, plan } => {
+            let resume = session.as_deref().map(parse_id).transpose()?;
+            let cwd = match &resume {
+                Some(id) => hx_app::session_cwd(&store, id)?,
+                None => std::env::current_dir()
+                    .and_then(|cwd| cwd.canonicalize())
+                    .map_err(display)?,
+            };
+            let options = hx_app::Options {
+                max_steps: 50,
+                plan,
+                ..hx_app::Options::default()
+            };
+            hx_tui::run(home, cwd, options, resume).await?;
+        }
         Command::Run(args) => return run::run(&home, &store, args).await,
         Command::ToolWorker | Command::SandboxExec { .. } => unreachable!("handled above"),
-        Command::Rewind { id, turn } => {
-            let id = parse_id(&id)?;
-            let records = store.read(&id).map_err(display)?;
-            let turn = match turn {
-                Some(turn) => turn,
-                None => records
-                    .iter()
-                    .filter_map(|record| match record.event {
-                        Event::TurnStart { turn } => Some(turn),
-                        _ => None,
-                    })
-                    .max()
-                    .ok_or("the session has no turns")?,
+        Command::Acp => {
+            let options = hx_app::Options {
+                max_steps: 50,
+                ..hx_app::Options::default()
             };
-            let start = records
-                .iter()
-                .position(|record| record.event == Event::TurnStart { turn })
-                .ok_or(format!("the session has no turn {turn}"))?;
-            // The checkpoint taken as the turn began, before it changed
-            // anything.
-            let commit = records[start..]
-                .iter()
-                .take_while(|record| !matches!(record.event, Event::TurnEnd { .. }))
-                .find_map(|record| match &record.event {
-                    Event::Checkpoint { commit } => Some(commit.clone()),
-                    _ => None,
-                })
-                .ok_or(format!("turn {turn} has no checkpoint to rewind to"))?;
-            let cwd = PathBuf::from(cwd_of(&records));
-            let checkpoints =
-                hx_checkpoint::GitCheckpoints::new(hx_app::checkpoint_dir(&home, &cwd), &cwd);
-            let restored = checkpoints.restore(&commit).await?;
-            let options = hx_session::CreateOptions {
-                id: None,
-                cwd: cwd.to_string_lossy().into_owned(),
-            };
-            let (_records, writer) = store
-                .fork(&id, records[start].seq - 1, options)
+            hx_acp::serve(home, options, tokio::io::stdin(), tokio::io::stdout())
+                .await
                 .map_err(display)?;
-            for name in &restored.removed {
+        }
+        Command::Rewind { id, turn } => {
+            let rewound = hx_app::rewind(&home, &store, &parse_id(&id)?, turn).await?;
+            for name in &rewound.restored.removed {
                 eprintln!("removed {name}");
             }
             eprintln!(
-                "workspace restored to the start of turn {turn}; to undo: checkpoint {}",
-                restored.before
+                "workspace restored to the start of turn {}; to undo: checkpoint {}",
+                rewound.turn, rewound.restored.before
             );
-            println!("{}", writer.id());
+            println!("{}", rewound.session);
         }
         Command::Sessions => {
             for header in store.list().map_err(display)? {

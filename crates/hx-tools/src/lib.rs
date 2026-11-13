@@ -160,6 +160,11 @@ impl ToolSet {
         self.tools.push(tool);
     }
 
+    /// Keeps only the tools for which `keep` returns true.
+    pub fn retain(&mut self, keep: impl Fn(&Arc<dyn Tool>) -> bool) {
+        self.tools.retain(keep);
+    }
+
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools
             .iter()

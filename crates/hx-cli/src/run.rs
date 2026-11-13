@@ -53,6 +53,9 @@ pub struct RunArgs {
     /// Answer yes to every approval question.
     #[arg(long)]
     yes: bool,
+    /// Plan mode: investigate and propose a plan without changing anything.
+    #[arg(long)]
+    plan: bool,
 }
 
 pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
@@ -71,6 +74,8 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         model: args.model.clone(),
         base_url: args.base_url.clone(),
         max_steps: args.max_steps,
+        plan: args.plan,
+        ..Options::default()
     };
 
     // Resolve the working directory first: a new session uses the flag or

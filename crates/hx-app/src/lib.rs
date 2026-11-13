@@ -9,26 +9,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hx_agent::{Agent, Checkpointer, ToolPipeline, TurnHook};
+use hx_agent::{Session, ToolRequest};
 use hx_checkpoint::GitCheckpoints;
+use hx_checkpoint::Restored;
 use hx_context::{Compactor, SpillLayer, load_instructions};
 use hx_eval::{Recording, ScriptedLlm};
 use hx_kernel::BoxFuture;
 use hx_llm::{ChatCompletions, Llm};
 use hx_policy::{
-    ApprovalLayer, Config, NetworkMode, ProjectConfig, Prompter, RedactLayer, RuleAction, Secrets,
+    ApprovalLayer, Config, NetworkMode, ProjectConfig, RedactLayer, RuleAction, Secrets,
 };
 use hx_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
-use hx_tools::{Bash, ToolContext, ToolRunner, ToolSet};
+use hx_session::{CreateOptions, Event, SessionId, SessionStore};
+use hx_tools::{Bash, Effect, ToolContext, ToolRunner, ToolSet};
 use hx_verify::Verifier;
 
 pub use hx_policy::NetworkMode as NetworkChoice;
+pub use hx_policy::Prompter;
 pub use hx_sandbox::Mode as SandboxMode;
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 const DEFAULT_MODEL: &str = "deepseek-flash";
 
 /// Per-invocation choices that override the configuration file.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     pub sandbox: Option<Mode>,
     pub network: Option<NetworkMode>,
@@ -37,7 +41,22 @@ pub struct Options {
     pub model: Option<String>,
     pub base_url: Option<String>,
     pub max_steps: u64,
+    /// Plan mode: nothing can be changed, and the agent is told to produce
+    /// a plan instead of doing the work.
+    pub plan: bool,
+    /// Who answers approval questions. Defaults to the terminal when there
+    /// is one, otherwise nobody.
+    pub prompter: Option<Arc<dyn Prompter>>,
+    /// Model to use instead of the configured provider.
+    pub llm: Option<Arc<dyn Llm>>,
+    /// Tool runner to use instead of confined worker processes. For
+    /// embedding and tests; it bypasses the sandbox.
+    pub runner: Option<Arc<dyn ToolRunner>>,
 }
+
+const PLAN_MODE: &str = "\n\nYou are in plan mode. Investigate with the read-only tools, then \
+answer with a concrete, step-by-step plan for the user to approve: what you will change, in \
+which files, and how you will verify it. Do not change anything; the sandbox is read-only.";
 
 /// An agent plus the background pieces that must live as long as it does.
 pub struct Runtime {
@@ -79,10 +98,17 @@ pub fn load_secrets(home: &Path, cwd: &Path) -> Result<Secrets, String> {
 pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime, String> {
     let config = load_config(home)?;
     let secrets = load_secrets(home, cwd)?;
-    let llm = llm(&config, &secrets, options)?;
+    let llm = match &options.llm {
+        Some(llm) => Arc::clone(llm),
+        None => llm(&config, &secrets, options)?,
+    };
 
     // Confinement.
-    let mode = options.sandbox.unwrap_or(config.sandbox.mode);
+    let mode = if options.plan {
+        Mode::ReadOnly
+    } else {
+        options.sandbox.unwrap_or(config.sandbox.mode)
+    };
     let mut policy = match mode {
         Mode::WorkspaceWrite => {
             let mut policy = SandboxPolicy::workspace(cwd);
@@ -125,12 +151,15 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
         .iter()
         .filter_map(|name| Some((name.clone(), secrets.get(name)?.to_string())))
         .collect();
-    let runner: Arc<dyn ToolRunner> = Arc::new(SandboxedRunner {
-        helper: std::env::current_exe()
-            .map_err(|e| format!("cannot find the hx executable: {e}"))?,
-        policy: policy.clone(),
-        env: granted,
-    });
+    let runner: Arc<dyn ToolRunner> = match &options.runner {
+        Some(runner) => Arc::clone(runner),
+        None => Arc::new(SandboxedRunner {
+            helper: std::env::current_exe()
+                .map_err(|e| format!("cannot find the hx executable: {e}"))?,
+            policy: policy.clone(),
+            env: granted,
+        }),
+    };
 
     // Layers, outermost first: spill what is left after redaction, redact
     // (so refusals are covered too), then decide whether the call runs.
@@ -148,6 +177,8 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
     });
     let prompter: Arc<dyn Prompter> = if options.yes {
         Arc::new(Always(Some(true)))
+    } else if let Some(prompter) = &options.prompter {
+        Arc::clone(prompter)
     } else if std::io::stdin().is_terminal() {
         Arc::new(Terminal)
     } else {
@@ -190,15 +221,22 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
         }));
     }
 
+    let mut tools = ToolSet::builtin();
+    let mut system = system_prompt(cwd, &policy) + &load_instructions(home, cwd);
+    if options.plan {
+        tools.retain(|tool| tool.effect() != Effect::Write);
+        system.push_str(PLAN_MODE);
+    }
+
     let agent = Agent {
         llm,
-        tools: ToolSet::builtin(),
+        tools,
         pipeline,
         tool_context: ToolContext::new(cwd),
         runner,
         checkpointer,
         hooks,
-        system: system_prompt(cwd, &policy) + &load_instructions(home, cwd),
+        system,
         max_steps: options.max_steps,
         max_tokens: None,
     };
@@ -294,7 +332,11 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Arc<dyn 
 struct Always(Option<bool>);
 
 impl Prompter for Always {
-    fn ask(&self, _question: String) -> BoxFuture<'_, Option<bool>> {
+    fn ask<'a>(
+        &'a self,
+        _request: &'a ToolRequest,
+        _question: String,
+    ) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async move { self.0 })
     }
 }
@@ -303,7 +345,11 @@ impl Prompter for Always {
 struct Terminal;
 
 impl Prompter for Terminal {
-    fn ask(&self, question: String) -> BoxFuture<'_, Option<bool>> {
+    fn ask<'a>(
+        &'a self,
+        _request: &'a ToolRequest,
+        question: String,
+    ) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 eprint!("{question}");
@@ -315,4 +361,97 @@ impl Prompter for Terminal {
             .unwrap_or(None)
         })
     }
+}
+
+pub fn session_store(home: &Path) -> SessionStore {
+    SessionStore::new(home.join("sessions"))
+}
+
+/// Opens `existing`, or creates a session rooted at `cwd`.
+pub fn open_session(
+    store: &SessionStore,
+    existing: Option<&SessionId>,
+    cwd: &Path,
+) -> Result<Session, String> {
+    let (records, writer) = match existing {
+        Some(id) => store.open(id).map_err(|e| e.to_string())?,
+        None => {
+            let writer = store
+                .create(CreateOptions {
+                    id: None,
+                    cwd: cwd.to_string_lossy().into_owned(),
+                })
+                .map_err(|e| e.to_string())?;
+            (store.read(writer.id()).map_err(|e| e.to_string())?, writer)
+        }
+    };
+    Ok(Session::new(records, writer))
+}
+
+/// The working directory a session was created in.
+pub fn session_cwd(store: &SessionStore, id: &SessionId) -> Result<PathBuf, String> {
+    let records = store.read(id).map_err(|e| e.to_string())?;
+    match records.first().map(|record| &record.event) {
+        Some(Event::Session(header)) => Ok(PathBuf::from(&header.cwd)),
+        _ => Err(format!("session {id} has no header")),
+    }
+}
+
+/// The result of [`rewind`].
+pub struct Rewound {
+    /// The new session, which ends just before the undone turn.
+    pub session: SessionId,
+    pub turn: u64,
+    pub restored: Restored,
+}
+
+/// Undoes `turn` (default: the last one) and everything after it: restores
+/// the workspace to the checkpoint taken as that turn began, and forks the
+/// session just before it. The original session is left as it was.
+pub async fn rewind(
+    home: &Path,
+    store: &SessionStore,
+    id: &SessionId,
+    turn: Option<u64>,
+) -> Result<Rewound, String> {
+    let records = store.read(id).map_err(|e| e.to_string())?;
+    let turn = match turn {
+        Some(turn) => turn,
+        None => records
+            .iter()
+            .filter_map(|record| match record.event {
+                Event::TurnStart { turn } => Some(turn),
+                _ => None,
+            })
+            .max()
+            .ok_or("the session has no turns")?,
+    };
+    let start = records
+        .iter()
+        .position(|record| record.event == Event::TurnStart { turn })
+        .ok_or(format!("the session has no turn {turn}"))?;
+    let commit = records[start..]
+        .iter()
+        .take_while(|record| !matches!(record.event, Event::TurnEnd { .. }))
+        .find_map(|record| match &record.event {
+            Event::Checkpoint { commit } => Some(commit.clone()),
+            _ => None,
+        })
+        .ok_or(format!("turn {turn} has no checkpoint to rewind to"))?;
+    let cwd = session_cwd(store, id)?;
+    let restored = GitCheckpoints::new(checkpoint_dir(home, &cwd), &cwd)
+        .restore(&commit)
+        .await?;
+    let options = CreateOptions {
+        id: None,
+        cwd: cwd.to_string_lossy().into_owned(),
+    };
+    let (_records, writer) = store
+        .fork(id, records[start].seq - 1, options)
+        .map_err(|e| e.to_string())?;
+    Ok(Rewound {
+        session: writer.id().clone(),
+        turn,
+        restored,
+    })
 }

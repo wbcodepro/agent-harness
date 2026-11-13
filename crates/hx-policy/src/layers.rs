@@ -41,8 +41,10 @@ fn subject(request: &ToolRequest) -> &str {
 
 /// Asks the user whether a tool call may run.
 pub trait Prompter: Send + Sync {
-    /// `None` means nobody can be asked.
-    fn ask(&self, question: String) -> BoxFuture<'_, Option<bool>>;
+    /// `request` is the call awaiting a decision and `question` a one-line
+    /// rendering of it. `None` means nobody can be asked.
+    fn ask<'a>(&'a self, request: &'a ToolRequest, question: String)
+    -> BoxFuture<'a, Option<bool>>;
 }
 
 /// Decides whether each tool call runs: the first matching rule, else the
@@ -93,7 +95,7 @@ impl Layer<ToolRequest, ToolOutput> for ApprovalLayer {
                         shown = request.input.to_string().chars().take(200).collect();
                     }
                     let question = format!("Allow {} {}? [y/N] ", request.name, shown);
-                    match self.prompter.ask(question).await {
+                    match self.prompter.ask(&request, question).await {
                         Some(true) => next.run(request).await,
                         Some(false) => ToolOutput::error("Denied by the user."),
                         None => ToolOutput::error(
@@ -153,7 +155,11 @@ mod tests {
     }
 
     impl Prompter for Scripted {
-        fn ask(&self, question: String) -> BoxFuture<'_, Option<bool>> {
+        fn ask<'a>(
+            &'a self,
+            _request: &'a ToolRequest,
+            question: String,
+        ) -> BoxFuture<'a, Option<bool>> {
             self.asked.lock().unwrap().push(question);
             Box::pin(async move { self.answer })
         }
