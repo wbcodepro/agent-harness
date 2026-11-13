@@ -64,7 +64,7 @@ impl Tool for Bash {
                 .unwrap_or(DEFAULT_TIMEOUT_MS)
                 .clamp(1, MAX_TIMEOUT_MS);
 
-            let mut command = Command::new("bash");
+            let mut command = Command::new(shell_program());
             command
                 .arg("-c")
                 .arg(&input.command)
@@ -141,6 +141,37 @@ impl Tool for Bash {
             }
         })
     }
+}
+
+/// The bash to run commands with.
+///
+/// On Windows the `bash` found first on the system path is usually the
+/// launcher for the Windows Subsystem for Linux, which runs commands in a
+/// different machine with a different filesystem. Git for Windows ships the
+/// bash that works on Windows paths, so that one is looked for by location.
+#[cfg(windows)]
+fn shell_program() -> std::path::PathBuf {
+    let roots = [
+        "ProgramFiles",
+        "ProgramW6432",
+        "ProgramFiles(x86)",
+        "LOCALAPPDATA",
+    ];
+    let layouts = [r"Git\bin\bash.exe", r"Programs\Git\bin\bash.exe"];
+    for root in roots.iter().filter_map(std::env::var_os) {
+        for layout in layouts {
+            let candidate = std::path::Path::new(&root).join(layout);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    "bash".into()
+}
+
+#[cfg(not(windows))]
+fn shell_program() -> &'static str {
+    "bash"
 }
 
 /// Collects a stream in the background, keeping at most [`CAPTURE_LIMIT`]
