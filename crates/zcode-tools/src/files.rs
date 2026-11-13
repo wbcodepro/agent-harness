@@ -151,12 +151,28 @@ impl Tool for Write {
             {
                 return ToolOutput::error(format!("Cannot create {}: {e}", parent.display()));
             }
+            // A model that means to change a few lines sometimes writes
+            // only those lines, and loses the rest of the file. It cannot
+            // be told apart from a deliberate rewrite, but it can be said.
+            let before = fs::read_to_string(&path).ok();
             match fs::write(&path, &input.content) {
-                Ok(()) => ToolOutput::ok(format!(
-                    "Wrote {} bytes to {}.",
-                    input.content.len(),
-                    path.display()
-                )),
+                Ok(()) => {
+                    let mut said =
+                        format!("Wrote {} bytes to {}.", input.content.len(), path.display());
+                    if let Some(before) = before
+                        && before.len() > 200
+                        && input.content.len() * 2 < before.len()
+                    {
+                        said.push_str(&format!(
+                            " Note: this replaced the whole file, which had {} lines and now \
+                             has {}. If you meant to change only part of it, the rest is gone: \
+                             write the complete file again.",
+                            before.lines().count(),
+                            input.content.lines().count()
+                        ));
+                    }
+                    ToolOutput::ok(said)
+                }
                 Err(e) => ToolOutput::error(format!("Cannot write {}: {e}", path.display())),
             }
         })
@@ -227,6 +243,72 @@ fn lenient_replace(text: &str, old: &str, new: &str) -> Option<String> {
     None
 }
 
+/// Says how far `old` gets in `text` before it stops matching, for the
+/// error shown when an edit finds nothing. "Not found" alone sends a model
+/// back to retry the same text; the line where it goes wrong does not.
+fn where_it_differs(text: &str, old: &str) -> String {
+    let clip = |line: &str| -> String { line.trim().chars().take(160).collect() };
+    let file: Vec<&str> = text.lines().collect();
+    let wanted: Vec<&str> = old.trim_matches('\n').lines().collect();
+    let Some(first) = wanted.iter().position(|line| !line.trim().is_empty()) else {
+        return String::new();
+    };
+    // The longest run of old_string's lines found in order in the file,
+    // ignoring leading and trailing whitespace.
+    let run_from = |at: usize| {
+        wanted[first..]
+            .iter()
+            .zip(&file[at..])
+            .take_while(|(want, have)| want.trim() == have.trim())
+            .count()
+    };
+    let best = (0..file.len())
+        .filter(|&at| file[at].trim() == wanted[first].trim())
+        .map(|at| (run_from(at), at))
+        .max_by_key(|(run, at)| (*run, std::cmp::Reverse(*at)));
+    match best {
+        Some((run, _)) if first + run == wanted.len() => {
+            " It matches more than one place when whitespace is ignored: add more surrounding \
+             lines to make it unique."
+                .to_string()
+        }
+        Some((run, at)) => {
+            let theirs = clip(wanted[first + run]);
+            match file.get(at + run) {
+                Some(ours) => format!(
+                    " It matches the file from line {} for {run} line(s), then differs. Your \
+                     next line is `{theirs}`, but line {} of the file is `{}`.",
+                    at + 1,
+                    at + run + 1,
+                    clip(ours)
+                ),
+                None => format!(
+                    " It matches the file from line {} for {run} line(s), but the file ends \
+                     there and your text goes on with `{theirs}`.",
+                    at + 1
+                ),
+            }
+        }
+        None => {
+            let later = wanted[first + 1..].iter().find_map(|line| {
+                let at = file
+                    .iter()
+                    .position(|have| !line.trim().is_empty() && have.trim() == line.trim())?;
+                Some((clip(line), at + 1))
+            });
+            match later {
+                Some((line, at)) => format!(
+                    " Its first line, `{}`, is not in the file, though `{line}` is at line {at}.",
+                    clip(wanted[first])
+                ),
+                None => " None of its lines are in the file; the file may have changed since \
+                         you read it."
+                    .to_string(),
+            }
+        }
+    }
+}
+
 /// Replaces exact text in a file.
 pub struct Edit;
 
@@ -293,8 +375,9 @@ impl Tool for Edit {
                     ),
                     None => {
                         return ToolOutput::error(format!(
-                            "old_string was not found in {}. Read the file and copy the text exactly.",
-                            path.display()
+                            "old_string was not found in {}.{} Read the file and copy the text exactly.",
+                            path.display(),
+                            where_it_differs(&text, &input.old_string)
                         ));
                     }
                 },
@@ -397,6 +480,61 @@ mod tests {
         assert!(lenient_replace("  x();\nif a {\n    x();\n}\n", "x();", "y();").is_none());
         assert!(lenient_replace(file, "stop();", "x").is_none());
         assert!(lenient_replace(file, "\n\n", "x").is_none());
+    }
+
+    #[test]
+    fn a_failed_edit_says_where_the_text_stops_matching() {
+        let file = "def total(rows):\n    result = 0\n    for row in rows:\n        result += row.amount\n    return result\n";
+        assert_eq!(
+            where_it_differs(
+                file,
+                "def total(rows):\n    result = 0\n    for r in rows:\n"
+            ),
+            " It matches the file from line 1 for 2 line(s), then differs. Your next line is \
+             `for r in rows:`, but line 3 of the file is `for row in rows:`."
+        );
+        assert_eq!(
+            where_it_differs(file, "    return result\n    # done\n"),
+            " It matches the file from line 5 for 1 line(s), but the file ends there and your \
+             text goes on with `# done`."
+        );
+        assert_eq!(
+            where_it_differs(file, "def sum(rows):\n    result = 0\n"),
+            " Its first line, `def sum(rows):`, is not in the file, though `result = 0` is at \
+             line 2."
+        );
+        assert!(where_it_differs(file, "nothing\nlike this").contains("None of its lines"));
+        assert!(where_it_differs("x()\nif a:\n    x()\n", "x()").contains("more than one place"));
+    }
+
+    #[tokio::test]
+    async fn writing_a_fragment_over_a_file_is_pointed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let whole = "line of the original file\n".repeat(20);
+        let write = |content: String| {
+            let ctx = ctx.clone();
+            async move {
+                Write
+                    .call(&json!({"path": "a.py", "content": content}), &ctx)
+                    .await
+            }
+        };
+        assert!(!write(whole.clone()).await.text.contains("Note:"));
+        // A deliberate rewrite of similar size says nothing more.
+        assert!(
+            !write(whole.replace("original", "new"))
+                .await
+                .text
+                .contains("Note:")
+        );
+        let fragment = write("line of the fixed file\n".into()).await;
+        assert!(!fragment.is_error);
+        assert!(
+            fragment.text.contains("had 20 lines and now has 1"),
+            "{}",
+            fragment.text
+        );
     }
 
     #[tokio::test]
