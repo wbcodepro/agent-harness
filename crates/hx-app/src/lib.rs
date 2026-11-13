@@ -203,7 +203,14 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     let mut proxy = None;
     let writes_only = cfg!(windows) && policy.is_confined();
     if writes_only {
-        if !config.sandbox.allow_partial {
+        // The user has to accept the weaker protection once, for the mode
+        // they chose. Plan mode and read-only subagents only ever tighten
+        // what was already accepted (or an unconfined session), so they do
+        // not ask again.
+        let top_level = options.lineage.is_none();
+        let chose_confinement =
+            options.sandbox.unwrap_or(config.sandbox.mode) != Mode::DangerFullAccess;
+        if top_level && chose_confinement && !config.sandbox.allow_partial {
             return Err(
                 "on Windows hx can confine where tools write, but cannot hide credential \
                  files from them or limit their network access. To accept that, set \
@@ -212,10 +219,12 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                     .into(),
             );
         }
-        eprintln!(
-            "hx: tools are confined for writes only; they can read any file you can and \
-             reach the network"
-        );
+        if top_level {
+            eprintln!(
+                "hx: tools are confined for writes only; they can read any file you can \
+                 and reach the network"
+            );
+        }
         policy.unreadable.clear();
         policy.hide_env_files = false;
         policy.network = Network::Open;
