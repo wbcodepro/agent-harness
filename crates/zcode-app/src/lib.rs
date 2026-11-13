@@ -19,11 +19,12 @@ use zcode_eval::{Recording, ScriptedLlm};
 use zcode_kernel::BoxFuture;
 use zcode_llm::{ChatCompletions, Llm};
 use zcode_policy::{
-    ApprovalLayer, Config, NetworkMode, ProjectConfig, RedactLayer, RuleAction, Secrets,
+    ApprovalLayer, Config, EditFormat, NetworkMode, ProjectConfig, RedactLayer, RuleAction,
+    Secrets, ToolProfile,
 };
 use zcode_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
 use zcode_session::{CreateOptions, Event, SessionId, SessionStore};
-use zcode_tools::{Bash, Effect, ToolContext, ToolRunner, ToolSet};
+use zcode_tools::{ApplyPatch, Bash, Effect, ToolContext, ToolRunner, ToolSet};
 use zcode_verify::Verifier;
 
 pub use import::import_dsh;
@@ -177,8 +178,16 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     );
     let config = load_config(home)?;
     let secrets = load_secrets(home, cwd)?;
-    let (llm, summarizer) = match &options.llm {
-        Some(llm) => (Arc::clone(llm), Arc::clone(llm)),
+    let Models {
+        main: llm,
+        summary: summarizer,
+        stronger,
+    } = match &options.llm {
+        Some(llm) => Models {
+            main: Arc::clone(llm),
+            summary: Arc::clone(llm),
+            stronger: None,
+        },
         None => llm(&config, &secrets, options)?,
     };
 
@@ -268,7 +277,8 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         }),
     };
 
-    // Layers, outermost first: spill what is left after redaction, redact
+    // Layers, outermost first: spill what is left after redaction, notice
+    // calls that keep coming back the same, redact
     // (so refusals are covered too), then decide whether the call runs.
     let pipeline = ToolPipeline::new();
     pipeline.push(SpillLayer {
@@ -279,6 +289,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         threshold: config.context.spill_at_bytes,
         preview: config.context.spill_at_bytes / 4,
     });
+    pipeline.push(zcode_verify::RepeatGuard::default());
     pipeline.push(RedactLayer {
         secrets: secrets.clone(),
     });
@@ -321,12 +332,32 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     let mut hooks: Vec<Arc<dyn TurnHook>> = vec![Arc::new(Compactor {
         llm: summarizer,
         threshold_tokens: config.context.compact_at_tokens,
+        clear_tool_results: config.context.clear_tool_results,
     })];
     let project =
         ProjectConfig::load(&cwd.join(".zcode/config.toml")).map_err(|e| e.to_string())?;
     let verify = project.verify.unwrap_or_else(|| config.verify.clone());
-    if !verify.commands.is_empty() {
+    // A stronger model for when the usual one is stuck.
+    let llm: Arc<dyn Llm> = match stronger {
+        Some(stronger) => {
+            let switch = zcode_verify::Switch::default();
+            hooks.push(Arc::new(zcode_verify::Escalation {
+                usual: stronger.usual_name,
+                stronger: stronger.name,
+                after: config.model.escalate_after.max(1),
+                switch: switch.clone(),
+            }));
+            Arc::new(zcode_verify::Escalating {
+                usual: llm,
+                stronger: stronger.llm,
+                switch,
+            })
+        }
+        None => llm,
+    };
+    if !verify.commands.is_empty() || verify.checklist {
         hooks.push(Arc::new(Verifier {
+            checklist: verify.checklist,
             commands: verify.commands,
             max_rounds: verify.max_rounds,
             timeout_ms: verify.timeout_ms,
@@ -346,7 +377,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         cwd.join(".claude/skills"),
         home.join("skills"),
     ]);
-    if !skills.is_empty() {
+    if !skills.is_empty() && config.model.tools == ToolProfile::Full {
         system.push_str(&zcode_ext::skills::prompt_section(&skills));
         tools.insert(Arc::new(zcode_ext::skills::SkillTool::new(skills)));
     }
@@ -430,6 +461,23 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             depth: lineage.depth,
         }));
     }
+    if config.model.tools == ToolProfile::Minimal {
+        tools.retain(|tool| !OPTIONAL_TOOLS.contains(&tool.spec().name.as_str()));
+    }
+    match config.model.edit_format {
+        EditFormat::SearchReplace => {}
+        EditFormat::WholeFile => {
+            tools.retain(|tool| tool.spec().name != "edit");
+            system.push_str(
+                "\nTo change a file, read it and then write its complete new content with the \
+                 write tool. Never leave part of a file out or abbreviate it with a comment.",
+            );
+        }
+        EditFormat::ApplyPatch => {
+            tools.retain(|tool| !matches!(tool.spec().name.as_str(), "edit" | "write"));
+            tools.insert(Arc::new(ApplyPatch));
+        }
+    }
     if options.plan {
         tools.retain(|tool| tool.effect() != Effect::Write);
         system.push_str(PLAN_MODE);
@@ -446,6 +494,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         system,
         max_steps: options.max_steps,
         max_tokens: None,
+        max_tool_calls: config.model.max_tool_calls,
     };
     Ok(Runtime {
         agent,
@@ -498,8 +547,32 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
     )
 }
 
-/// The agent's model, then the one that writes summaries.
-type Models = (Arc<dyn Llm>, Arc<dyn Llm>);
+/// zcode's own tools beyond files, search and the shell. A `minimal` tool
+/// profile leaves them out.
+const OPTIONAL_TOOLS: [&str; 7] = [
+    "repo_map",
+    "subagent",
+    "skill",
+    "diagnostics",
+    "task_create",
+    "task_update",
+    "task_list",
+];
+
+struct Models {
+    /// The agent's model.
+    main: Arc<dyn Llm>,
+    /// The one that writes summaries.
+    summary: Arc<dyn Llm>,
+    stronger: Option<Stronger>,
+}
+
+/// The model that takes over when the usual one keeps failing.
+struct Stronger {
+    usual_name: String,
+    name: String,
+    llm: Arc<dyn Llm>,
+}
 
 fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, String> {
     // Replays recorded responses instead of calling a provider; for tests
@@ -512,7 +585,11 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         let recording = Recording::load(&script).map_err(|e| e.to_string())?;
         let scripted: Arc<dyn Llm> =
             Arc::new(ScriptedLlm::new(recording).with_delay(Duration::from_millis(delay)));
-        return Ok((Arc::clone(&scripted), scripted));
+        return Ok(Models {
+            main: Arc::clone(&scripted),
+            summary: scripted,
+            stronger: None,
+        });
     }
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let lookup = |name: &str| env(name).or_else(|| secrets.get(name).map(String::from));
@@ -574,23 +651,34 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         }
         None => base_url != provider.base_url(),
     };
-    let build = |model: String| -> Arc<dyn Llm> {
+    let build = |model: String, effort: Option<String>| -> Arc<dyn Llm> {
         match provider {
             Provider::Anthropic => Arc::new(
-                zcode_llm::Anthropic::new(&base_url, api_key.clone(), model).with_effort(Some(
-                    config.model.effort.clone().unwrap_or_else(|| "high".into()),
-                )),
+                zcode_llm::Anthropic::new(&base_url, api_key.clone(), model)
+                    .with_effort(Some(effort.unwrap_or_else(|| "high".into()))),
             ),
             Provider::Openai if !chat_only => Arc::new(
-                zcode_llm::Responses::new(&base_url, api_key.clone(), model)
-                    .with_effort(config.model.effort.clone()),
+                zcode_llm::Responses::new(&base_url, api_key.clone(), model).with_effort(effort),
             ),
             Provider::Deepseek | Provider::Openai => {
                 Arc::new(ChatCompletions::new(&base_url, api_key.clone(), model))
             }
         }
     };
-    Ok((build(model), build(summary_model)))
+    let effort = config.model.effort.clone();
+    let stronger = config.model.escalate_to.clone().map(|name| Stronger {
+        usual_name: model.clone(),
+        llm: build(
+            name.clone(),
+            config.model.escalate_effort.clone().or(effort.clone()),
+        ),
+        name,
+    });
+    Ok(Models {
+        main: build(model, effort.clone()),
+        summary: build(summary_model, effort),
+        stronger,
+    })
 }
 
 /// Gives every question the same answer.

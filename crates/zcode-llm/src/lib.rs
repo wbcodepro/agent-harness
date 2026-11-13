@@ -26,6 +26,9 @@ pub struct Request {
     pub tools: Vec<ToolSpec>,
     pub messages: Vec<Message>,
     pub max_tokens: Option<u32>,
+    /// Names the conversation this request continues, for providers that
+    /// route requests with the same key to the same prompt cache.
+    pub cache_key: Option<String>,
 }
 
 impl From<History> for Request {
@@ -35,6 +38,7 @@ impl From<History> for Request {
             tools: history.tools,
             messages: history.messages,
             max_tokens: None,
+            cache_key: None,
         }
     }
 }

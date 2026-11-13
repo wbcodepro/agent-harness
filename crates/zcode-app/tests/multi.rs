@@ -218,3 +218,62 @@ async fn explorers_cannot_write_and_the_tree_budget_stops_everyone() {
     assert!(child_results[0].1 && child_results[0].0.contains("no tool named"));
     assert_eq!(child_results[1].0, "1\tcontent\n");
 }
+
+#[tokio::test]
+async fn a_model_profile_narrows_the_tools_and_picks_the_edit_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let (home, work) = (root.join("home"), root.join("work"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(work.join(".zcode/skills/notes")).unwrap();
+    std::fs::write(
+        work.join(".zcode/skills/notes/SKILL.md"),
+        "---\nname: notes\ndescription: Take notes.\n---\nWrite notes.\n",
+    )
+    .unwrap();
+    let names = |config: &'static str| {
+        let (home, work) = (home.clone(), work.clone());
+        async move {
+            std::fs::write(home.join("config.toml"), config).unwrap();
+            let runtime = zcode_app::build(&home, &work, &options(Vec::new()))
+                .await
+                .unwrap();
+            let names: Vec<String> = runtime
+                .agent
+                .tools
+                .specs()
+                .into_iter()
+                .map(|spec| spec.name)
+                .collect();
+            (names, runtime.agent.system)
+        }
+    };
+
+    let (full, _) = names("").await;
+    for expected in [
+        "edit",
+        "write",
+        "repo_map",
+        "subagent",
+        "skill",
+        "task_list",
+    ] {
+        assert!(
+            full.iter().any(|name| name == expected),
+            "{expected} in {full:?}"
+        );
+    }
+    assert!(!full.iter().any(|name| name == "apply_patch"));
+
+    let (minimal, system) =
+        names("[model]\ntools = \"minimal\"\nedit_format = \"apply-patch\"").await;
+    assert_eq!(minimal, ["read", "bash", "glob", "grep", "apply_patch"]);
+    assert!(
+        !system.contains("notes"),
+        "no skill is advertised without the skill tool"
+    );
+
+    let (whole, system) = names("[model]\ntools = \"minimal\"\nedit_format = \"whole-file\"").await;
+    assert_eq!(whole, ["read", "write", "bash", "glob", "grep"]);
+    assert!(system.contains("complete new content"));
+}

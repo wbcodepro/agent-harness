@@ -27,6 +27,8 @@ pub struct Compactor {
     pub llm: Arc<dyn Llm>,
     /// Compact when the next request would carry more tokens than this.
     pub threshold_tokens: u64,
+    /// Try clearing old tool results before summarizing.
+    pub clear_tool_results: bool,
 }
 
 fn block_chars(blocks: &[Block]) -> usize {
@@ -47,9 +49,14 @@ fn block_chars(blocks: &[Block]) -> usize {
 /// one, and adds four bytes per token for everything logged since; without
 /// a count, estimates the whole history that way.
 pub fn context_tokens(records: &[Record]) -> u64 {
-    let compacted_at = records
-        .iter()
-        .rposition(|record| matches!(record.event, Event::Compaction { .. }));
+    // A provider count from before the context was last shrunk says nothing
+    // about its size now.
+    let compacted_at = records.iter().rposition(|record| {
+        matches!(
+            record.event,
+            Event::Compaction { .. } | Event::Masked { .. }
+        )
+    });
     let counted = records
         .iter()
         .enumerate()
@@ -186,6 +193,46 @@ impl Compactor {
         (covered >= worthwhile).then_some(cut)
     }
 
+    /// Clears old tool results from what the model sees, keeping every
+    /// message. Returns whether there was enough to clear to be worth it.
+    ///
+    /// This is tried before summarizing: it costs no model call and loses no
+    /// reasoning or instructions, only bulky output that can be fetched
+    /// again. It is done in one large step, not a little each turn, because
+    /// every change to earlier history makes the provider re-read the whole
+    /// prompt at full price.
+    pub fn mask(&self, session: &mut Session) -> Result<bool, AgentError> {
+        let records = session.records();
+        let Some(cut) = self.cut_point(records) else {
+            return Ok(false);
+        };
+        let up_to_seq = records[cut].seq.saturating_sub(1);
+        let already = records
+            .iter()
+            .filter_map(|record| match record.event {
+                Event::Masked { up_to_seq } | Event::Compaction { up_to_seq, .. } => {
+                    Some(up_to_seq)
+                }
+                _ => None,
+            })
+            .max();
+        let clearable: u64 = records
+            .iter()
+            .filter(|record| record.seq <= up_to_seq && already.is_none_or(|seq| record.seq > seq))
+            .filter_map(|record| match &record.event {
+                Event::ToolResult { content, .. } => Some(block_chars(content)),
+                _ => None,
+            })
+            .filter(|chars| *chars >= zcode_session::MASK_MIN_BYTES)
+            .map(|chars| (chars - zcode_session::MASK_NOTE_BYTES) as u64 / 4)
+            .sum();
+        if clearable < self.threshold_tokens / 4 {
+            return Ok(false);
+        }
+        session.append(Event::Masked { up_to_seq })?;
+        Ok(true)
+    }
+
     /// Summarizes the older part of what the model currently sees and logs
     /// a compaction covering it. Returns whether it compacted.
     pub async fn compact(&self, session: &mut Session) -> Result<bool, AgentError> {
@@ -207,6 +254,7 @@ impl Compactor {
                 ))],
             }],
             max_tokens: None,
+            cache_key: None,
         };
         // A side request: its stream is not part of the session's own
         // assistant output, so it is collected here rather than journalled.
@@ -242,7 +290,9 @@ impl TurnHook for Compactor {
         session: &'a mut Session,
     ) -> BoxFuture<'a, Result<(), AgentError>> {
         Box::pin(async move {
-            if context_tokens(session.records()) > self.threshold_tokens {
+            if context_tokens(session.records()) > self.threshold_tokens
+                && !(self.clear_tool_results && self.mask(session)?)
+            {
                 self.compact(session).await?;
             }
             Ok(())
@@ -331,6 +381,7 @@ mod tests {
         Compactor {
             llm: Arc::new(ScriptedLlm::new(Recording { responses })),
             threshold_tokens,
+            clear_tool_results: true,
         }
     }
 
@@ -379,6 +430,58 @@ mod tests {
         // a request would fail).
         compactor.before_step(&mut session).await.unwrap();
         assert_eq!(session.records().len(), before.len() + 1);
+    }
+
+    #[tokio::test]
+    async fn bulky_old_outputs_are_cleared_before_anything_is_summarized() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = session(dir.path());
+        session.append(Event::TurnStart { turn: 1 }).unwrap();
+        session
+            .append(Event::UserMessage {
+                content: vec![Block::text("Read everything.")],
+            })
+            .unwrap();
+        for n in 1..=6 {
+            step(&mut session, n, 2000); // about 500 tokens each
+        }
+        session
+            .append(Event::StepStart { turn: 1, step: 7 })
+            .unwrap();
+        let before = session.records().len();
+        let tokens_before = context_tokens(session.records());
+
+        // One scripted summary, for the second round only: clearing itself
+        // must not call the model.
+        let compactor = compactor(vec![ScriptedResponse::text("Read steps 1 to 5.")], 1500);
+        compactor.before_step(&mut session).await.unwrap();
+
+        assert_eq!(session.records().len(), before + 1);
+        assert!(matches!(
+            session.records().last().unwrap().event,
+            Event::Masked { .. }
+        ));
+        let history = session.history();
+        // Every message is still there, and calls still pair with results.
+        assert_eq!(history.messages.len(), 13);
+        assert!(history.dangling_tool_calls().is_empty());
+        let result_text = |index: usize| match &history.messages[index].content[0] {
+            Block::ToolResult { content, .. } => match &content[0] {
+                Block::Text { text } => text.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        assert!(result_text(2).contains("was cleared to save context"));
+        assert!(
+            result_text(12).starts_with("step 6 "),
+            "the recent step is intact"
+        );
+        assert!(context_tokens(session.records()) < tokens_before / 2);
+
+        // Under the threshold now, so the next step changes nothing.
+        compactor.before_step(&mut session).await.unwrap();
+        assert_eq!(session.records().len(), before + 1);
     }
 
     #[tokio::test]

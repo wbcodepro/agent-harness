@@ -67,6 +67,7 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
         system: "You are zcode.".into(),
         max_steps: 8,
         max_tokens: None,
+        max_tool_calls: 32,
     }
 }
 
@@ -106,6 +107,8 @@ fn kinds(session: &Session) -> Vec<&'static str> {
             Event::ToolResult { .. } => "tool/result",
             Event::Compaction { .. } => "compaction",
             Event::Checkpoint { .. } => "checkpoint",
+            Event::Masked { .. } => "masked",
+            Event::ModelSwitched { .. } => "model",
         })
         .collect()
 }

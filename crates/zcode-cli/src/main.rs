@@ -41,6 +41,9 @@ enum Command {
     Acp,
     /// Run a suite of tasks and report pass rate, time and token use.
     Eval(eval::EvalArgs),
+    /// Try a model with each edit format and tool list on a suite of
+    /// tasks, and print the configuration it does best with.
+    Probe(eval::ProbeArgs),
     /// List sessions.
     Sessions,
     /// Import a session recorded by another harness.
@@ -113,7 +116,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
     });
     match &command {
         Command::ToolWorker => {
-            let code = zcode_sandbox::worker_main(&zcode_tools::ToolSet::builtin()).await;
+            let code = zcode_sandbox::worker_main(&zcode_tools::ToolSet::every()).await;
             return Ok(ExitCode::from(code));
         }
         Command::SandboxExec { policy, command } => return sandbox_exec(policy, command),
@@ -185,6 +188,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             other => return Err(format!("cannot import {other:?} sessions; supported: dsh")),
         },
         Command::Eval(args) => return eval::run(&home, args).await,
+        Command::Probe(args) => return eval::probe(&home, args).await,
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);

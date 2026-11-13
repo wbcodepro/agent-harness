@@ -187,6 +187,9 @@ fn build_body(model: &str, effort: Option<&str>, request: &Request, with_reasoni
     if let Some(effort) = effort {
         body["reasoning"] = json!({ "effort": effort });
     }
+    if let Some(key) = &request.cache_key {
+        body["prompt_cache_key"] = json!(key);
+    }
     if let Some(max_tokens) = request.max_tokens {
         body["max_output_tokens"] = json!(max_tokens);
     }
@@ -416,6 +419,7 @@ mod tests {
             }],
             messages,
             max_tokens: None,
+            cache_key: None,
         }
     }
 
@@ -430,6 +434,21 @@ mod tests {
         };
         let result = adapter.stream(request, &mut sink).await;
         (deltas, result)
+    }
+
+    #[test]
+    fn the_conversation_is_named_so_its_requests_share_a_cache() {
+        let mut request = request(Vec::new());
+        assert!(
+            build_body("m", None, &request, true)
+                .get("prompt_cache_key")
+                .is_none()
+        );
+        request.cache_key = Some("s-1".into());
+        assert_eq!(
+            build_body("m", None, &request, true)["prompt_cache_key"],
+            "s-1"
+        );
     }
 
     #[tokio::test]

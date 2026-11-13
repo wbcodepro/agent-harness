@@ -5,6 +5,8 @@
 //! user message and the turn continues, so "done" means the checks pass, or
 //! the model has seen the failure and said why it stands.
 
+mod escalate;
+
 use std::sync::Arc;
 
 use serde_json::json;
@@ -15,6 +17,8 @@ use zcode_tools::{Tool, ToolContext, ToolRunner};
 
 /// Starts every message the gate sends, so they can be told apart from what
 /// the user typed.
+pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, trouble_this_turn};
+
 pub const VERIFY_PREFIX: &str = "[zcode verify]";
 
 /// Bytes of a failing check's output shown to the model.
@@ -32,18 +36,28 @@ pub struct Verifier {
     /// The shell tool the commands are run with.
     pub shell: Arc<dyn Tool>,
     pub context: ToolContext,
+    /// Once per turn, before it ends, have the model check its work against
+    /// the request.
+    pub checklist: bool,
 }
 
-fn rounds_this_turn(records: &[Record]) -> usize {
+/// Starts the message asking the model to check its work.
+pub const CHECKLIST_PREFIX: &str = "[zcode checklist]";
+
+fn sent_this_turn(records: &[Record], prefix: &str) -> usize {
     records
         .iter()
         .rev()
         .take_while(|record| !matches!(record.event, Event::TurnStart { .. }))
         .filter(|record| {
             matches!(&record.event, Event::UserMessage { content }
-                if matches!(content.first(), Some(Block::Text { text }) if text.starts_with(VERIFY_PREFIX)))
+                if matches!(content.first(), Some(Block::Text { text }) if text.starts_with(prefix)))
         })
         .count()
+}
+
+fn rounds_this_turn(records: &[Record]) -> usize {
+    sent_this_turn(records, VERIFY_PREFIX)
 }
 
 impl TurnHook for Verifier {
@@ -53,12 +67,16 @@ impl TurnHook for Verifier {
         changed: bool,
     ) -> BoxFuture<'a, Option<Vec<Block>>> {
         Box::pin(async move {
-            if !changed || self.commands.is_empty() || rounds_this_turn(records) >= self.max_rounds
-            {
+            if !changed {
                 return None;
             }
             let mut failures = String::new();
-            for command in &self.commands {
+            let commands = if rounds_this_turn(records) < self.max_rounds {
+                self.commands.as_slice()
+            } else {
+                &[]
+            };
+            for command in commands {
                 let input = json!({ "command": command, "timeout_ms": self.timeout_ms });
                 let output = self.runner.run(&self.shell, &input, &self.context).await;
                 if output.is_error {
@@ -73,7 +91,17 @@ impl TurnHook for Verifier {
                 }
             }
             if failures.is_empty() {
-                return None;
+                // Weaker models stop with part of the request undone more
+                // often than they get any one part wrong.
+                let ask = self.checklist && sent_this_turn(records, CHECKLIST_PREFIX) == 0;
+                return ask.then(|| {
+                    vec![Block::text(format!(
+                        "{CHECKLIST_PREFIX} Before you finish: read the request again and go \
+                         through it point by point. For each thing asked, name the file or \
+                         command output that shows it is done. Do now whatever is missing or \
+                         only partly done. If everything is done, give your final answer."
+                    ))]
+                });
             }
             Some(vec![Block::text(format!(
                 "{VERIFY_PREFIX} The project's checks fail after your changes:\n{failures}\n\
@@ -97,6 +125,7 @@ mod tests {
             runner: Arc::new(InProcess),
             shell: Arc::new(Bash),
             context: ToolContext::new(dir),
+            checklist: false,
         }
     }
 
@@ -155,5 +184,33 @@ mod tests {
             .await
             .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn the_checklist_is_asked_once_and_only_after_the_checks_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let verifier = Verifier {
+            checklist: true,
+            ..verifier(dir.path(), &["test -f ok"])
+        };
+        let mut records = vec![record(0, Event::TurnStart { turn: 1 })];
+        let text = |blocks: Vec<Block>| match &blocks[0] {
+            Block::Text { text } => text.clone(),
+            _ => String::new(),
+        };
+
+        assert!(verifier.before_stop(&records, false).await.is_none());
+        let failing = text(verifier.before_stop(&records, true).await.unwrap());
+        assert!(failing.starts_with(VERIFY_PREFIX));
+
+        std::fs::write(dir.path().join("ok"), "").unwrap();
+        let asked = verifier.before_stop(&records, true).await.unwrap();
+        assert!(text(asked.clone()).starts_with(CHECKLIST_PREFIX));
+        records.push(record(1, Event::UserMessage { content: asked }));
+        assert!(verifier.before_stop(&records, true).await.is_none());
+
+        // A new turn is asked again.
+        records.push(record(2, Event::TurnStart { turn: 2 }));
+        assert!(verifier.before_stop(&records, true).await.is_some());
     }
 }

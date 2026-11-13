@@ -56,11 +56,38 @@ impl History {
     }
 }
 
+/// Tool results shorter than this are kept even when masked: the note
+/// replacing them would save too little.
+pub const MASK_MIN_BYTES: usize = 1000;
+
+/// About how long the note standing in for a masked result is.
+pub const MASK_NOTE_BYTES: usize = 280;
+
+/// What the model sees in place of an old, long tool result.
+fn mask(content: &[Block]) -> Vec<Block> {
+    let bytes: usize = content
+        .iter()
+        .map(|block| match block {
+            Block::Text { text } => text.len(),
+            _ => 0,
+        })
+        .sum();
+    if bytes < MASK_MIN_BYTES {
+        return content.to_vec();
+    }
+    vec![Block::text(format!(
+        "[This output ({bytes} bytes) was cleared to save context. Older outputs are cleared \
+         as the conversation grows, so when you read something you will need later, write the \
+         important facts in your reply at once. Run the tool again if you need this output.]"
+    ))]
+}
+
 /// Projects the model-visible history out of a session log.
 ///
 /// The log is never rewritten: the latest `compaction` event hides the
 /// messages it covers and stands in for them with its summary, and the
-/// latest `system/message` and `tools/declared` win.
+/// latest `system/message` and `tools/declared` win. A `context/masked`
+/// event replaces long tool results up to its mark with a short note.
 pub fn derive_history(records: &[Record]) -> History {
     let compaction = records.iter().rev().find_map(|record| match &record.event {
         Event::Compaction { summary, up_to_seq } => Some((summary, *up_to_seq)),
@@ -78,11 +105,21 @@ pub fn derive_history(records: &[Record]) -> History {
             matches!(
                 record.event,
                 Event::Compaction { .. }
+                    | Event::Masked { .. }
+                    | Event::ModelSwitched { .. }
                     | Event::SystemMessage { .. }
                     | Event::ToolsDeclared { .. }
             )
         })
         .map_or(0, |record| record.seq);
+
+    let masked_up_to = records
+        .iter()
+        .filter_map(|record| match record.event {
+            Event::Masked { up_to_seq } => Some(up_to_seq),
+            _ => None,
+        })
+        .max();
 
     let mut history = History::default();
     if let Some((summary, _)) = compaction {
@@ -132,7 +169,11 @@ pub fn derive_history(records: &[Record]) -> History {
             } => {
                 let block = Block::ToolResult {
                     call_id: call_id.clone(),
-                    content: content.clone(),
+                    content: if masked_up_to.is_some_and(|up_to| record.seq <= up_to) {
+                        mask(content)
+                    } else {
+                        content.clone()
+                    },
                     is_error: *is_error,
                 };
                 match history.messages.last_mut() {

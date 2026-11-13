@@ -73,7 +73,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelConfig {
     /// `deepseek`, `openai`, `anthropic`, or empty to pick by available key.
@@ -90,6 +90,66 @@ pub struct ModelConfig {
     pub api: Option<String>,
     /// A cheaper model, on the same provider, for summarizing history.
     pub summary_model: Option<String>,
+    /// Most tool calls run from one model response.
+    pub max_tool_calls: usize,
+    /// How many tools the model is offered.
+    pub tools: ToolProfile,
+    /// How the model changes files.
+    pub edit_format: EditFormat,
+    /// A stronger model, on the same provider, that takes over the rest of
+    /// a turn in which this one keeps failing.
+    pub escalate_to: Option<String>,
+    /// Reasoning effort for the stronger model. Empty keeps `effort`.
+    pub escalate_effort: Option<String>,
+    /// How many failed checks or repeated calls in one turn it takes.
+    pub escalate_after: usize,
+}
+
+/// How many tools the model is offered. Small models choose better among
+/// few.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolProfile {
+    #[default]
+    Full,
+    /// Only reading, changing and searching files and running commands,
+    /// plus tools the configuration adds by name (MCP servers, plugins).
+    Minimal,
+}
+
+/// How the model changes files. Which one a model handles best differs by
+/// model family.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditFormat {
+    /// `edit` replaces exact text; `write` creates files.
+    #[default]
+    SearchReplace,
+    /// No `edit`: the model rewrites a file in full with `write`. Costs
+    /// more output but cannot fail to match.
+    WholeFile,
+    /// `apply_patch` replaces both `edit` and `write`.
+    ApplyPatch,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            name: None,
+            base_url: None,
+            api_key_env: None,
+            effort: None,
+            api: None,
+            summary_model: None,
+            max_tool_calls: 32,
+            tools: ToolProfile::Full,
+            edit_format: EditFormat::SearchReplace,
+            escalate_to: None,
+            escalate_effort: None,
+            escalate_after: 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -215,6 +275,11 @@ pub struct ContextConfig {
     pub compact_at_tokens: u64,
     /// Tool outputs longer than this are saved to a file and previewed.
     pub spill_at_bytes: usize,
+    /// Past the threshold, first clear old tool results from what the model
+    /// sees, and summarize only if that is not enough. Off by default: on
+    /// the one task it was measured on, a model that had not noted what it
+    /// read went back and read it again, and it cost more than summarizing.
+    pub clear_tool_results: bool,
 }
 
 impl Default for ContextConfig {
@@ -222,6 +287,7 @@ impl Default for ContextConfig {
         Self {
             compact_at_tokens: 100_000,
             spill_at_bytes: 16_000,
+            clear_tool_results: false,
         }
     }
 }
@@ -234,6 +300,9 @@ pub struct VerifyConfig {
     /// Times per turn a failure is sent back to the model.
     pub max_rounds: usize,
     pub timeout_ms: u64,
+    /// Before a turn that changed files ends, ask the model once to go
+    /// through the request point by point and confirm each is done.
+    pub checklist: bool,
 }
 
 impl Default for VerifyConfig {
@@ -242,6 +311,7 @@ impl Default for VerifyConfig {
             commands: Vec::new(),
             max_rounds: 2,
             timeout_ms: 300_000,
+            checklist: false,
         }
     }
 }
@@ -317,6 +387,8 @@ mod tests {
             [model]
             provider = "openai"
             name = "some-model"
+            tools = "minimal"
+            edit_format = "apply-patch"
 
             [sandbox]
             mode = "read-only"
@@ -340,6 +412,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.model.provider.as_deref(), Some("openai"));
+        assert_eq!(config.model.tools, ToolProfile::Minimal);
+        assert_eq!(config.model.edit_format, EditFormat::ApplyPatch);
+        assert!(Config::parse("[model]\nedit_format = \"diff\"").is_err());
         assert_eq!(config.sandbox.mode, Mode::ReadOnly);
         assert!(!config.sandbox.writable_tmp);
         assert_eq!(config.network.mode, NetworkMode::Off);

@@ -533,6 +533,7 @@ mod tests {
                 },
             ],
             max_tokens: None,
+            cache_key: None,
         }
     }
 

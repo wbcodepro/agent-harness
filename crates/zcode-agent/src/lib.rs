@@ -20,6 +20,37 @@ use zcode_tools::{Effect, ToolContext, ToolOutput, ToolRunner, ToolSet};
 
 type Observer = Box<dyn FnMut(&Record) + Send>;
 
+/// Recovers tool arguments that are valid JSON wrapped in something else.
+///
+/// Arguments that did not parse are kept as the raw string. Some models
+/// wrap them in a code fence or add text around the object; those can be
+/// read without guessing. Anything that would need invented content, such
+/// as closing an unfinished object, is left alone so the tool rejects it.
+fn repair_input(input: Value) -> Value {
+    let Value::String(raw) = &input else {
+        return input;
+    };
+    let trimmed = raw.trim();
+    let unfenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|rest| rest.strip_suffix("```"))
+        .map(str::trim);
+    let braced = match (trimmed.find('{'), trimmed.rfind('}')) {
+        (Some(start), Some(end)) if start < end => Some(&trimmed[start..=end]),
+        _ => None,
+    };
+    let repaired = [Some(trimmed), unfenced, braced]
+        .into_iter()
+        .flatten()
+        .find_map(|candidate| {
+            serde_json::from_str::<Value>(candidate)
+                .ok()
+                .filter(Value::is_object)
+        });
+    repaired.unwrap_or(input)
+}
+
 /// An open session: its records so far and the handle that appends more.
 pub struct Session {
     records: Vec<Record>,
@@ -152,6 +183,9 @@ pub struct Agent {
     /// Upper bound on model requests in one turn.
     pub max_steps: u64,
     pub max_tokens: Option<u32>,
+    /// Most tool calls run from one model response; the rest are refused.
+    /// Stops a model that is stuck emitting calls.
+    pub max_tool_calls: usize,
 }
 
 impl Agent {
@@ -209,6 +243,7 @@ impl Agent {
 
             let mut request = Request::from(session.history());
             request.max_tokens = self.max_tokens;
+            request.cache_key = Some(session.id().to_string());
 
             let mut deltas: Vec<Delta> = Vec::new();
             let completion = {
@@ -236,7 +271,7 @@ impl Agent {
             let calls: Vec<(String, String, Value)> = content
                 .into_iter()
                 .filter_map(|block| match block {
-                    Block::ToolUse { id, name, input } => Some((id, name, input)),
+                    Block::ToolUse { id, name, input } => Some((id, name, repair_input(input))),
                     _ => None,
                 })
                 .collect();
@@ -264,6 +299,18 @@ impl Agent {
             } else {
                 // Neighbouring calls that are safe to overlap run together;
                 // everything else runs alone, in the order the model gave.
+                let mut calls = calls;
+                for (id, _, _) in calls.drain(self.max_tool_calls.min(calls.len())..) {
+                    session.append(Event::ToolResult {
+                        call_id: id,
+                        content: vec![Block::text(format!(
+                            "Not run: more than {} tool calls in one response. Continue with \
+                             fewer calls at a time.",
+                            self.max_tool_calls
+                        ))],
+                        is_error: true,
+                    })?;
+                }
                 let mut remaining = calls.into_iter().peekable();
                 while let Some(first) = remaining.next() {
                     let overlaps =
@@ -377,5 +424,27 @@ impl Agent {
                 }
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn wrapped_arguments_are_recovered_and_unfinished_ones_are_not() {
+        let want = json!({"path": "a.rs"});
+        for raw in [
+            "{\"path\": \"a.rs\"}",
+            "```json\n{\"path\": \"a.rs\"}\n```",
+            "Here you go: {\"path\": \"a.rs\"} thanks",
+        ] {
+            assert_eq!(repair_input(json!(raw)), want, "{raw}");
+        }
+        // Would need invented content: left as it arrived.
+        let cut = json!("{\"path\": \"a.r");
+        assert_eq!(repair_input(cut.clone()), cut);
+        assert_eq!(repair_input(want.clone()), want);
     }
 }

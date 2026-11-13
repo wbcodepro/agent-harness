@@ -163,6 +163,70 @@ impl Tool for Write {
     }
 }
 
+/// Finds `old` in `text` when it differs only in whitespace, and replaces it.
+///
+/// Models often get indentation, trailing spaces or line endings slightly
+/// wrong when quoting code. Two passes, each accepted only when exactly one
+/// place matches: lines equal after trimming their ends, then lines equal
+/// after trimming both sides. In the second case the replacement is shifted
+/// by the indentation the model left out.
+fn lenient_replace(text: &str, old: &str, new: &str) -> Option<String> {
+    let file: Vec<&str> = text.split('\n').collect();
+    let wanted: Vec<&str> = old.trim_matches('\n').split('\n').collect();
+    if wanted.iter().all(|line| line.trim().is_empty()) || wanted.len() > file.len() {
+        return None;
+    }
+    fn indent(line: &str) -> &str {
+        &line[..line.len() - line.trim_start().len()]
+    }
+    for both_sides in [false, true] {
+        let key = |line: &str| -> String {
+            if both_sides {
+                line.trim().to_string()
+            } else {
+                line.trim_end().to_string()
+            }
+        };
+        let hits: Vec<usize> = (0..=file.len() - wanted.len())
+            .filter(|&at| {
+                wanted
+                    .iter()
+                    .enumerate()
+                    .all(|(k, line)| key(file[at + k]) == key(line))
+            })
+            .collect();
+        let [at] = hits[..] else {
+            if hits.len() > 1 {
+                return None;
+            }
+            continue;
+        };
+        // Indentation present in the file but missing from what the model
+        // quoted is added back to every replacement line.
+        let missing = indent(file[at])
+            .strip_suffix(indent(wanted[0]))
+            .filter(|_| both_sides)
+            .unwrap_or("");
+        let ending = if file[at].ends_with('\r') { "\r" } else { "" };
+        let mut out: Vec<String> = file[..at].iter().map(|line| line.to_string()).collect();
+        for line in new.trim_matches('\n').split('\n') {
+            let line = line.trim_end_matches('\r');
+            if line.trim().is_empty() {
+                out.push(format!("{line}{ending}"));
+            } else {
+                out.push(format!("{missing}{line}{ending}"));
+            }
+        }
+        out.extend(
+            file[at + wanted.len()..]
+                .iter()
+                .map(|line| line.to_string()),
+        );
+        return Some(out.join("\n"));
+    }
+    None
+}
+
 /// Replaces exact text in a file.
 pub struct Edit;
 
@@ -220,15 +284,24 @@ impl Tool for Edit {
                 Err(e) => return ToolOutput::error(format!("Cannot read {}: {e}", path.display())),
             };
             let count = text.matches(&input.old_string).count();
-            match count {
-                0 => {
-                    return ToolOutput::error(format!(
-                        "old_string was not found in {}. Read the file and copy the text exactly.",
-                        path.display()
-                    ));
-                }
-                1 => {}
-                _ if input.replace_all => {}
+            let (updated, note) = match count {
+                0 => match lenient_replace(&text, &input.old_string, &input.new_string) {
+                    Some(updated) => (
+                        updated,
+                        "Replaced 1 occurrence (matched ignoring whitespace differences)"
+                            .to_string(),
+                    ),
+                    None => {
+                        return ToolOutput::error(format!(
+                            "old_string was not found in {}. Read the file and copy the text exactly.",
+                            path.display()
+                        ));
+                    }
+                },
+                n if n == 1 || input.replace_all => (
+                    text.replace(&input.old_string, &input.new_string),
+                    format!("Replaced {n} occurrence(s)"),
+                ),
                 n => {
                     return ToolOutput::error(format!(
                         "old_string occurs {n} times in {}. Add surrounding text to make it \
@@ -236,13 +309,9 @@ impl Tool for Edit {
                         path.display()
                     ));
                 }
-            }
-            let updated = text.replace(&input.old_string, &input.new_string);
+            };
             match fs::write(&path, updated) {
-                Ok(()) => ToolOutput::ok(format!(
-                    "Replaced {count} occurrence(s) in {}.",
-                    path.display()
-                )),
+                Ok(()) => ToolOutput::ok(format!("{note} in {}.", path.display())),
                 Err(e) => ToolOutput::error(format!("Cannot write {}: {e}", path.display())),
             }
         })
@@ -299,6 +368,35 @@ mod tests {
             let out = Read.call(&input, &ctx).await;
             assert!(out.is_error && out.text.contains(needle), "{}", out.text);
         }
+    }
+
+    #[test]
+    fn whitespace_slips_do_not_fail_an_edit_but_ambiguity_does() {
+        let file = "fn main() {\n    if ready {\n        start();   \n    }\n}\n";
+        // Trailing spaces missing from the quote.
+        assert_eq!(
+            lenient_replace(file, "        start();", "        begin();").unwrap(),
+            "fn main() {\n    if ready {\n        begin();\n    }\n}\n"
+        );
+        // Indentation dropped by the model: the replacement is shifted back.
+        assert_eq!(
+            lenient_replace(
+                file,
+                "if ready {\n    start();\n}",
+                "if ready {\n    begin();\n    log();\n}"
+            )
+            .unwrap(),
+            "fn main() {\n    if ready {\n        begin();\n        log();\n    }\n}\n"
+        );
+        // Windows line endings are kept.
+        assert_eq!(
+            lenient_replace("a = 1\r\nb = 2\r\n", "b = 2", "b = 3").unwrap(),
+            "a = 1\r\nb = 3\r\n"
+        );
+        // Two places would match: refuse rather than guess.
+        assert!(lenient_replace("  x();\nif a {\n    x();\n}\n", "x();", "y();").is_none());
+        assert!(lenient_replace(file, "stop();", "x").is_none());
+        assert!(lenient_replace(file, "\n\n", "x").is_none());
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@
 
 mod bash;
 mod files;
+mod patch;
 mod process;
 mod search;
 
@@ -15,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use bash::Bash;
 pub use files::{Edit, Read, Write};
+pub use patch::ApplyPatch;
 pub use process::GroupGuard;
 pub use search::{Glob, Grep, RepoMap};
 use serde::de::DeserializeOwned;
@@ -164,6 +166,14 @@ impl ToolSet {
         set.insert(Arc::new(Glob));
         set.insert(Arc::new(Grep));
         set.insert(Arc::new(RepoMap));
+        set
+    }
+
+    /// Every tool this crate has, including the ones a configuration has to
+    /// ask for. A worker process looks tools up here.
+    pub fn every() -> Self {
+        let mut set = Self::builtin();
+        set.insert(Arc::new(ApplyPatch));
         set
     }
 

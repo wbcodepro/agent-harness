@@ -35,9 +35,12 @@ zcode sessions | show <id> | fork <id> | rewind <id> | recover <id>
 zcode import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
 zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
 zcode eval evals/harder --command 'codex exec "$ZCODE_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
+zcode probe evals/harder --model <tên> # thử model với từng định dạng sửa file và bộ tool, in cấu hình tốt nhất
 ```
 
 Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`, hoặc `ZCODE_PROVIDER` / `ZCODE_MODEL`. Mặc định: `deepseek-flash` với DeepSeek, `claude-opus-5-5` với Anthropic; OpenAI cần chỉ rõ model.
+
+Cuối mỗi lần `zcode run`, một dòng tổng kết in ra stderr: số token gửi đi, bao nhiêu phần trăm được đọc từ cache của nhà cung cấp, số token nhận về và số request. Nếu phần lớn prompt không được dùng lại giữa các request, zcode cảnh báo.
 
 Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy.
 
@@ -53,7 +56,9 @@ Máy chủ được kiểm thử bằng runtime client chính thức của giao 
 
 ## Tool có sẵn
 
-`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill và `diagnostics` khi có cấu hình language server.
+`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill và `diagnostics` khi có cấu hình language server. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
+
+`edit` và `apply_patch` chấp nhận sai lệch về khoảng trắng, thụt lề và kiểu xuống dòng khi chỉ có đúng một chỗ khớp; dòng không đổi luôn giữ nguyên như trong file. Tham số gọi tool bị bọc trong code fence hoặc lẫn chữ được gỡ ra trước khi chạy.
 
 Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song song. `subagent` giao việc cho một agent mới có ngữ cảnh riêng; với `isolate` nó làm trên một git worktree và nhánh riêng.
 
@@ -87,6 +92,12 @@ name = "claude-opus-5-5"
 effort = "high"                 # mức suy luận (Anthropic, OpenAI)
 api = "responses"               # với openai: responses (mặc định) | chat-completions
 summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch sử
+tools = "full"                  # full | minimal (chỉ file, tìm kiếm, shell; cho model nhỏ)
+edit_format = "search-replace"  # search-replace | whole-file | apply-patch
+max_tool_calls = 32             # số lời gọi tool tối đa trong một phản hồi
+escalate_to = "claude-fable-5-2"     # model mạnh hơn tiếp quản phần còn lại của lượt khi model chính kẹt
+escalate_effort = "high"
+escalate_after = 2              # sau bấy nhiêu lần kiểm tra hỏng hoặc gọi lặp trong một lượt
 
 [sandbox]
 mode = "workspace-write"        # read-only | workspace-write | danger-full-access
@@ -108,10 +119,12 @@ grant = ["GITHUB_TOKEN"]
 
 [context]
 compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng
+clear_tool_results = false      # true: vượt ngưỡng thì xóa kết quả tool cũ trước, chưa đủ mới tóm tắt
 spill_at_bytes = 16000          # đầu ra dài hơn thì lưu ra file, chỉ xem trước
 
 [verify]
 commands = ["cargo test -q"]    # phải đạt trước khi một lượt có sửa file được kết thúc
+checklist = false               # true: trước khi kết thúc, yêu cầu model rà lại từng điểm của đề bài
 
 [limits]
 tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn
@@ -135,6 +148,8 @@ path = "plugins/wordcount.wasm"
 read = ["docs"]
 ```
 
+Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, kết quả kèm một ghi chú báo cho model biết nó đang lặp. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
+
 Dự án có thể tự khai báo lệnh kiểm tra trong `.zcode/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.zcode/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.zcode/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.zcode/skills/`.
 
 Plugin mẫu và mô tả ABI: `plugins/wordcount`.
@@ -152,7 +167,7 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 | `zcode-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
 | `zcode-checkpoint` | Checkpoint workspace bằng kho git riêng |
 | `zcode-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
-| `zcode-verify` | Cổng kiểm chứng trước khi kết thúc lượt |
+| `zcode-verify` | Cổng kiểm chứng trước khi kết thúc lượt; phát hiện lặp; leo thang model |
 | `zcode-ext` | MCP, chẩn đoán LSP, skills, hooks, plugin WebAssembly |
 | `zcode-multi` | Subagent, worktree, bảng việc, ngân sách chung |
 | `zcode-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |

@@ -14,7 +14,7 @@ pub use model::{
     AttemptReason, Block, Delta, Event, FORMAT_VERSION, Header, ParentRef, Record, SessionId,
     StopReason, ToolSpec, TurnEndReason, Usage, assemble,
 };
-pub use projection::{History, Message, Role, derive_history};
+pub use projection::{History, MASK_MIN_BYTES, MASK_NOTE_BYTES, Message, Role, derive_history};
 pub use recover::{INTERRUPTED_NOT_STARTED, INTERRUPTED_RUNNING, plan_close, plan_recovery};
 pub use store::{Clock, CreateOptions, SessionStore, SessionWriter, SystemClock};
 

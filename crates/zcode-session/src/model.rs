@@ -130,6 +130,14 @@ pub enum Event {
     /// `summary` from here on. The earlier records stay in the log.
     #[serde(rename = "compaction")]
     Compaction { summary: String, up_to_seq: u64 },
+    /// Tool results up to and including `up_to_seq` are no longer shown to
+    /// the model in full; a short note stands in for each long one. They
+    /// stay in the log.
+    #[serde(rename = "context/masked")]
+    Masked { up_to_seq: u64 },
+    /// From here on a different model answers.
+    #[serde(rename = "model/switched")]
+    ModelSwitched { model: String },
     /// The workspace as it was at this point is saved under `commit` in the
     /// session's checkpoint store.
     #[serde(rename = "checkpoint")]

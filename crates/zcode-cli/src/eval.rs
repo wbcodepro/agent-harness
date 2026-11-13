@@ -25,6 +25,9 @@ pub struct EvalArgs {
     provider: Option<String>,
     #[arg(long)]
     model: Option<String>,
+    /// Root of the provider's API, for a local or compatible server.
+    #[arg(long)]
+    base_url: Option<String>,
     /// Only run tasks whose name contains this.
     #[arg(long)]
     filter: Option<String>,
@@ -95,6 +98,7 @@ async fn run_task(
     scratch: &Path,
     args: &EvalArgs,
     keys: &[(String, String)],
+    config: &str,
 ) -> Result<Outcome, String> {
     let text = std::fs::read_to_string(dir.join("task.toml"))
         .map_err(|e| format!("{name}: cannot read task.toml: {e}"))?;
@@ -106,6 +110,9 @@ async fn run_task(
     );
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    if !config.is_empty() {
+        std::fs::write(home.join("config.toml"), config).map_err(|e| e.to_string())?;
+    }
     if dir.join("files").is_dir() {
         copy_tree(&dir.join("files"), &work).map_err(|e| e.to_string())?;
     }
@@ -133,6 +140,9 @@ async fn run_task(
             }
             if let Some(model) = &args.model {
                 command.args(["--model", model]);
+            }
+            if let Some(base_url) = &args.base_url {
+                command.args(["--base-url", base_url]);
             }
             command.arg(&task.prompt);
             command
@@ -200,9 +210,10 @@ async fn run_task(
     Ok(outcome)
 }
 
-pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
-    let mut tasks: Vec<(String, PathBuf)> = std::fs::read_dir(&args.suite)
-        .map_err(|e| format!("cannot read {}: {e}", args.suite.display()))?
+/// The tasks of a suite, by name.
+fn tasks_in(suite: &Path, filter: Option<&str>) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut tasks: Vec<(String, PathBuf)> = std::fs::read_dir(suite)
+        .map_err(|e| format!("cannot read {}: {e}", suite.display()))?
         .flatten()
         .filter(|entry| entry.path().join("task.toml").is_file())
         .map(|entry| {
@@ -211,17 +222,22 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
                 entry.path(),
             )
         })
-        .filter(|(name, _)| {
-            args.filter
-                .as_ref()
-                .is_none_or(|f| name.contains(f.as_str()))
-        })
+        .filter(|(name, _)| filter.is_none_or(|f| name.contains(f)))
         .collect();
     tasks.sort();
     if tasks.is_empty() {
-        return Err(format!("no tasks found in {}", args.suite.display()));
+        return Err(format!("no tasks found in {}", suite.display()));
     }
+    Ok(tasks)
+}
 
+/// Runs every task once with `config` as the agent's configuration file.
+async fn run_suite(
+    home: &Path,
+    args: &EvalArgs,
+    tasks: &[(String, PathBuf)],
+    config: &str,
+) -> Result<Vec<Outcome>, String> {
     // Each task gets an empty data directory, so the user's credentials are
     // handed over through the environment instead.
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -232,10 +248,11 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         .collect();
 
     let scratch = std::env::temp_dir().join(format!("zcode-eval-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
     let mut outcomes = Vec::new();
-    for (name, dir) in &tasks {
+    for (name, dir) in tasks {
         eprint!("{name} ... ");
-        let outcome = run_task(name, dir, &scratch, &args, &keys).await?;
+        let outcome = run_task(name, dir, &scratch, args, &keys, config).await?;
         eprintln!(
             "{} ({:.0}s){}",
             if outcome.passed { "pass" } else { "FAIL" },
@@ -249,6 +266,12 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         outcomes.push(outcome);
     }
     let _ = std::fs::remove_dir_all(&scratch);
+    Ok(outcomes)
+}
+
+pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
+    let tasks = tasks_in(&args.suite, args.filter.as_deref())?;
+    let outcomes = run_suite(home, &args, &tasks, "").await?;
 
     println!(
         "{:<24} {:>6} {:>7} {:>5} {:>6} {:>9} {:>9} {:>8}",
@@ -305,4 +328,146 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+#[derive(Args)]
+pub struct ProbeArgs {
+    /// Directory of tasks to try each setting on.
+    suite: PathBuf,
+    #[arg(long)]
+    provider: Option<String>,
+    #[arg(long)]
+    model: Option<String>,
+    /// Root of the provider's API, for a local or compatible server.
+    #[arg(long)]
+    base_url: Option<String>,
+    /// Only run tasks whose name contains this.
+    #[arg(long)]
+    filter: Option<String>,
+    /// Seconds allowed per task.
+    #[arg(long, default_value_t = 600)]
+    timeout: u64,
+}
+
+/// One way of setting a model up, and how the suite went with it.
+struct Trial {
+    edit_format: &'static str,
+    tools: &'static str,
+    passed: usize,
+    tokens: u64,
+    seconds: f64,
+}
+
+impl Trial {
+    /// More tasks solved wins; among equals, fewer tokens.
+    fn beats(&self, other: &Trial) -> bool {
+        (self.passed, std::cmp::Reverse(self.tokens))
+            > (other.passed, std::cmp::Reverse(other.tokens))
+    }
+}
+
+fn best(trials: &[Trial]) -> &Trial {
+    trials
+        .iter()
+        .reduce(|best, trial| if trial.beats(best) { trial } else { best })
+        .expect("at least one trial")
+}
+
+/// `zcode probe`: find out how a model works best.
+///
+/// Which edit format a model handles, and whether it copes with the full
+/// tool list, differs from model to model and cannot be told from its name.
+/// This runs a suite once per setting and prints the configuration that
+/// solved the most, at the lowest cost.
+pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
+    let tasks = tasks_in(&args.suite, args.filter.as_deref())?;
+    let eval = EvalArgs {
+        suite: args.suite.clone(),
+        provider: args.provider.clone(),
+        model: args.model.clone(),
+        base_url: args.base_url.clone(),
+        filter: args.filter.clone(),
+        timeout: args.timeout,
+        command: None,
+        json: None,
+    };
+    let mut trials: Vec<Trial> = Vec::new();
+    let try_setting = async |edit_format: &'static str, tools: &'static str| {
+        eprintln!("== edit_format = {edit_format}, tools = {tools}");
+        let config = format!("[model]\nedit_format = \"{edit_format}\"\ntools = \"{tools}\"\n");
+        let outcomes = run_suite(home, &eval, &tasks, &config).await?;
+        Ok::<Trial, String>(Trial {
+            edit_format,
+            tools,
+            passed: outcomes.iter().filter(|o| o.passed).count(),
+            tokens: outcomes
+                .iter()
+                .map(|o| o.input_tokens + o.cached_tokens + o.output_tokens)
+                .sum(),
+            seconds: outcomes.iter().map(|o| o.seconds).sum(),
+        })
+    };
+    // Every edit format with all tools, then the best format again with
+    // the short tool list: four runs instead of six.
+    for edit_format in ["search-replace", "whole-file", "apply-patch"] {
+        trials.push(try_setting(edit_format, "full").await?);
+    }
+    let format = best(&trials).edit_format;
+    trials.push(try_setting(format, "minimal").await?);
+
+    println!(
+        "{:<16} {:<8} {:>7} {:>10} {:>8}",
+        "edit_format", "tools", "passed", "tokens", "seconds"
+    );
+    for trial in &trials {
+        println!(
+            "{:<16} {:<8} {:>4}/{:<2} {:>10} {:>8.0}",
+            trial.edit_format,
+            trial.tools,
+            trial.passed,
+            tasks.len(),
+            trial.tokens,
+            trial.seconds
+        );
+    }
+    let winner = best(&trials);
+    println!(
+        "\nBest on this suite. Put it in ~/.zcode/config.toml:\n\n[model]\nedit_format = \"{}\"\ntools = \"{}\"",
+        winner.edit_format, winner.tools
+    );
+    if trials.iter().all(|trial| trial.passed == winner.passed) {
+        println!(
+            "\nEvery setting solved the same number of tasks; the choice above only saves \
+             tokens. A harder suite would tell them apart."
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_setting_that_solves_more_wins_and_tokens_break_ties() {
+        let trial = |edit_format, passed, tokens| Trial {
+            edit_format,
+            tools: "full",
+            passed,
+            tokens,
+            seconds: 0.0,
+        };
+        let trials = [
+            trial("search-replace", 5, 900),
+            trial("whole-file", 7, 5000),
+            trial("apply-patch", 7, 3000),
+        ];
+        assert_eq!(best(&trials).edit_format, "apply-patch");
+        // A tie on both keeps the earlier, more ordinary setting.
+        let tied = [
+            trial("search-replace", 7, 3000),
+            trial("apply-patch", 7, 3000),
+        ];
+        assert_eq!(best(&tied).edit_format, "search-replace");
+    }
 }
