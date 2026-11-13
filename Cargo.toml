@@ -32,9 +32,10 @@ tempfile = "3"
 thiserror = "2"
 toml = "1"
 hx-verify = { path = "crates/hx-verify" }
+hx-web = { path = "crates/hx-web" }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -30,6 +30,12 @@ enum Command {
         #[arg(long)]
         plan: bool,
     },
+    /// Serve the web interface on this machine.
+    Web {
+        /// Port to listen on. Defaults to a free one.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
     /// Serve the Agent Client Protocol on stdin/stdout, for editors.
     Acp,
     /// List sessions.
@@ -135,6 +141,22 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Run(args) => return run::run(&home, &store, args).await,
         Command::ToolWorker | Command::SandboxExec { .. } => unreachable!("handled above"),
+        Command::Web { port } => {
+            let cwd = std::env::current_dir()
+                .and_then(|cwd| cwd.canonicalize())
+                .map_err(display)?;
+            let options = hx_app::Options {
+                max_steps: 50,
+                ..hx_app::Options::default()
+            };
+            let server = hx_web::start(home, cwd, options, port).await?;
+            println!("{}", server.url());
+            eprintln!("hx web: open the address above; Ctrl-C stops the server");
+            tokio::select! {
+                _ = server.wait() => {}
+                _ = tokio::signal::ctrl_c() => {}
+            }
+        }
         Command::Acp => {
             let options = hx_app::Options {
                 max_steps: 50,
