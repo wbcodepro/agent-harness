@@ -113,6 +113,23 @@ pub struct Options {
     pub steering: Option<Steering>,
 }
 
+type NoticeSink = Box<dyn Fn(&str) + Send + Sync>;
+static NOTICES: std::sync::OnceLock<NoticeSink> = std::sync::OnceLock::new();
+
+/// Sends remarks meant for the user (a server that did not start, a sandbox
+/// weaker than asked for) to `sink` instead of standard error. For an
+/// interface that draws on the terminal: a line printed underneath it
+/// garbles the screen. Takes effect once; later calls change nothing.
+pub fn send_notices_to(sink: impl Fn(&str) + Send + Sync + 'static) {
+    let _ = NOTICES.set(Box::new(sink));
+}
+
+fn notice(text: impl std::fmt::Display) {
+    match NOTICES.get() {
+        Some(sink) => sink(&text.to_string()),
+        None => eprintln!("zcode: {text}"),
+    }
+}
 /// What a subagent inherits from the agent that started it.
 #[derive(Clone)]
 pub struct Lineage {
@@ -235,11 +252,15 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                     .into(),
             );
         }
+        // Once, not once per session: an interface opens many.
+        static SAID: std::sync::Once = std::sync::Once::new();
         if top_level {
-            eprintln!(
-                "zcode: tools are confined for writes only; they can read any file you can \
-                 and reach the network"
-            );
+            SAID.call_once(|| {
+                notice(
+                    "tools are confined for writes only; they can read any file you can and \
+                     reach the network",
+                );
+            });
         }
         policy.unreadable.clear();
         policy.hide_env_files = false;
@@ -369,7 +390,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                 });
                 claude_plugins.push(plugin);
             }
-            Err(e) => eprintln!("zcode: {e}"),
+            Err(e) => notice(e),
         }
     }
     let (claude_hooks, skipped) = zcode_ext::claude_hooks::ClaudeHooks::load(
@@ -379,7 +400,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         options.plan,
     );
     for note in skipped {
-        eprintln!("zcode: {note}");
+        notice(note);
     }
     let claude_hooks = (!claude_hooks.is_empty()).then(|| Arc::new(claude_hooks));
     if let Some(hooks) = &claude_hooks {
@@ -468,7 +489,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     for plugin in &claude_plugins {
         match plugin.mcp_servers() {
             Ok(servers) => mcp_servers.extend(servers),
-            Err(e) => eprintln!("zcode: {e}"),
+            Err(e) => notice(e),
         }
     }
     for (name, server) in &mcp_servers {
@@ -488,7 +509,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             Ok(server_tools) => server_tools
                 .into_iter()
                 .for_each(|tool| extension_tools.insert(tool)),
-            Err(e) => eprintln!("zcode: {e}"),
+            Err(e) => notice(e),
         }
     }
     if !config.lsp.is_empty() {
@@ -505,7 +526,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             Ok(plugin_tools) => plugin_tools
                 .into_iter()
                 .for_each(|tool| extension_tools.insert(tool)),
-            Err(e) => eprintln!("zcode: {e}"),
+            Err(e) => notice(e),
         }
     }
     let mut deferred = ToolSet::new();

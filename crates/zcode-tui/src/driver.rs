@@ -17,6 +17,8 @@ pub enum Msg {
     Terminal(TermEvent),
     /// A JSON-RPC message from the agent.
     Agent(Value),
+    /// A remark for the user from the harness itself.
+    Notice(String),
 }
 
 const HELP: &str = "/plan  toggle plan mode (read-only, proposes a plan)\n\
@@ -428,6 +430,7 @@ where
                 }
             }
             Msg::Terminal(_) => {}
+            Msg::Notice(text) => app.notice(&text),
         }
     };
     // Closing our end tells the agent to stop its turns and release its
@@ -446,6 +449,12 @@ pub async fn run(
 ) -> Result<(), String> {
     let (sender, inbox) = mpsc::unbounded_channel();
     let keys = sender.clone();
+    // What would be printed to standard error is shown in the transcript:
+    // printed, it would land on top of the interface.
+    let notices = sender.clone();
+    zcode_app::send_notices_to(move |text| {
+        let _ = notices.send(Msg::Notice(text.to_string()));
+    });
     // Terminal input is blocking; a plain thread forwards it. The thread
     // ends with the process.
     std::thread::spawn(move || {
