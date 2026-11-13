@@ -36,6 +36,32 @@ fn looks_like_a_check(command: &str) -> bool {
         .is_match(command)
 }
 
+/// File types whose content can be run or tested.
+const SOURCE_EXTENSIONS: [&str; 16] = [
+    "py", "rs", "js", "jsx", "ts", "tsx", "go", "java", "kt", "c", "cc", "cpp", "rb", "php", "sh",
+    "swift",
+];
+
+/// Whether a tool call wrote to a source file.
+fn changes_source(name: &str, input: &serde_json::Value) -> bool {
+    let is_source = |path: &str| {
+        path.trim()
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| SOURCE_EXTENSIONS.contains(&extension))
+    };
+    match name {
+        "edit" | "write" => input["path"].as_str().is_some_and(is_source),
+        "apply_patch" => input["patch"].as_str().is_some_and(|patch| {
+            patch.lines().any(|line| {
+                line.strip_prefix("*** Update File: ")
+                    .or(line.strip_prefix("*** Add File: "))
+                    .is_some_and(is_source)
+            })
+        }),
+        _ => false,
+    }
+}
+
 fn text_of(content: &[Block]) -> String {
     content
         .iter()
@@ -83,6 +109,28 @@ impl TurnHook for RedCheck {
                     _ => None,
                 })
                 .collect();
+            // Code was changed and nothing was run after the last change:
+            // the work is unchecked. Said once a turn.
+            let last_change = turn.iter().rposition(|record| {
+                matches!(&record.event, Event::ToolCall { name, input, .. } if changes_source(name, input))
+            });
+            let last_run = turn.iter().rposition(
+                |record| matches!(&record.event, Event::ToolCall { name, .. } if name == "bash"),
+            );
+            let unchecked =
+                last_change.is_some_and(|change| last_run.is_none_or(|run| run < change));
+            let already_said = user_messages
+                .iter()
+                .any(|text| text.starts_with(CHECK_PREFIX) && text.contains("ran nothing"));
+            if unchecked && !already_said {
+                return Some(vec![Block::text(format!(
+                    "{CHECK_PREFIX} You changed code and ran nothing afterwards, so it is \
+                     unchecked. Before you finish, run it against what was asked: execute \
+                     it, or write and run a short check of each requirement, edge cases \
+                     included. Fix what that turns up, then say what you verified."
+                ))]);
+            }
+
             let (last_id, command) = *shell_calls.last()?;
             let failed = turn.iter().any(|record| {
                 matches!(&record.event, Event::ToolResult { call_id, is_error: true, .. }
@@ -180,6 +228,34 @@ mod tests {
         // A failed lookup at the end of a turn is not a failing check.
         assert!(!objects(log("Where is it?", &[("ls missing-dir", true)])).await);
         assert!(!objects(log("Explain", &[])).await);
+
+        // Code written and nothing run: said once, whatever was run before.
+        let wrote = |records: &mut Vec<Record>, path: &str| {
+            let seq = records.len() as u64;
+            records.push(Record {
+                seq,
+                ts: 0,
+                event: Event::ToolCall {
+                    call_id: format!("w{seq}"),
+                    name: "write".into(),
+                    input: json!({"path": path, "content": "x"}),
+                },
+            });
+        };
+        let mut records = log("Implement merge", &[("ls", false)]);
+        wrote(&mut records, "merge.py");
+        let said = RedCheck.before_stop(&records, true).await.unwrap();
+        assert!(text_of(&said).contains("ran nothing afterwards"));
+        records.push(Record {
+            seq: records.len() as u64,
+            ts: 0,
+            event: Event::UserMessage { content: said },
+        });
+        assert!(RedCheck.before_stop(&records, true).await.is_none());
+        // Notes and documents are not code to run.
+        let mut records = log("Write the notes", &[]);
+        wrote(&mut records, "NOTES.md");
+        assert!(RedCheck.before_stop(&records, true).await.is_none());
 
         // Sent back twice, then let go.
         let mut records = log("Fix it", &[("make test", true)]);

@@ -144,7 +144,8 @@ defer_tools_over = 20           # nhiều tool MCP/plugin hơn số này thì kh
 [verify]
 commands = ["cargo test -q"]    # phải đạt trước khi một lượt có sửa file được kết thúc
 checklist = false               # true: trước khi kết thúc, yêu cầu model rà lại từng điểm của đề bài
-stop_on_red = true              # lệnh test/build cuối cùng model chạy bị hỏng mà nó định dừng: nhắc nó làm tiếp (tối đa 2 lần mỗi lượt)
+stop_on_red = true              # model định dừng khi lệnh test/build cuối cùng còn hỏng, hoặc khi vừa sửa mã nguồn
+                                # mà chưa chạy gì: nhắc nó làm tiếp (tối đa 2 lần mỗi lượt)
 
 [limits]
 tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn

@@ -176,7 +176,30 @@ Ba tác vụ thêm sau đó (`spec-hidden-tests`, `large-file-fix`, `api-change`
 
 Một lần chạy cả 11 tác vụ ở cấu hình mặc định sau các bản sửa trên (commit `f8be489`): 7/11. Hỏng `api-change`, `schema-validator`, `spec-hidden-tests`, `three-bugs`, trong khi `schema-validator` và `three-bugs` từng đạt ở lần đo trước: dao động giữa các lần chạy của model này lớn, một lần chạy không đủ để so sánh hai bản. `three-bugs` chạy lại bốn lần sau khi có cảnh báo cú pháp: 3/4.
 
-Điều chưa làm được: `rust-tokenizer` vẫn hỏng ở hai trên bốn cấu hình và là giới hạn của model, không thấy nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
+**Đo lặp và leo thang.** `zcode eval --runs 3` trên cả 11 tác vụ, `gpt-4o-mini`, cùng một bản build (commit `bc750e7`):
+
+| Tác vụ | Chỉ `gpt-4o-mini` | `gpt-4o-mini`, leo thang sang `gpt-4.1` sau 2 tín hiệu kẹt |
+|---|---|---|
+| api-change | 2/3 | 3/3 |
+| csv-report | 3/3 | 3/3 |
+| find-in-many-files | 3/3 | 3/3 |
+| large-file-fix | 3/3 | 3/3 |
+| lru-cache | 3/3 | 3/3 |
+| pagination-bug | 3/3 | 3/3 |
+| refactor-module | 3/3 | 3/3 |
+| rust-tokenizer | 1/3 | 3/3 |
+| schema-validator | 2/3 | 3/3 |
+| spec-hidden-tests | 0/3 | 0/3 |
+| three-bugs | 1/3 | 3/3 |
+| Tổng | 24/33 (73%) | 30/33 (91%) |
+| Token (vào + cache + ra) | 3,34 triệu | 2,43 triệu |
+| Thời gian | 2.324 s | 1.928 s |
+
+Leo thang vừa tăng tỷ lệ đạt vừa giảm tổng token, vì model rẻ khi kẹt đốt hết 50 bước. Số token trên gộp cả hai model; phần của `gpt-4.1` đắt hơn mỗi token và lần đo này chưa tách riêng, nên chưa kết luận được về chi phí bằng tiền (bản `eval` sau đó đã ghi lại lượt nào được leo thang).
+
+`spec-hidden-tests` không được cứu vì model viết xong rồi dừng, không phát tín hiệu kẹt nào. Chốt thêm sau đó (sửa mã nguồn mà chưa chạy gì thì nhắc kiểm tra một lần) khiến model tự viết test và sửa cho tới khi test của nó đạt, nhưng vẫn 0/4 có và không có leo thang: test nó tự viết không phủ quy tắc bị sót.
+
+Điều chưa làm được: không có leo thang, `rust-tokenizer` và `three-bugs` chỉ đạt 1/3, và `spec-hidden-tests` 0/3 trong mọi cấu hình; ở các lần hỏng đó tôi không thấy thêm nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
 
 **Đợt 2: mức mặc định của thị trường**
 7. Hooks và gói plugin theo định dạng Claude Code.
