@@ -41,6 +41,10 @@ pub struct EvalArgs {
     /// Also write the results as JSON to this file.
     #[arg(long)]
     json: Option<PathBuf>,
+    /// Keep the workspace and session log of every failed task under this
+    /// directory, to see what went wrong.
+    #[arg(long)]
+    keep: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -79,17 +83,26 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Runs a task's setup or check command. One that does not finish in five
+/// minutes counts as failed: a check that runs the agent's code can hang on
+/// it.
 async fn shell(command: &str, cwd: &Path) -> bool {
-    tokio::process::Command::new("bash")
+    let child = tokio::process::Command::new("bash")
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|status| status.success())
+        .kill_on_drop(true)
+        .spawn();
+    let Ok(mut child) = child else {
+        return false;
+    };
+    matches!(
+        tokio::time::timeout(Duration::from_secs(300), child.wait()).await,
+        Ok(Ok(status)) if status.success()
+    )
 }
 
 async fn run_task(
@@ -237,6 +250,7 @@ async fn run_suite(
     args: &EvalArgs,
     tasks: &[(String, PathBuf)],
     config: &str,
+    keep: Option<&Path>,
 ) -> Result<Vec<Outcome>, String> {
     // Each task gets an empty data directory, so the user's credentials are
     // handed over through the environment instead.
@@ -253,6 +267,13 @@ async fn run_suite(
     for (name, dir) in tasks {
         eprint!("{name} ... ");
         let outcome = run_task(name, dir, &scratch, args, &keys, config).await?;
+        if let (false, Some(keep)) = (outcome.passed, keep) {
+            let kept = keep.join(name);
+            let _ = std::fs::remove_dir_all(&kept);
+            if let Err(e) = copy_tree(&scratch.join(name), &kept) {
+                eprintln!("zcode: could not keep {name}: {e}");
+            }
+        }
         eprintln!(
             "{} ({:.0}s){}",
             if outcome.passed { "pass" } else { "FAIL" },
@@ -271,7 +292,7 @@ async fn run_suite(
 
 pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
     let tasks = tasks_in(&args.suite, args.filter.as_deref())?;
-    let outcomes = run_suite(home, &args, &tasks, "").await?;
+    let outcomes = run_suite(home, &args, &tasks, "", args.keep.as_deref()).await?;
 
     println!(
         "{:<24} {:>6} {:>7} {:>5} {:>6} {:>9} {:>9} {:>8}",
@@ -347,6 +368,10 @@ pub struct ProbeArgs {
     /// Seconds allowed per task.
     #[arg(long, default_value_t = 600)]
     timeout: u64,
+    /// Keep the workspace and session log of every failed task under this
+    /// directory, one subdirectory per setting.
+    #[arg(long)]
+    keep: Option<PathBuf>,
 }
 
 /// One way of setting a model up, and how the suite went with it.
@@ -390,12 +415,17 @@ pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
         timeout: args.timeout,
         command: None,
         json: None,
+        keep: None,
     };
     let mut trials: Vec<Trial> = Vec::new();
     let try_setting = async |edit_format: &'static str, tools: &'static str| {
         eprintln!("== edit_format = {edit_format}, tools = {tools}");
         let config = format!("[model]\nedit_format = \"{edit_format}\"\ntools = \"{tools}\"\n");
-        let outcomes = run_suite(home, &eval, &tasks, &config).await?;
+        let kept = args
+            .keep
+            .as_ref()
+            .map(|keep| keep.join(format!("{edit_format}-{tools}")));
+        let outcomes = run_suite(home, &eval, &tasks, &config, kept.as_deref()).await?;
         Ok::<Trial, String>(Trial {
             edit_format,
             tools,

@@ -748,9 +748,10 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
             Provider::Openai if !chat_only => Arc::new(
                 zcode_llm::Responses::new(&base_url, api_key.clone(), model).with_effort(effort),
             ),
-            Provider::Deepseek | Provider::Openai => {
-                Arc::new(ChatCompletions::new(&base_url, api_key.clone(), model))
-            }
+            Provider::Deepseek | Provider::Openai => Arc::new(
+                ChatCompletions::new(&base_url, api_key.clone(), model)
+                    .with_temperature(config.model.temperature),
+            ),
         }
     };
     let effort = config.model.effort.clone();

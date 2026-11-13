@@ -91,6 +91,11 @@ pub struct ModelConfig {
     pub api: Option<String>,
     /// A cheaper model, on the same provider, for summarizing history.
     pub summary_model: Option<String>,
+    /// Sampling temperature, for servers spoken to through chat
+    /// completions (DeepSeek, compatible and local servers). Small models
+    /// often follow tool formats more reliably near 0. Empty leaves the
+    /// server's default.
+    pub temperature: Option<f32>,
     /// Most tool calls run from one model response.
     pub max_tool_calls: usize,
     /// How many tools the model is offered.
@@ -143,6 +148,7 @@ impl Default for ModelConfig {
             effort: None,
             api: None,
             summary_model: None,
+            temperature: None,
             max_tool_calls: 32,
             tools: ToolProfile::Full,
             edit_format: EditFormat::SearchReplace,

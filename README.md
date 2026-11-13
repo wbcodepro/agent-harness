@@ -105,6 +105,7 @@ summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch s
 tools = "full"                  # full | minimal (chỉ file, tìm kiếm, shell; cho model nhỏ)
 edit_format = "search-replace"  # search-replace | whole-file | apply-patch
 max_tool_calls = 32             # số lời gọi tool tối đa trong một phản hồi
+temperature = 0.0               # chỉ với API chat-completions (DeepSeek, máy chủ tương thích, model chạy tại chỗ)
 escalate_to = "claude-fable-5-2"     # model mạnh hơn tiếp quản phần còn lại của lượt khi model chính kẹt
 escalate_effort = "high"
 escalate_after = 2              # sau bấy nhiêu lần kiểm tra hỏng hoặc gọi lặp trong một lượt

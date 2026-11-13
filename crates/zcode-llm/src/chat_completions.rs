@@ -10,6 +10,7 @@ pub struct ChatCompletions {
     url: String,
     api_key: String,
     model: String,
+    temperature: Option<f32>,
     retry: Retry,
 }
 
@@ -22,8 +23,15 @@ impl ChatCompletions {
             url: format!("{}/chat/completions", base_url.trim_end_matches('/')),
             api_key: api_key.into(),
             model: model.into(),
+            temperature: None,
             retry: Retry::default(),
         }
+    }
+
+    /// Sampling temperature; `None` leaves the server's default.
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
@@ -73,8 +81,11 @@ impl Llm for ChatCompletions {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let body = serde_json::to_vec(&build_body(&self.model, request))
-                .map_err(|e| LlmError::Protocol(e.to_string()))?;
+            let mut body = build_body(&self.model, request);
+            if let Some(temperature) = self.temperature {
+                body["temperature"] = json!(temperature);
+            }
+            let body = serde_json::to_vec(&body).map_err(|e| LlmError::Protocol(e.to_string()))?;
 
             let mut attempt = 0;
             let mut response = loop {
@@ -358,6 +369,7 @@ mod tests {
 
     fn adapter(base_url: &str) -> ChatCompletions {
         ChatCompletions::new(base_url, "test-key", "test-model")
+            .with_temperature(Some(0.0))
             .with_client(reqwest::Client::builder().no_proxy().build().unwrap())
             .with_retry(Retry {
                 max_retries: 2,
@@ -496,6 +508,7 @@ mod tests {
                 "stream": true,
                 "stream_options": {"include_usage": true},
                 "max_tokens": 256,
+                "temperature": 0.0,
                 "tools": [{"type": "function", "function": {
                     "name": "read", "description": "Read a file.",
                     "parameters": {"type": "object"}
