@@ -1,0 +1,28 @@
+[package]
+name = "hx-cli"
+description = "The hx command line."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hx"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+hx-agent.workspace = true
+hx-eval.workspace = true
+hx-kernel.workspace = true
+hx-llm.workspace = true
+hx-session.workspace = true
+hx-tools.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
