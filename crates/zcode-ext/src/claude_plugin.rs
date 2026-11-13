@@ -151,14 +151,10 @@ mod tests {
         let servers = plugin.mcp_servers().unwrap();
         assert_eq!(servers[0].0, "relkit_notes");
         assert_eq!(servers[0].1.command, "python3");
-        assert_eq!(
-            servers[0].1.args,
-            [root.join("server.py").to_string_lossy().into_owned()]
-        );
-        assert_eq!(
-            servers[0].1.env["DATA"],
-            root.join("data").to_string_lossy()
-        );
+        // The placeholder is replaced as text, so what follows it keeps
+        // the separator the plugin wrote.
+        assert_eq!(servers[0].1.args, [format!("{}/server.py", root.display())]);
+        assert_eq!(servers[0].1.env["DATA"], format!("{}/data", root.display()));
         assert_eq!(servers[1].0, "relkit_tracker");
         assert_eq!(
             servers[1].1.url.as_deref(),

@@ -361,8 +361,10 @@ async fn hooks_written_for_claude_code_run_when_the_user_opts_in() {
 }
 
 /// Says no to everything and remembers what it was asked.
+#[cfg(unix)]
 struct Refuses(std::sync::Mutex<Vec<String>>);
 
+#[cfg(unix)]
 impl zcode_app::Prompter for Refuses {
     fn ask<'a>(
         &'a self,
