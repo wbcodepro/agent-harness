@@ -11,5 +11,6 @@ pub mod claude_hooks;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;
+pub mod skill_install;
 pub mod skills;
 pub mod wasm;

@@ -18,6 +18,7 @@ zcode-app.workspace = true
 zcode-checkpoint.workspace = true
 zcode-sandbox.workspace = true
 zcode-eval.workspace = true
+zcode-ext.workspace = true
 zcode-kernel.workspace = true
 zcode-llm.workspace = true
 zcode-session.workspace = true

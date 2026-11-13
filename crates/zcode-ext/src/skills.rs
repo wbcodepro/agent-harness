@@ -35,6 +35,12 @@ fn parse(dir: &Path, text: &str) -> Option<Skill> {
     })
 }
 
+/// Reads a `SKILL.md`: `None` when it has no front matter with a
+/// description.
+pub fn parse_skill(dir: &Path, text: &str) -> Option<Skill> {
+    parse(dir, text)
+}
+
 /// Finds skills under each root (`<root>/<name>/SKILL.md`). Earlier roots
 /// win when two skills share a name.
 pub fn discover(roots: &[PathBuf]) -> Vec<Skill> {

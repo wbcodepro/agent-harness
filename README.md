@@ -36,6 +36,8 @@ zcode sessions | show <id> | fork <id> | rewind <id> | recover <id>
 zcode import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
 zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token
 zcode eval evals/harder --command 'codex exec "$ZCODE_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
+zcode skill install <thư mục | URL git> [--path thư/mục/con]   # quét rồi cài một skill vào ~/.zcode/skills
+zcode skill list
 zcode probe evals/harder --model <tên> # thử model với từng định dạng sửa file và bộ tool, in cấu hình tốt nhất
 ```
 
@@ -179,6 +181,8 @@ MCP: server stdio chạy trong sandbox; server HTTP được gọi từ tiến t
 Hooks của Claude Code: zcode đọc cùng file `settings.json` và nói cùng giao thức (JSON qua stdin, mã thoát 2 để chặn, JSON trên stdout) cho các sự kiện `PreToolUse`, `PostToolUse`, `UserPromptSubmit` và `Stop`, với hook loại `command`, `matcher` và `if`. Tên tool và tham số được đổi sang dạng Claude Code (`Bash`, `Edit`, `file_path`…). Sự kiện và loại hook khác được báo một lần lúc khởi động rồi bỏ qua. Khác biệt cần biết: hook chạy lần lượt chứ không song song; `permissionDecision: "ask"` bị coi là chặn; `"allow"` không bỏ qua luật quyền của zcode; `tool_response` chỉ có trường `output`; `transcript_path` trỏ tới log của zcode, không cùng định dạng với Claude Code. Hook chạy ngoài sandbox, nên chỉ bật `"project"` với repo bạn tin.
 
 Dự án có thể tự khai báo lệnh kiểm tra trong `.zcode/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.zcode/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.zcode/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.zcode/skills/`.
+
+`zcode skill install` đọc mọi file của skill trước khi chép: ký tự vô hình, câu bảo model bỏ chỉ dẫn hoặc giấu người dùng, lệnh tải về rồi đưa thẳng vào shell, mã ẩn trong base64, đường dẫn tới khóa và file bí mật, symlink. Thấy dấu hiệu nguy hiểm thì không cài, trừ khi bạn thêm `--force`. Đây là so mẫu, không phải chứng minh: quét sạch nghĩa là không thấy các mánh đã biết, không có nghĩa skill an toàn.
 
 Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 

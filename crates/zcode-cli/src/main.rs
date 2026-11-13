@@ -1,5 +1,6 @@
 mod eval;
 mod run;
+mod skill;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -44,6 +45,11 @@ enum Command {
     /// Try a model with each edit format and tool list on a suite of
     /// tasks, and print the configuration it does best with.
     Probe(eval::ProbeArgs),
+    /// Install and list skills.
+    Skill {
+        #[command(subcommand)]
+        command: skill::SkillCommand,
+    },
     /// List sessions.
     Sessions,
     /// Import a session recorded by another harness.
@@ -189,6 +195,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         },
         Command::Eval(args) => return eval::run(&home, args).await,
         Command::Probe(args) => return eval::probe(&home, args).await,
+        Command::Skill { command } => return skill::run(&home, command),
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);

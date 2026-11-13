@@ -5070,6 +5070,7 @@ dependencies = [
  "zcode-app",
  "zcode-checkpoint",
  "zcode-eval",
+ "zcode-ext",
  "zcode-kernel",
  "zcode-llm",
  "zcode-sandbox",
