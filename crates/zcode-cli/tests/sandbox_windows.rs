@@ -365,3 +365,46 @@ fn no_route_leads_out_of_the_workspace() {
         "labelling the workspace reached through a link"
     );
 }
+
+/// Windows has no process groups: a job object ends what a command started
+/// when it times out, and lets go of what it left in the background.
+#[test]
+fn a_timeout_ends_the_whole_process_tree_and_a_background_process_is_let_go() {
+    let fx = Fixture::new();
+    let home = fx.home("home", "[sandbox]\nallow_partial = true\n");
+    let started = std::time::Instant::now();
+    let (output, results) = fx.run(
+        &home,
+        vec![
+            // The grandchild would write the marker if it outlived the timeout.
+            (
+                "bash",
+                json!({"command": "(sleep 4; echo x > survived.txt) & sleep 300", "timeout_ms": 1000}),
+            ),
+            // Left in the background on purpose: the call returns at once
+            // and the process carries on.
+            (
+                "bash",
+                json!({"command": "(sleep 3; echo x > late.txt) > /dev/null 2>&1 & echo started"}),
+            ),
+        ],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(results.len(), 2, "{stderr}");
+    assert!(
+        results[0].1 && results[0].0.contains("was killed"),
+        "{results:#?}"
+    );
+    assert_eq!(results[1], ("started\n".to_string(), false));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the calls waited for what they started: {:?}",
+        started.elapsed()
+    );
+
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    assert!(!fx.work.join("survived.txt").exists());
+    assert!(fx.work.join("late.txt").exists());
+}

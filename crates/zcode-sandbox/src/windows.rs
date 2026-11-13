@@ -155,3 +155,109 @@ fn lower_integrity() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// A process and everything it starts, so that all of it can be ended
+/// together: Windows has no process groups to signal. Dropping this ends
+/// them, unless [`ProcessTree::release`] let them go first.
+pub(crate) struct ProcessTree {
+    /// The job object's handle, kept as a number so the value can cross
+    /// threads.
+    job: usize,
+}
+
+impl ProcessTree {
+    /// Puts `process` (a process handle), and whatever it starts from now
+    /// on, in a new tree.
+    #[allow(unsafe_code)]
+    pub(crate) fn around(process: std::os::windows::io::RawHandle) -> std::io::Result<Self> {
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+
+        // SAFETY: the job is created without a name or security attributes
+        // (null is documented for both); `process` is a live process handle
+        // owned by the caller for the duration of the call.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            // From here the handle is closed on every path, by `Drop`.
+            let tree = Self { job: job as usize };
+            tree.end_on_close(true)?;
+            if AssignProcessToJobObject(job, process.cast()) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(tree)
+        }
+    }
+
+    /// Lets the processes live on: what a command deliberately left in the
+    /// background outlasts the call that started it.
+    pub(crate) fn release(self) {
+        let _ = self.end_on_close(false);
+    }
+
+    #[allow(unsafe_code)]
+    fn end_on_close(&self, end: bool) -> std::io::Result<()> {
+        use windows_sys::Win32::System::JobObjects::{
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectExtendedLimitInformation, SetInformationJobObject,
+        };
+
+        // SAFETY: the structure is plain data for which all-zero is the
+        // documented "no limits" value; the pointer and size passed describe
+        // that local; the job handle is open for as long as `self` lives.
+        unsafe {
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            if end {
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            }
+            let set = SetInformationJobObject(
+                self.job as windows_sys::Win32::Foundation::HANDLE,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProcessTree {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: the handle was opened by `around` and is closed only here.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(
+                self.job as windows_sys::Win32::Foundation::HANDLE,
+            );
+        }
+    }
+}
+
+/// Stops this process's own input and output handles from being handed to
+/// the programs it starts. A program left running in the background would
+/// otherwise hold the pipe the harness reads the worker's answer from, and
+/// the harness would wait for it.
+#[allow(unsafe_code)]
+pub fn keep_stdio_private() {
+    use windows_sys::Win32::Foundation::{
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: both calls take a handle value and no pointers; a handle
+        // that is missing or invalid is skipped.
+        unsafe {
+            let handle = GetStdHandle(which);
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}

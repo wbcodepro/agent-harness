@@ -65,6 +65,8 @@ const INHERITED_ENV: &[&str] = &[
 /// stdin and writes its outcome to stdout. The process is already confined
 /// by the time this runs.
 pub async fn worker_main(tools: &ToolSet) -> u8 {
+    #[cfg(windows)]
+    crate::windows::keep_stdio_private();
     let mut raw = String::new();
     let request: WorkerRequest = match std::io::stdin()
         .read_to_string(&mut raw)
@@ -203,6 +205,11 @@ impl ToolRunner for SandboxedRunner {
             // Armed until the worker reports a clean finish: a cancelled or
             // failed call takes down everything the tool started.
             let mut group = GroupGuard::new(child.id());
+            // Windows has no process groups; a job object does the same work.
+            #[cfg(windows)]
+            let tree = child
+                .raw_handle()
+                .and_then(|process| crate::windows::ProcessTree::around(process).ok());
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(&request).await;
             }
@@ -217,6 +224,10 @@ impl ToolRunner for SandboxedRunner {
                 Ok(response) => {
                     if !response.kill_group {
                         group.disarm();
+                        #[cfg(windows)]
+                        if let Some(tree) = tree {
+                            tree.release();
+                        }
                     }
                     ToolOutput {
                         text: response.text,

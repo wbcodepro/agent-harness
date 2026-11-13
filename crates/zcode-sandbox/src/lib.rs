@@ -25,7 +25,7 @@ pub use worker::{SandboxedRunner, worker_main};
 #[cfg(target_os = "linux")]
 pub use landlock::apply_to_current_process;
 #[cfg(windows)]
-pub use windows::{apply_to_current_process, low_temp_dir};
+pub use windows::{apply_to_current_process, keep_stdio_private, low_temp_dir};
 
 /// Gets the machine ready to enforce `policy`, before any tool runs. Only
 /// Windows needs this: its writable roots must be labelled once.

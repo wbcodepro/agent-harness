@@ -123,6 +123,12 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
     match &command {
         Command::ToolWorker => {
             let code = zcode_sandbox::worker_main(&zcode_tools::ToolSet::every()).await;
+            // On Windows a program the tool left running still holds the
+            // pipes its output was read from, and the runtime would wait for
+            // those reads before returning. The answer is written; leave.
+            #[cfg(windows)]
+            std::process::exit(code.into());
+            #[cfg(not(windows))]
             return Ok(ExitCode::from(code));
         }
         Command::SandboxExec { policy, command } => return sandbox_exec(policy, command),
@@ -259,6 +265,9 @@ fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode
     let policy: zcode_sandbox::SandboxPolicy =
         serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
     zcode_sandbox::apply_to_current_process(&policy).map_err(display)?;
+    // The program gets copies of the standard handles; the originals must
+    // not travel along as well, or what it starts holds the caller's pipes.
+    zcode_sandbox::keep_stdio_private();
     let status = std::process::Command::new(&command[0])
         .args(&command[1..])
         .status()
