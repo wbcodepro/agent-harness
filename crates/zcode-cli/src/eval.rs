@@ -49,6 +49,11 @@ pub struct EvalArgs {
     /// measure a configuration.
     #[arg(long)]
     config: Option<PathBuf>,
+    /// Run the whole suite this many times and report how often each task
+    /// passed. One run of a weak model says little: the same task can pass
+    /// and fail on the same code.
+    #[arg(long, default_value_t = 1)]
+    runs: usize,
 }
 
 #[derive(Deserialize)]
@@ -301,7 +306,20 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?,
         None => String::new(),
     };
-    let outcomes = run_suite(home, &args, &tasks, &config, args.keep.as_deref()).await?;
+    let runs = args.runs.max(1);
+    let mut outcomes = Vec::new();
+    for round in 1..=runs {
+        // Each round keeps its failures apart, so none overwrites another.
+        let keep = match (&args.keep, runs) {
+            (Some(keep), 1) => Some(keep.clone()),
+            (Some(keep), _) => Some(keep.join(format!("run-{round}"))),
+            (None, _) => None,
+        };
+        if runs > 1 {
+            eprintln!("== run {round} of {runs}");
+        }
+        outcomes.extend(run_suite(home, &args, &tasks, &config, keep.as_deref()).await?);
+    }
 
     println!(
         "{:<24} {:>6} {:>7} {:>5} {:>6} {:>9} {:>9} {:>8}",
@@ -319,6 +337,16 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
             o.cached_tokens,
             o.output_tokens
         );
+    }
+    if runs > 1 {
+        println!("\n{:<24} {:>8}", "task", "passed");
+        for (name, _) in &tasks {
+            let of_task = || outcomes.iter().filter(|o| &o.name == name);
+            println!(
+                "{name:<24} {:>5}/{runs}",
+                of_task().filter(|o| o.passed).count()
+            );
+        }
     }
     let passed = outcomes.iter().filter(|o| o.passed).count();
     let sum = |f: fn(&Outcome) -> u64| outcomes.iter().map(f).sum::<u64>();
@@ -341,6 +369,7 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         let report = json!({
             "provider": args.provider,
             "model": args.model,
+            "runs": runs,
             "passed": passed,
             "total": outcomes.len(),
             "tasks": outcomes.iter().map(|o| json!({
@@ -426,6 +455,7 @@ pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
         json: None,
         keep: None,
         config: None,
+        runs: 1,
     };
     let mut trials: Vec<Trial> = Vec::new();
     let try_setting = async |edit_format: &'static str, tools: &'static str| {

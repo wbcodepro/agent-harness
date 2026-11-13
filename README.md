@@ -34,7 +34,7 @@ zcode web                              # giao diện web trên 127.0.0.1
 zcode acp                              # máy chủ Agent Client Protocol cho editor
 zcode sessions | show <id> | fork <id> | rewind <id> | recover <id>
 zcode import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
-zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token (--keep <thư mục>: giữ log của tác vụ hỏng)
+zcode eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token (--keep <thư mục>: giữ log của tác vụ hỏng; --runs N: chạy N lần, báo tỷ lệ đạt từng tác vụ)
 zcode eval evals/harder --command 'codex exec "$ZCODE_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
 zcode skill install <thư mục | URL git> [--path thư/mục/con]   # quét rồi cài một skill vào ~/.zcode/skills
 zcode skill list
