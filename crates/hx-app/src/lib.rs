@@ -8,14 +8,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use hx_agent::{Agent, Checkpointer, ToolPipeline};
+use hx_agent::{Agent, Checkpointer, ToolPipeline, TurnHook};
 use hx_checkpoint::GitCheckpoints;
+use hx_context::{Compactor, SpillLayer, load_instructions};
 use hx_eval::{Recording, ScriptedLlm};
 use hx_kernel::BoxFuture;
 use hx_llm::{ChatCompletions, Llm};
-use hx_policy::{ApprovalLayer, Config, NetworkMode, Prompter, RedactLayer, RuleAction, Secrets};
+use hx_policy::{
+    ApprovalLayer, Config, NetworkMode, ProjectConfig, Prompter, RedactLayer, RuleAction, Secrets,
+};
 use hx_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
-use hx_tools::{ToolContext, ToolSet};
+use hx_tools::{Bash, ToolContext, ToolRunner, ToolSet};
+use hx_verify::Verifier;
 
 pub use hx_policy::NetworkMode as NetworkChoice;
 pub use hx_sandbox::Mode as SandboxMode;
@@ -94,9 +98,12 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
     let mut proxy = None;
     if policy.is_confined() {
         policy.unreadable.extend(config.sandbox.unreadable.clone());
-        policy
-            .unreadable
-            .push(home.canonicalize().unwrap_or_else(|_| home.to_path_buf()));
+        // The harness's own data: credentials, settings, other sessions.
+        // The spill directory stays readable; tools are pointed at it.
+        let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        for private in [".env", "config.toml", "sessions", "checkpoints"] {
+            policy.unreadable.push(home.join(private));
+        }
         policy.hide_env_files = config.sandbox.hide_env_files;
         policy.network = match options.network.unwrap_or(config.network.mode) {
             NetworkMode::Off => Network::Blocked,
@@ -118,15 +125,24 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
         .iter()
         .filter_map(|name| Some((name.clone(), secrets.get(name)?.to_string())))
         .collect();
-    let runner = SandboxedRunner {
+    let runner: Arc<dyn ToolRunner> = Arc::new(SandboxedRunner {
         helper: std::env::current_exe()
             .map_err(|e| format!("cannot find the hx executable: {e}"))?,
         policy: policy.clone(),
         env: granted,
-    };
+    });
 
-    // Permission layers. Redaction is outermost so it also covers refusals.
+    // Layers, outermost first: spill what is left after redaction, redact
+    // (so refusals are covered too), then decide whether the call runs.
     let pipeline = ToolPipeline::new();
+    pipeline.push(SpillLayer {
+        dir: checkpoint_dir(home, cwd)
+            .file_name()
+            .map(|workspace| home.join("spill").join(workspace))
+            .unwrap_or_else(|| home.join("spill")),
+        threshold: config.context.spill_at_bytes,
+        preview: config.context.spill_at_bytes / 4,
+    });
     pipeline.push(RedactLayer {
         secrets: secrets.clone(),
     });
@@ -157,14 +173,32 @@ pub async fn build(home: &Path, cwd: &Path, options: &Options) -> Result<Runtime
             None
         };
 
+    let mut hooks: Vec<Arc<dyn TurnHook>> = vec![Arc::new(Compactor {
+        llm: Arc::clone(&llm),
+        threshold_tokens: config.context.compact_at_tokens,
+    })];
+    let project = ProjectConfig::load(&cwd.join(".hx/config.toml")).map_err(|e| e.to_string())?;
+    let verify = project.verify.unwrap_or_else(|| config.verify.clone());
+    if !verify.commands.is_empty() {
+        hooks.push(Arc::new(Verifier {
+            commands: verify.commands,
+            max_rounds: verify.max_rounds,
+            timeout_ms: verify.timeout_ms,
+            runner: Arc::clone(&runner),
+            shell: Arc::new(Bash),
+            context: ToolContext::new(cwd),
+        }));
+    }
+
     let agent = Agent {
         llm,
         tools: ToolSet::builtin(),
         pipeline,
         tool_context: ToolContext::new(cwd),
-        runner: Arc::new(runner),
+        runner,
         checkpointer,
-        system: system_prompt(cwd, &policy),
+        hooks,
+        system: system_prompt(cwd, &policy) + &load_instructions(home, cwd),
         max_steps: options.max_steps,
         max_tokens: None,
     };

@@ -17,7 +17,7 @@ const MAX_TIMEOUT_MS: u64 = 600_000;
 /// Bytes kept per stream while the command runs; the rest is discarded.
 const CAPTURE_LIMIT: usize = 1024 * 1024;
 /// Bytes of each stream shown to the model.
-const SHOWN_LIMIT: usize = 30_000;
+const SHOWN_LIMIT: usize = 200_000;
 
 /// Runs a shell command and returns its output.
 pub struct Bash;
@@ -276,6 +276,7 @@ mod tests {
             .await;
         assert!(!out.is_error);
         assert!(out.text.len() < 2 * SHOWN_LIMIT);
+        assert!(out.text.len() < 3_000_000 / 2);
         assert!(out.text.contains("bytes omitted"));
     }
 }

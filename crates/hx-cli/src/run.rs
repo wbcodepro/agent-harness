@@ -150,6 +150,11 @@ fn printer() -> impl FnMut(&Record) + Send + 'static {
             println!();
             line_open = false;
         }
+        Event::Compaction { .. } => eprintln!("context: earlier history summarized"),
+        Event::UserMessage { content } if matches!(content.first(), Some(Block::Text { text }) if text.starts_with("[hx verify]")) =>
+        {
+            eprintln!("verify: checks failed; sent back to the model");
+        }
         Event::ToolCall { name, input, .. } => {
             eprintln!("> {name} {}", one_line(&describe(name, input)));
         }

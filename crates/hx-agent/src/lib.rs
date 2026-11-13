@@ -98,12 +98,38 @@ pub enum AgentError {
     Session(#[from] SessionError),
     #[error("the turn was stopped after {0} steps without finishing")]
     StepLimit(u64),
+    #[error("{0}")]
+    Hook(String),
 }
 
 /// Saves the state of the workspace so a session can be rewound to it.
 pub trait Checkpointer: Send + Sync {
     /// Returns an id for the saved state.
     fn snapshot(&self) -> BoxFuture<'_, Result<String, String>>;
+}
+
+/// Extension points inside a turn.
+pub trait TurnHook: Send + Sync {
+    /// Runs before each model request, with the session as the request will
+    /// see it. May append events (e.g. a compaction).
+    fn before_step<'a>(
+        &'a self,
+        _session: &'a mut Session,
+    ) -> BoxFuture<'a, Result<(), AgentError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Runs when the model has stopped calling tools and the turn is about
+    /// to end, with the session's records. `changed` says whether any tool that can change the workspace
+    /// ran this turn. Returning input keeps the turn going with that input
+    /// as a new user message.
+    fn before_stop<'a>(
+        &'a self,
+        _records: &'a [Record],
+        _changed: bool,
+    ) -> BoxFuture<'a, Option<Vec<Block>>> {
+        Box::pin(async { None })
+    }
 }
 
 pub struct Agent {
@@ -116,6 +142,7 @@ pub struct Agent {
     /// When set, the workspace is saved at the start of each turn and after
     /// every step that ran a tool able to change it.
     pub checkpointer: Option<Arc<dyn Checkpointer>>,
+    pub hooks: Vec<Arc<dyn TurnHook>>,
     /// System prompt. Empty means none.
     pub system: String,
     /// Upper bound on model requests in one turn.
@@ -169,8 +196,12 @@ impl Agent {
         session.append(Event::UserMessage { content: input })?;
         self.checkpoint(session).await?;
 
+        let mut changed = false;
         for step in 1..=self.max_steps {
             session.append(Event::StepStart { turn, step })?;
+            for hook in &self.hooks {
+                hook.before_step(session).await?;
+            }
 
             let mut request = Request::from(session.history());
             request.max_tokens = self.max_tokens;
@@ -232,10 +263,25 @@ impl Agent {
             }
 
             if may_have_changed {
+                changed = true;
                 self.checkpoint(session).await?;
             }
             session.append(Event::StepEnd { turn, step })?;
             if !called_tools {
+                let mut follow_up = None;
+                for hook in &self.hooks {
+                    follow_up = hook.before_stop(session.records(), changed).await;
+                    if follow_up.is_some() {
+                        break;
+                    }
+                }
+                if let Some(content) = follow_up {
+                    session.append(Event::UserMessage { content })?;
+                    // What the hook objected to has been reported; only new
+                    // changes count from here.
+                    changed = false;
+                    continue;
+                }
                 session.append(Event::TurnEnd {
                     turn,
                     reason: TurnEndReason::Completed,

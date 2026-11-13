@@ -42,19 +42,31 @@ pub fn apply_to_current_process(policy: &SandboxPolicy) -> Result<(), SandboxErr
         .create()
         .map_err(|e| unavailable("cannot create the ruleset", &e))?;
 
+    // Rights that only make sense for directories must not be requested on
+    // a file: the kernel interface rejects them, and a rule that had to be
+    // trimmed would make the whole policy count as partially enforced.
+    let fit = |path: &Path, wanted| {
+        if path.is_dir() {
+            wanted
+        } else {
+            wanted & AccessFs::from_file(abi)
+        }
+    };
+
     let unreadable: Vec<PathBuf> = policy.unreadable.iter().map(|p| real(p)).collect();
     for path in readable_roots(Path::new("/"), &unreadable) {
         if let Ok(fd) = PathFd::new(&path) {
             created = created
-                .add_rule(PathBeneath::new(fd, read))
+                .add_rule(PathBeneath::new(fd, fit(&path, read)))
                 .map_err(|e| unavailable("cannot add a read rule", &e))?;
         }
     }
     if policy.mode == Mode::WorkspaceWrite {
         for path in &policy.writable {
-            if let Ok(fd) = PathFd::new(real(path)) {
+            let path = real(path);
+            if let Ok(fd) = PathFd::new(&path) {
                 created = created
-                    .add_rule(PathBeneath::new(fd, all))
+                    .add_rule(PathBeneath::new(fd, fit(&path, all)))
                     .map_err(|e| unavailable("cannot add a write rule", &e))?;
             }
         }
@@ -79,12 +91,14 @@ pub fn apply_to_current_process(policy: &SandboxPolicy) -> Result<(), SandboxErr
         RulesetStatus::FullyEnforced => Ok(()),
         // An older kernel that silently drops part of the policy is not
         // confinement we can vouch for.
-        RulesetStatus::PartiallyEnforced | RulesetStatus::NotEnforced => {
-            Err(SandboxError::Unavailable(
-                "landlock: this kernel cannot fully enforce the policy (needs Landlock ABI 4, Linux 6.7+)"
-                    .into(),
-            ))
-        }
+        RulesetStatus::PartiallyEnforced => Err(SandboxError::Unavailable(
+            "landlock: this kernel enforces only part of the policy (needs Landlock ABI 4, Linux 6.7+)"
+                .into(),
+        )),
+        RulesetStatus::NotEnforced => Err(SandboxError::Unavailable(
+            "landlock: the kernel did not apply the policy (Landlock is disabled, or blocked by a seccomp filter such as a container runtime's)"
+                .into(),
+        )),
     }
 }
 

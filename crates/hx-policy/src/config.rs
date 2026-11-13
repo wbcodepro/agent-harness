@@ -25,6 +25,8 @@ pub struct Config {
     pub approval: ApprovalConfig,
     pub secrets: SecretsConfig,
     pub checkpoints: CheckpointConfig,
+    pub context: ContextConfig,
+    pub verify: VerifyConfig,
     /// Permission rules, first match wins.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
@@ -176,6 +178,72 @@ impl Default for CheckpointConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ContextConfig {
+    /// Summarize older history once a request would exceed this many tokens.
+    pub compact_at_tokens: u64,
+    /// Tool outputs longer than this are saved to a file and previewed.
+    pub spill_at_bytes: usize,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            compact_at_tokens: 100_000,
+            spill_at_bytes: 16_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct VerifyConfig {
+    /// Commands that must succeed before a turn that changed files ends.
+    pub commands: Vec<String>,
+    /// Times per turn a failure is sent back to the model.
+    pub max_rounds: usize,
+    pub timeout_ms: u64,
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
+            max_rounds: 2,
+            timeout_ms: 300_000,
+        }
+    }
+}
+
+/// What a project may configure for itself in `.hx/config.toml`. A
+/// repository is not trusted to loosen the sandbox or permissions, so this
+/// is deliberately a small subset of [`Config`].
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProjectConfig {
+    pub verify: Option<VerifyConfig>,
+}
+
+impl ProjectConfig {
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(source) => {
+                return Err(ConfigError::Read {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        toml::from_str(&text).map_err(|e| ConfigError::Invalid {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +296,15 @@ mod tests {
         assert_eq!(config.network.mode, NetworkMode::Off);
         assert_eq!(config.rules.len(), 2);
         assert_eq!(config.rules[0].action, RuleAction::Ask);
+
+        // A project file may set its checks and nothing else.
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("config.toml");
+        std::fs::write(&project, "[verify]\ncommands = [\"make test\"]\n").unwrap();
+        let loaded = ProjectConfig::load(&project).unwrap();
+        assert_eq!(loaded.verify.unwrap().commands, ["make test"]);
+        std::fs::write(&project, "[sandbox]\nmode = \"danger-full-access\"\n").unwrap();
+        assert!(ProjectConfig::load(&project).is_err());
 
         for bad in [
             "[sandbox]\nmod = \"read-only\"",

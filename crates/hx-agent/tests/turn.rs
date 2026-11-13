@@ -63,6 +63,7 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
         tool_context: ToolContext::new(workspace),
         runner: Arc::new(InProcess),
         checkpointer: None,
+        hooks: Vec::new(),
         system: "You are hx.".into(),
         max_steps: 8,
         max_tokens: None,
@@ -188,7 +189,7 @@ async fn a_turn_runs_tools_and_feeds_their_results_back_to_the_model() {
     let requests = spy.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].system.as_deref(), Some("You are hx."));
-    assert_eq!(requests[0].tools.len(), 4);
+    assert_eq!(requests[0].tools.len(), 7);
     assert_eq!(requests[0].messages.len(), 1);
     // The second request carries the call and its result.
     let roles: Vec<Role> = requests[1].messages.iter().map(|m| m.role).collect();
@@ -403,4 +404,60 @@ async fn replaying_the_recording_lifted_from_a_log_reproduces_the_log() {
     assert_eq!(lifted, recording);
     let (second_log, _) = run("second", lifted).await;
     assert_eq!(first_log, second_log);
+}
+
+/// Sends the turn back once, the first time it tries to stop after a change.
+struct Objector;
+
+impl hx_agent::TurnHook for Objector {
+    fn before_stop<'a>(
+        &'a self,
+        records: &'a [hx_session::Record],
+        changed: bool,
+    ) -> BoxFuture<'a, Option<Vec<Block>>> {
+        Box::pin(async move {
+            let already = records.iter().any(|record| {
+                matches!(&record.event, Event::UserMessage { content }
+                    if content == &vec![Block::text("Check failed: fix it.")])
+            });
+            (changed && !already).then(|| vec![Block::text("Check failed: fix it.")])
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_hook_can_keep_the_turn_going_when_the_model_tries_to_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            tool_call("c1", "write", json!({"path": "a.txt", "content": "bad"})),
+            ScriptedResponse::text("Done."),
+            tool_call("c2", "write", json!({"path": "a.txt", "content": "good"})),
+            ScriptedResponse::text("Fixed."),
+            ScriptedResponse::text("Just talking."),
+        ],
+    }));
+    let mut agent = agent(llm, dir.path());
+    agent.hooks.push(Arc::new(Objector));
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent
+        .run_turn(&mut session, user("Write a.txt"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "good"
+    );
+    let users = kinds(&session).iter().filter(|k| **k == "user").count();
+    assert_eq!(users, 2, "the hook's objection is logged as a user message");
+    assert_eq!(
+        kinds(&session).iter().filter(|k| **k == "turn/end").count(),
+        1
+    );
+
+    // A turn that changes nothing is not held back.
+    agent.run_turn(&mut session, user("Hi")).await.unwrap();
+    assert_eq!(kinds(&session).iter().filter(|k| **k == "user").count(), 3);
 }

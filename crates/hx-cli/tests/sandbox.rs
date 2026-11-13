@@ -1,6 +1,6 @@
 //! Escape attempts and policy checks, through the real `hx` binary with the
 //! default (confined) settings.
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 use std::fs;
 use std::path::PathBuf;
@@ -137,8 +137,7 @@ fn confined_tools_cannot_write_outside_the_workspace_or_read_secrets() {
             ("read", json!({"path": ".env"})),
             bash("cat .env"),
             bash(format!(
-                "cat {}/.env; ls {}",
-                fx.home.display(),
+                "cat {0}/.env || cat {0}/config.toml || ls {0}/sessions",
                 fx.home.display()
             )),
             bash("echo token=${HARNESS_ONLY_TOKEN:-unset}"),
@@ -147,10 +146,13 @@ fn confined_tools_cannot_write_outside_the_workspace_or_read_secrets() {
     );
 
     let ok: Vec<bool> = results.iter().map(|(_, is_error)| !is_error).collect();
+    // Landlock cannot hide files by name, so on Linux a workspace `.env`
+    // stays readable; its values are still redacted (checked below).
+    let env_file = cfg!(target_os = "linux");
     assert_eq!(
         ok,
         [
-            true, true, false, false, false, false, false, false, false, false, false, true
+            true, true, false, false, false, false, false, false, env_file, env_file, false, true
         ],
         "{results:#?}"
     );
@@ -299,4 +301,106 @@ fn rewind_restores_the_workspace_and_forks_the_session() {
             .count()
     };
     assert_eq!((turns(&fork), turns(&id)), (1, 2));
+}
+
+#[test]
+fn checks_hold_the_turn_open_until_they_pass() {
+    let fx = Fixture::new("");
+    fs::create_dir(fx.work.join(".hx")).unwrap();
+    fs::write(
+        fx.work.join(".hx/config.toml"),
+        "[verify]\ncommands = [\"grep -q good out.txt\"]\n",
+    )
+    .unwrap();
+    fs::write(fx.work.join("AGENTS.md"), "Always write lowercase.\n").unwrap();
+
+    // The model writes the wrong content and says it is done; the gate
+    // sends it back; it fixes the file and is then allowed to stop.
+    let mut responses = vec![
+        ScriptedResponse {
+            deltas: vec![
+                Delta::ToolUseStart {
+                    id: "c0".into(),
+                    name: "write".into(),
+                },
+                Delta::ToolInput {
+                    json: json!({"path": "out.txt", "content": "bad"}).to_string(),
+                },
+            ],
+            stop: StopReason::ToolUse,
+            usage: Usage::default(),
+        },
+        ScriptedResponse::text("Done."),
+    ];
+    responses.push(ScriptedResponse {
+        deltas: vec![
+            Delta::ToolUseStart {
+                id: "c1".into(),
+                name: "write".into(),
+            },
+            Delta::ToolInput {
+                json: json!({"path": "out.txt", "content": "good"}).to_string(),
+            },
+        ],
+        stop: StopReason::ToolUse,
+        usage: Usage::default(),
+    });
+    responses.push(ScriptedResponse::text("Fixed."));
+    let script = fx.root.join("verify.jsonl");
+    Recording { responses }.save(&script).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hx"))
+        .arg("--home")
+        .arg(&fx.home)
+        .args(["run", "write out.txt"])
+        .current_dir(&fx.work)
+        .env("HX_SCRIPT", &script)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Done.\nFixed.\n");
+    assert_eq!(
+        stderr.matches("verify: checks failed").count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(fx.work.join("out.txt")).unwrap(), "good");
+
+    // The project's instructions became part of the logged system prompt.
+    let store = SessionStore::new(fx.home.join("sessions"));
+    let id = store.list().unwrap().pop().unwrap().id;
+    let system = store
+        .read(&id)
+        .unwrap()
+        .into_iter()
+        .find_map(|record| match record.event {
+            Event::SystemMessage { text } => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert!(system.contains("Always write lowercase."), "{system}");
+}
+
+#[test]
+fn large_outputs_are_spilled_to_a_file_the_tools_can_read() {
+    let fx = Fixture::new("[context]\nspill_at_bytes = 2000\n");
+    let (_, results) = fx.run(vec![bash("seq 1 5000")], &[]);
+    let (text, is_error) = &results[0];
+    assert!(!is_error && text.len() < 4000, "{}", text.len());
+    assert!(text.starts_with("1\n2\n") && text.contains("bytes omitted"));
+
+    // The path it names is readable from inside the sandbox.
+    let path = text
+        .split("saved at ")
+        .nth(1)
+        .and_then(|rest| rest.split(". Use read").next())
+        .unwrap()
+        .to_string();
+    let (_, results) = fx.run(
+        vec![("grep", json!({"pattern": "^4321$", "path": path}))],
+        &[],
+    );
+    assert!(results[0].0.ends_with(":4321:4321\n"), "{results:#?}");
 }

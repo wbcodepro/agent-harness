@@ -1,12 +1,13 @@
 //! Built-in tools and the trait they implement.
 //!
-//! These run in the harness process with its full privileges. Confinement
-//! belongs to the sandbox layer; until that exists, callers must gate
-//! anything whose [`Effect`] is not `ReadOnly` behind approval.
+//! A tool body has whatever privileges the process running it has. The
+//! harness runs them through a [`ToolRunner`], normally one that ships each
+//! call to a confined worker process.
 
 mod bash;
 mod files;
 mod process;
+mod search;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ pub use files::{Edit, Read, Write};
 pub use hx_kernel::BoxFuture;
 use hx_session::ToolSpec;
 pub use process::GroupGuard;
+pub use search::{Glob, Grep, RepoMap};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -138,13 +140,16 @@ impl ToolSet {
         Self::default()
     }
 
-    /// `read`, `write`, `edit` and `bash`.
+    /// `read`, `write`, `edit`, `bash`, `glob`, `grep` and `repo_map`.
     pub fn builtin() -> Self {
         let mut set = Self::new();
         set.insert(Arc::new(Read));
         set.insert(Arc::new(Write));
         set.insert(Arc::new(Edit));
         set.insert(Arc::new(Bash));
+        set.insert(Arc::new(Glob));
+        set.insert(Arc::new(Grep));
+        set.insert(Arc::new(RepoMap));
         set
     }
 
@@ -211,7 +216,10 @@ mod tests {
     fn builtin_tools_have_unique_names_and_object_schemas() {
         let specs = ToolSet::builtin().specs();
         let names: Vec<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
-        assert_eq!(names, ["read", "write", "edit", "bash"]);
+        assert_eq!(
+            names,
+            ["read", "write", "edit", "bash", "glob", "grep", "repo_map"]
+        );
         assert!(
             specs
                 .iter()

@@ -9,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 hx-agent.workspace = true
 hx-checkpoint.workspace = true
+hx-context.workspace = true
+hx-verify.workspace = true
 hx-eval.workspace = true
 hx-kernel.workspace = true
 hx-llm.workspace = true

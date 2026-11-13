@@ -7,8 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+globset = "0.4.21"
 hx-kernel.workspace = true
 hx-session.workspace = true
+ignore = "0.4.34"
+regex = "1.13.1"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
