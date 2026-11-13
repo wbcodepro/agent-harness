@@ -73,7 +73,7 @@ Giới hạn cần biết:
 
 - Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
 - Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
-- Windows chưa có sandbox gốc và bản Windows chưa được biên dịch hay thử. Trên Windows hãy chạy `hx` trong WSL2 (dùng bản Linux; cần kernel 6.7 trở lên để sandbox hoạt động).
+- Windows: `hx` biên dịch được và qua bộ test trên CI, nhưng chưa có sandbox gốc. Ở đó các chế độ giam từ chối chạy; chỉ dùng được `--sandbox danger-full-access` (mọi thay đổi phải được bạn đồng ý), hoặc chạy bản Linux trong WSL2 (cần kernel 6.7 trở lên).
 - Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
 
 ## Cấu hình
