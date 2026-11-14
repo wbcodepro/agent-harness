@@ -29,7 +29,24 @@ pub struct Compactor {
     pub threshold_tokens: u64,
     /// Try clearing old tool results before summarizing.
     pub clear_tool_results: bool,
+    /// The summary model is the session's own model: ask it with the
+    /// conversation exactly as the last request sent it, plus the request
+    /// for a summary at the end, so the provider serves that prefix from its
+    /// cache instead of reading a re-rendered transcript at full price.
+    pub reuse_prefix: bool,
 }
+
+/// Asked at the end of the conversation itself when the prefix is reused.
+const SUMMARY_IN_PLACE: &str = "[hame compaction] Pause the task. Do not call any tool. The \
+conversation so far is about to be replaced by a summary, and the agent that continues will see \
+only that summary and the most recent steps. Write that summary now, as plain text. Include, in \
+this order:
+1. Every request and instruction the user gave, verbatim where short, and whether each is done.
+2. What has been done: files created or changed (with paths), commands run and their important \
+results.
+3. Facts learned about the codebase or environment that will be needed again.
+4. What was in progress at the end and the exact next steps.
+Be specific and complete rather than brief; do not mention this summarization.";
 
 fn block_chars(blocks: &[Block]) -> usize {
     blocks
@@ -316,6 +333,11 @@ impl Compactor {
         if covered.messages.is_empty() {
             return Ok(false);
         }
+        if self.reuse_prefix
+            && let Some((summary, usage)) = self.summarize_in_place(in_place_request(session)).await
+        {
+            return self.record(session, cut, &summary, usage).map(|()| true);
+        }
         let request = Request {
             system: Some(SUMMARY_SYSTEM.into()),
             tools: Vec::new(),
@@ -352,6 +374,17 @@ impl Compactor {
                 "compaction failed: the model returned an empty summary".into(),
             ));
         }
+        self.record(session, cut, &summary, completion.usage)
+            .map(|()| true)
+    }
+
+    fn record(
+        &self,
+        session: &mut Session,
+        cut: usize,
+        summary: &str,
+        usage: hame_session::Usage,
+    ) -> Result<(), AgentError> {
         let up_to_seq = session.records()[cut].seq - 1;
         session.append(Event::Compaction {
             summary: format!(
@@ -360,10 +393,45 @@ impl Compactor {
                 summary.trim()
             ),
             up_to_seq,
-            usage: completion.usage,
+            usage,
         })?;
-        Ok(true)
+        Ok(())
     }
+
+    /// The summary asked for at the end of the conversation as it stands.
+    /// `None` when that did not give a finished text answer (the model
+    /// called a tool, was cut off, or failed): the caller then asks with a
+    /// transcript instead.
+    async fn summarize_in_place(&self, request: Request) -> Option<(String, hame_session::Usage)> {
+        let mut summary = String::new();
+        let mut collect = |delta: Delta| -> Result<(), SinkError> {
+            if let Delta::Text { text } = delta {
+                summary.push_str(&text);
+            }
+            Ok(())
+        };
+        let completion = self.llm.stream(&request, &mut collect).await.ok()?;
+        (completion.stop == StopReason::EndTurn && !summary.trim().is_empty())
+            .then_some((summary, completion.usage))
+    }
+}
+
+/// The next request as the agent would send it, with the request for a
+/// summary at the end.
+fn in_place_request(session: &Session) -> Request {
+    let mut request = Request::from(session.history());
+    request.cache_key = Some(session.id().to_string());
+    let ask = Block::text(SUMMARY_IN_PLACE);
+    // Appended to a trailing user message (tool results, usually) so the
+    // roles still alternate; everything before it is unchanged.
+    match request.messages.last_mut() {
+        Some(last) if last.role == Role::User => last.content.push(ask),
+        _ => request.messages.push(Message {
+            role: Role::User,
+            content: vec![ask],
+        }),
+    }
+    request
 }
 
 impl TurnHook for Compactor {
@@ -480,10 +548,127 @@ mod tests {
 
     fn compactor(responses: Vec<ScriptedResponse>, threshold_tokens: u64) -> Compactor {
         Compactor {
+            reuse_prefix: false,
             llm: Arc::new(ScriptedLlm::new(Recording { responses })),
             threshold_tokens,
             clear_tool_results: true,
         }
+    }
+
+    /// Remembers the requests a scripted model was sent.
+    struct Spy {
+        inner: ScriptedLlm,
+        requests: std::sync::Mutex<Vec<Request>>,
+    }
+
+    impl Llm for Spy {
+        fn stream<'a>(
+            &'a self,
+            request: &'a Request,
+            sink: &'a mut dyn hame_llm::DeltaSink,
+        ) -> BoxFuture<'a, Result<hame_llm::Completion, hame_llm::LlmError>> {
+            self.requests.lock().unwrap().push(request.clone());
+            self.inner.stream(request, sink)
+        }
+    }
+
+    fn long_session(dir: &std::path::Path) -> Session {
+        let mut session = session(dir);
+        session.append(Event::TurnStart { turn: 1 }).unwrap();
+        session
+            .append(Event::SystemMessage {
+                text: "You are hame.".into(),
+            })
+            .unwrap();
+        session
+            .append(Event::UserMessage {
+                content: vec![Block::text("Read everything.")],
+            })
+            .unwrap();
+        for n in 1..=6 {
+            step(&mut session, n, 400);
+        }
+        session
+            .append(Event::StepStart { turn: 1, step: 7 })
+            .unwrap();
+        session
+    }
+
+    #[tokio::test]
+    async fn a_summary_by_the_session_model_reuses_the_conversation_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = long_session(dir.path());
+        let next = Request::from(session.history());
+        let spy = Arc::new(Spy {
+            inner: ScriptedLlm::new(Recording {
+                responses: vec![ScriptedResponse::text("Read steps 1 to 5.")],
+            }),
+            requests: Default::default(),
+        });
+        let compactor = Compactor {
+            llm: spy.clone(),
+            threshold_tokens: 300,
+            clear_tool_results: false,
+            reuse_prefix: true,
+        };
+        compactor.before_step(&mut session).await.unwrap();
+
+        let sent = spy.requests.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        // The same system prompt and messages the agent would send next,
+        // with the request for a summary added at the very end.
+        assert_eq!(sent[0].system, next.system);
+        assert_eq!(sent[0].messages.len(), next.messages.len() + 1);
+        assert_eq!(sent[0].messages[..next.messages.len()], next.messages[..]);
+        let last = sent[0].messages.last().unwrap();
+        assert!(
+            matches!(&last.content[..], [Block::Text { text }] if text.starts_with("[hame compaction]"))
+        );
+        assert!(
+            session
+                .records()
+                .iter()
+                .any(|record| matches!(&record.event,
+            Event::Compaction { summary, .. } if summary.contains("Read steps 1 to 5.")))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_summary_that_calls_a_tool_falls_back_to_a_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = long_session(dir.path());
+        let mut tool_call = ScriptedResponse::text("");
+        tool_call.deltas = vec![
+            Delta::ToolUseStart {
+                id: "x".into(),
+                name: "read".into(),
+            },
+            Delta::ToolInput { json: "{}".into() },
+        ];
+        tool_call.stop = StopReason::ToolUse;
+        let spy = Arc::new(Spy {
+            inner: ScriptedLlm::new(Recording {
+                responses: vec![tool_call, ScriptedResponse::text("Read steps 1 to 5.")],
+            }),
+            requests: Default::default(),
+        });
+        let compactor = Compactor {
+            llm: spy.clone(),
+            threshold_tokens: 300,
+            clear_tool_results: false,
+            reuse_prefix: true,
+        };
+        compactor.before_step(&mut session).await.unwrap();
+        let sent = spy.requests.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1].system.as_deref(), Some(SUMMARY_SYSTEM));
+        assert!(
+            session
+                .records()
+                .iter()
+                .any(|record| matches!(&record.event,
+            Event::Compaction { summary, .. } if summary.contains("Read steps 1 to 5.")))
+        );
     }
 
     #[tokio::test]

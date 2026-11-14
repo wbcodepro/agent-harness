@@ -34,7 +34,7 @@ hame mạnh ở **độ chính xác và an toàn**: hoàn thành phải có bằ
 
 | # | Kỹ thuật | Lợi ích | Ghi chú |
 |---|---|---|---|
-| 1 | Bản tóm tắt khi nén gửi lại nguyên tiền tố hội thoại, câu yêu cầu đặt cuối | Rẻ: phần lớn token đầu vào của lần nén trúng cache | Chỉ khi model tóm tắt là model chính; nếu dùng model rẻ riêng thì giữ cách cũ |
+| 1 | Bản tóm tắt khi nén gửi lại nguyên tiền tố hội thoại, câu yêu cầu đặt cuối | Rẻ: phần lớn token đầu vào của lần nén trúng cache | **Đã làm** (2026-11-15), tự bật khi model tóm tắt là model chính; model không trả bản tóm tắt bằng chữ thì quay về cách cũ. Đo với Anthropic thật (`crates/hame-context/tests/live_compaction.rs`): lần tóm tắt đọc 39.090 token từ cache, chỉ 212 token mới. Cách cũ cắt mỗi kết quả tool còn 2.000 byte và trả giá đầy đủ: khi kết quả tool lớn, hai cách tốn gần bằng nhau nhưng cách mới thấy đủ nội dung; khi kết quả nhỏ (thường gặp, vì hame đã lọc đầu ra), cách mới rẻ hơn khoảng 10 lần ở phần đầu vào |
 | 2 | Lệnh quá giờ chuyển thành tác vụ nền thay vì bị giết, model đọc tiếp sau | Nhanh: không phải chạy lại build/test dài | Cần tool đọc đầu ra tác vụ nền |
 | 3 | Đọc `Retry-After`; quá trần thì báo lỗi ngay | Ít lần thử vô ích khi bị giới hạn tốc độ | Nhỏ |
 | 4 | Fork subagent từ lịch sử của cha | Rẻ: con dùng lại cache của cha | Hợp với việc con cần ngữ cảnh của cha |

@@ -221,11 +221,13 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     let Models {
         main: llm,
         summary: summarizer,
+        summary_is_main,
         stronger,
     } = match &options.llm {
         Some(llm) => Models {
             main: Arc::clone(llm),
             summary: Arc::clone(llm),
+            summary_is_main: true,
             stronger: None,
         },
         None => llm(&config, &secrets, options)?,
@@ -490,6 +492,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
 
     let mut hooks: Vec<Arc<dyn TurnHook>> = vec![Arc::new(Compactor {
         llm: summarizer,
+        reuse_prefix: summary_is_main,
         threshold_tokens: config.context.compact_at_tokens,
         clear_tool_results: config.context.clear_tool_results,
     })];
@@ -922,6 +925,9 @@ struct Models {
     main: Arc<dyn Llm>,
     /// The one that writes summaries.
     summary: Arc<dyn Llm>,
+    /// The summary model is the main one, so a summary can reuse the
+    /// conversation's cached prefix.
+    summary_is_main: bool,
     stronger: Option<Stronger>,
 }
 
@@ -946,6 +952,9 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         return Ok(Models {
             main: Arc::clone(&scripted),
             summary: scripted,
+            // A scripted run replays recorded responses in order; a
+            // different summary request would not line up with them.
+            summary_is_main: false,
             stronger: None,
         });
     }
@@ -1081,6 +1090,7 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         },
     };
     Ok(Models {
+        summary_is_main: summary_model == model,
         main: build(model, effort.clone()),
         summary: build(summary_model, effort),
         stronger,
