@@ -118,14 +118,27 @@ impl Layer<ToolRequest, ToolOutput> for RepeatGuard {
     }
 }
 
-/// How many times this turn the model was told its work failed the
-/// project's checks or that it is repeating itself.
+/// This many failed tool calls in a turn count as one sign of trouble,
+/// whatever they were.
+const ERRORS_PER_SIGN: usize = 5;
+
+/// How much trouble the model has been in this turn: the times it was
+/// told its work failed the checks or that it is repeating itself, plus
+/// one for every few tool calls that failed.
+///
+/// The notes alone come late for a model that fails in a different way
+/// each time: edits that do not match, a file rewritten and still wrong.
+/// Counted only by notes, one such turn reached the stronger model three
+/// requests before its limit.
 pub fn trouble_this_turn(records: &[Record]) -> usize {
     let starts_with = |content: &[Block], prefix: &str| matches!(content.first(), Some(Block::Text { text }) if text.starts_with(prefix));
-    records
-        .iter()
-        .rev()
-        .take_while(|record| !matches!(record.event, Event::TurnStart { .. }))
+    let turn = || {
+        records
+            .iter()
+            .rev()
+            .take_while(|record| !matches!(record.event, Event::TurnStart { .. }))
+    };
+    let told = turn()
         .filter(|record| match &record.event {
             Event::UserMessage { content } => {
                 starts_with(content, VERIFY_PREFIX) || starts_with(content, crate::CHECK_PREFIX)
@@ -135,7 +148,11 @@ pub fn trouble_this_turn(records: &[Record]) -> usize {
                 .any(|block| matches!(block, Block::Text { text } if text.contains(REPEAT_PREFIX))),
             _ => false,
         })
-        .count()
+        .count();
+    let failed = turn()
+        .filter(|record| matches!(record.event, Event::ToolResult { is_error: true, .. }))
+        .count();
+    told + failed / ERRORS_PER_SIGN
 }
 
 /// Which of two models answers. Shared between the model wrapper and the
@@ -408,6 +425,23 @@ mod tests {
             ["big-model"],
             "logged once, not every step"
         );
+
+        // Failures of any kind add up to the same thing.
+        let failing: Vec<Record> = std::iter::once(Event::TurnStart { turn: 9 })
+            .chain((0..10).map(|n| Event::ToolResult {
+                call_id: format!("e{n}"),
+                content: vec![Block::text("old_string was not found")],
+                is_error: true,
+            }))
+            .enumerate()
+            .map(|(seq, event)| Record {
+                seq: seq as u64,
+                ts: 0,
+                event,
+            })
+            .collect();
+        assert_eq!(trouble_this_turn(&failing[..5]), 0);
+        assert_eq!(trouble_this_turn(&failing), 2);
 
         // Reasoning signed by the small model is not replayed to the big one.
         session
