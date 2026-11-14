@@ -132,6 +132,20 @@ So sánh trên `diff-three-way` với `claude-haiku-5-5`, ba lần mỗi cấu h
 
 Kết quả giống lượt expert: cả hai cấu hình đạt hết, chi phí nằm trong cùng một khoảng dao động (một lần chạy có thể tốn gấp ba lần khác của cùng cấu hình). Với các model tầm trung hiện nay, chưa đo được khác biệt về độ chính xác hay chi phí do các lớp này tạo ra trên tác vụ dài; muốn thấy được cần nhiều lần chạy hơn hẳn (dao động lớn) hoặc tác vụ khó hơn nữa.
 
+Thêm hai tác vụ, cũng hiệu chỉnh với `claude-haiku-5-5` (tối đa ba vòng chạy thử, mỗi vòng hai lần):
+
+- `calendar-rules`: thư viện lịch làm việc theo 41 luật (cuối tuần của bốn vùng, ngày lễ dời khi trùng, ngày bắc cầu, bảng giờ có thời điểm chuyển, lịch lặp có ngoại lệ). Bộ kiểm có 2.151 ca; lối tắt trượt 27 ca. Vòng ba: Haiku 1/2.
+- `go-wal-recovery`: write-ahead log bằng Go theo 41 luật (phân loại file khi mở lại, batch nguyên khối, chuỗi checksum giữa các segment, compaction theo đúng thứ tự bước, khóa log sau lỗi file system). Bộ kiểm chạy trên file system trong bộ nhớ, cho hỏng từng lời gọi và cho sập sau mỗi thay đổi; lời giải tham chiếu đạt 30/30 lần, 31/32 bản đột biến bị bắt. Cả ba vòng Haiku đều 2/2, nên tác vụ này không phân biệt được Haiku.
+
+So sánh trên `calendar-rules` với `claude-haiku-5-5`, bốn lần mỗi cấu hình:
+
+| Cấu hình | Đạt | Request mỗi lần | Token prompt (tổng) | Token đầu ra (tổng) | Thời gian (tổng) |
+|---|---|---|---|---|---|
+| hame mặc định | 3/4 | 18, 23, 15, 14 | 6.070.695 | 465.464 | 1.902 giây |
+| hame tắt các lớp hỗ trợ | 4/4 | 19, 17, 19, 13 | 5.612.915 | 477.320 | 1.925 giây |
+
+Một lần trượt trong tám không đủ để nói cấu hình nào hơn. Lần trượt có trạng thái bằng chứng `passed`: bộ kiểm của chính model đạt, nhưng `occurrences` trả ngày trùng lặp khi luật dời ngày (`preceding`, `nearest`) đẩy hai lần lặp vào cùng một ngày (18/2.151 ca). Đây là giới hạn của mọi lớp kiểm chứng dựa trên bộ kiểm của model: model không viết ca cho luật mình đọc sót thì hame cũng không thấy. Tóm lại, trên ba tác vụ dài, các lớp hỗ trợ của hame chưa cho thấy khác biệt nào đo được về độ chính xác hay chi phí với Haiku.
+
 Từ log của lần DeepSeek hỏng có hai bản sửa: các mảnh stream đến cùng lúc giờ được ghi gộp (log của lần đó có 114.000 bản ghi, 13 MB), và mô tả tool shell nói rõ lệnh đã chạy sẵn trong thư mục làm việc (model gắn `cd <đường dẫn tuyệt đối>` vào mọi lệnh).
 
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.
