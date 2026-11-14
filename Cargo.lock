@@ -1800,6 +1800,7 @@ dependencies = [
  "hame-session",
  "hame-tools",
  "regex",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

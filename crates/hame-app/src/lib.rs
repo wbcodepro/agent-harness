@@ -539,7 +539,21 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
              running it in a separate one.",
         );
     }
+    // What earlier sessions here found by running things. After the fixed
+    // text, so that text stays a shared prefix.
+    let facts_path = config.context.project_facts.then(|| {
+        let workspace = checkpoint_dir(home, cwd);
+        let name = workspace.file_name().map_or_else(
+            || "workspace".into(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        home.join("facts").join(format!("{name}.json"))
+    });
     system.push_str(&load_instructions(home, cwd));
+    if let Some(path) = facts_path {
+        system.push_str(&hame_verify::facts_note(&path));
+        hooks.push(Arc::new(hame_verify::ProjectFacts { path }));
+    }
 
     // Extensions. One that fails to load is reported and left out; the
     // rest of the agent still works.

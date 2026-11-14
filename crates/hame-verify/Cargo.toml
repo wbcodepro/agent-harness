@@ -13,6 +13,7 @@ hame-llm.workspace = true
 hame-session.workspace = true
 hame-tools.workspace = true
 regex.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

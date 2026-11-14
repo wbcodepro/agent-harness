@@ -163,6 +163,7 @@ substitute = { NPM_TOKEN = ["registry.npmjs.org"] }   # tool chỉ nhận giá t
 compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng
 clear_tool_results = false      # true: vượt ngưỡng thì xóa kết quả tool cũ trước, chưa đủ mới tóm tắt
 spill_at_bytes = 16000          # đầu ra dài hơn thì lưu ra file, chỉ xem trước
+project_facts = true            # nhớ theo từng dự án lệnh kiểm tra đã đạt lần trước và lệnh không có trên máy, báo cho phiên sau (~/.hame/facts/)
 dedupe_results = true           # kết quả tool giống hệt một kết quả trước còn trong ngữ cảnh thì chỉ ghi một dòng trỏ tới kết quả đó
 condense_output = true          # bỏ dòng test đạt và tiến trình build khỏi đầu ra lệnh; dòng lỗi và tổng kết giữ nguyên văn, bản đầy đủ lưu ra file
 defer_tools_over = 20           # nhiều tool MCP/plugin hơn số này thì không khai báo cho model;

@@ -6,6 +6,7 @@
 //! the model has seen the failure and said why it stands.
 
 mod escalate;
+mod facts;
 mod redcheck;
 
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use serde_json::json;
 /// the user typed.
 pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, trouble_this_turn};
 
+pub use facts::{ProjectFacts, facts_note};
 pub use redcheck::{CHECK_PREFIX, Evidence, RedCheck, evidence};
 
 pub const VERIFY_PREFIX: &str = "[hame verify]";

@@ -320,6 +320,9 @@ pub struct ContextConfig {
     /// When a tool result is identical to an earlier one that is still in
     /// context, show a pointer to that one instead of the output again.
     pub dedupe_results: bool,
+    /// Remember, per project, the check that last passed after a change
+    /// and commands that were not found, and tell the next session.
+    pub project_facts: bool,
     /// With more MCP and plugin tools than this, none of them is declared
     /// to the model: it finds them with `tool_search` and runs them with
     /// `tool_call`, so they cost no prompt tokens until used.
@@ -342,6 +345,7 @@ impl Default for ContextConfig {
             spill_at_bytes: 16_000,
             condense_output: true,
             dedupe_results: true,
+            project_facts: true,
             defer_tools_over: 20,
             scripts: true,
             clear_tool_results: false,

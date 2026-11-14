@@ -24,7 +24,7 @@ const MAX_NUDGES: usize = 2;
 #[derive(Default)]
 pub struct RedCheck;
 
-fn looks_like_a_check(command: &str) -> bool {
+pub(crate) fn looks_like_a_check(command: &str) -> bool {
     static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     PATTERN
         .get_or_init(|| {
