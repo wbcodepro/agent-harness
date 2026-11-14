@@ -198,7 +198,7 @@ impl HttpLink {
             return Err(match status.as_u16() {
                 401 | 403 => format!(
                     "MCP server {name} refused the credentials (HTTP {status}); check its \
-                     `headers` in the configuration"
+                     `headers` in the configuration, or sign in with `zcode mcp login {name}`"
                 ),
                 _ => format!("MCP server {name} answered HTTP {status}"),
             });

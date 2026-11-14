@@ -5112,12 +5112,16 @@ dependencies = [
 name = "zcode-ext"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "url",
+ "uuid",
  "wasmtime",
  "zcode-agent",
  "zcode-kernel",

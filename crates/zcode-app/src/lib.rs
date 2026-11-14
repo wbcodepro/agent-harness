@@ -501,6 +501,21 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             server
                 .expand_headers(|name| secrets.get(name).map(String::from))
                 .map_err(|e| format!("MCP server {name}: {e}"))?;
+            // A server the user signed in to with `zcode mcp login`.
+            let has_credentials = server
+                .headers
+                .keys()
+                .any(|header| header.eq_ignore_ascii_case("authorization"));
+            if server.url.is_some()
+                && !has_credentials
+                && let Some(token) =
+                    zcode_ext::mcp_auth::access_token(&zcode_ext::mcp_auth::token_path(home, name))
+                        .await
+            {
+                server
+                    .headers
+                    .insert("Authorization".into(), format!("Bearer {token}"));
+            }
             let client =
                 zcode_ext::mcp::McpClient::start(name, &server, confinement, &helper, cwd).await?;
             client.tools().await
@@ -880,6 +895,35 @@ impl Prompter for Terminal {
             .unwrap_or(None)
         })
     }
+}
+
+/// The address of the HTTP MCP server called `name`, from the
+/// configuration or from a plugin.
+pub fn mcp_server_url(home: &Path, name: &str) -> Result<String, String> {
+    let config = load_config(home)?;
+    let mut servers: Vec<(String, zcode_ext::mcp::McpServerConfig)> = config
+        .mcp
+        .iter()
+        .map(|(name, server)| (name.clone(), server.clone()))
+        .collect();
+    for dir in plugin_dirs(home, &config) {
+        if let Ok(plugin) = zcode_ext::claude_plugin::ClaudePlugin::open(&dir) {
+            servers.extend(plugin.mcp_servers().unwrap_or_default());
+        }
+    }
+    let known: Vec<&str> = servers.iter().map(|(name, _)| name.as_str()).collect();
+    let server = servers
+        .iter()
+        .find(|(known, _)| known == name)
+        .ok_or_else(|| {
+            format!(
+                "there is no MCP server named {name}; configured: {}",
+                known.join(", ")
+            )
+        })?;
+    server.1.url.clone().ok_or_else(|| {
+        format!("{name} is started as a command; only servers reached by `url` are signed in to")
+    })
 }
 
 /// Plugins installed with `zcode plugin install`, by directory name.

@@ -55,6 +55,11 @@ enum Command {
         #[command(subcommand)]
         command: skill::PluginCommand,
     },
+    /// Sign in to and out of MCP servers that use OAuth.
+    Mcp {
+        #[command(subcommand)]
+        command: skill::McpCommand,
+    },
     /// List sessions.
     Sessions,
     /// Import a session recorded by another harness.
@@ -208,6 +213,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Probe(args) => return eval::probe(&home, args).await,
         Command::Skill { command } => return skill::run(&home, command),
         Command::Plugin { command } => return skill::run_plugin(&home, command),
+        Command::Mcp { command } => return skill::run_mcp(&home, command).await,
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);

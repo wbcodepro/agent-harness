@@ -164,3 +164,55 @@ fn install_from(
         }
     }
 }
+
+#[derive(Subcommand)]
+pub enum McpCommand {
+    /// Sign in to an MCP server that uses OAuth. Opens a browser; the
+    /// tokens are kept in the data directory and renewed when needed.
+    Login {
+        /// The server's name in the configuration.
+        server: String,
+    },
+    /// Forget the tokens of a server.
+    Logout { server: String },
+}
+
+pub async fn run_mcp(home: &Path, command: McpCommand) -> Result<ExitCode, String> {
+    match command {
+        McpCommand::Login { server } => {
+            let url = zcode_app::mcp_server_url(home, &server)?;
+            let tokens = zcode_ext::mcp_auth::login(&url, |address| {
+                eprintln!("Open this address to sign in to {server}:\n\n{address}\n");
+                // Best effort: the address above works by hand too.
+                let opener = if cfg!(target_os = "macos") {
+                    ("open", vec![address])
+                } else if cfg!(windows) {
+                    ("rundll32", vec!["url.dll,FileProtocolHandler", address])
+                } else {
+                    ("xdg-open", vec![address])
+                };
+                let _ = std::process::Command::new(opener.0)
+                    .args(opener.1)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            })
+            .await?;
+            zcode_ext::mcp_auth::save(&zcode_ext::mcp_auth::token_path(home, &server), &tokens)?;
+            println!("signed in to {server}");
+            Ok(ExitCode::SUCCESS)
+        }
+        McpCommand::Logout { server } => {
+            let path = zcode_ext::mcp_auth::token_path(home, &server);
+            match std::fs::remove_file(&path) {
+                Ok(()) => println!("signed out of {server}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("not signed in to {server}");
+                }
+                Err(e) => return Err(format!("cannot remove {}: {e}", path.display())),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
