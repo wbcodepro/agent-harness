@@ -24,9 +24,6 @@ const STATELESS_VERSION: &str = "2026-07-28";
 const MAX_ROUNDS: usize = 5;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const CALL_TIMEOUT: Duration = Duration::from_secs(300);
-/// Environment a server inherits; the rest of the harness's environment,
-/// credentials included, is withheld unless the configuration passes it.
-const INHERITED_ENV: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR"];
 
 /// How to reach one Model Context Protocol server: a `command` to start
 /// and talk to over stdio, or the `url` of one served over HTTP.
@@ -347,11 +344,7 @@ impl McpClient {
             .args(args)
             .current_dir(cwd)
             .env_clear()
-            .envs(
-                std::env::vars_os().filter(|(key, _)| {
-                    key.to_str().is_some_and(|key| INHERITED_ENV.contains(&key))
-                }),
-            )
+            .envs(zcode_sandbox::inherited_environment(&[]))
             .envs(&config.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

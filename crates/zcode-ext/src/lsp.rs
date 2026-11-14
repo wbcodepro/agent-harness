@@ -16,17 +16,6 @@ use zcode_session::ToolSpec;
 use zcode_tools::{Effect, GroupGuard, Tool, ToolContext, ToolOutput};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
-const INHERITED_ENV: &[&str] = &[
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "LANG",
-    "TERM",
-    "TMPDIR",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
-];
 
 /// How to start a language server and which files it handles.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -123,11 +112,10 @@ impl LspClient {
             .args(args)
             .current_dir(root)
             .env_clear()
-            .envs(
-                std::env::vars_os().filter(|(key, _)| {
-                    key.to_str().is_some_and(|key| INHERITED_ENV.contains(&key))
-                }),
-            )
+            .envs(zcode_sandbox::inherited_environment(&[
+                "CARGO_HOME",
+                "RUSTUP_HOME",
+            ]))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

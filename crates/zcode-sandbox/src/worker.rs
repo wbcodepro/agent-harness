@@ -61,6 +61,25 @@ const INHERITED_ENV: &[&str] = &[
     "ZCODE_BASH",
 ];
 
+/// The part of the harness's environment a program started for the agent
+/// inherits: what programs need in order to run at all, plus the variables
+/// named in `more`. Everything else, credentials included, is left out.
+///
+/// Names are compared without regard to case: Windows spells them any way
+/// it likes (`Path`), and a program there that gets no `PATH` or
+/// `SystemRoot` does not start.
+pub fn inherited_environment(more: &[&str]) -> Vec<(OsString, OsString)> {
+    std::env::vars_os()
+        .filter(|(name, _)| {
+            name.to_str().is_some_and(|name| {
+                let name = name.to_ascii_uppercase();
+                INHERITED_ENV.contains(&name.as_str())
+                    || more.contains(&name.as_str())
+                    || name.starts_with("LC_")
+            })
+        })
+        .collect()
+}
 /// Body of the hidden `zcode tool-worker` command: runs one tool call read from
 /// stdin and writes its outcome to stdout. The process is already confined
 /// by the time this runs.
@@ -117,15 +136,7 @@ pub struct SandboxedRunner {
 
 impl SandboxedRunner {
     fn environment(&self) -> Vec<(OsString, OsString)> {
-        let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
-            .filter(|(name, _)| {
-                name.to_str().is_some_and(|name| {
-                    // Windows spells variable names in any case.
-                    let name = name.to_ascii_uppercase();
-                    INHERITED_ENV.contains(&name.as_str()) || name.starts_with("LC_")
-                })
-            })
-            .collect();
+        let mut env = inherited_environment(&[]);
         if let Network::Proxy { port } = self.policy.network {
             let proxy = format!("http://127.0.0.1:{port}");
             for name in [

@@ -22,7 +22,7 @@ mod windows;
 pub use intercept::Substitution;
 pub use policy::{Mode, Network, SandboxError, SandboxPolicy, Wrapped, default_unreadable, wrap};
 pub use proxy::{Allowlist, Decision, EgressProxy};
-pub use worker::{SandboxedRunner, worker_main};
+pub use worker::{SandboxedRunner, inherited_environment, worker_main};
 
 #[cfg(target_os = "linux")]
 pub use landlock::apply_to_current_process;
