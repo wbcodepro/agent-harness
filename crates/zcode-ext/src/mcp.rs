@@ -764,9 +764,16 @@ impl Tool for McpTool {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Python under the name it has here (`python` on Windows).
+    fn python() -> String {
+        zcode_kernel::python_program()
+            .expect("these tests need Python")
+            .to_string()
+    }
 
     /// A minimal MCP server: three tools, paginated listing.
     const SERVER: &str = r#"
@@ -800,7 +807,7 @@ for line in sys.stdin:
         let script = dir.join("server.py");
         std::fs::write(&script, SERVER).unwrap();
         McpServerConfig {
-            command: "python3".into(),
+            command: python(),
             args: vec![script.display().to_string()],
             ..McpServerConfig::default()
         }
@@ -1009,7 +1016,7 @@ for line in sys.stdin:
         let script = dir.path().join("stateless.py");
         std::fs::write(&script, STATELESS_SERVER).unwrap();
         let config = McpServerConfig {
-            command: "python3".into(),
+            command: python(),
             args: vec![script.display().to_string()],
             ..McpServerConfig::default()
         };
@@ -1169,7 +1176,8 @@ for line in sys.stdin:
 
         // Starts, then exits without answering the handshake.
         let silent = McpServerConfig {
-            command: "true".into(),
+            command: python(),
+            args: vec!["-c".into(), String::new()],
             ..missing
         };
         let error = McpClient::start("silent", &silent, None, Path::new("zcode"), dir.path())
