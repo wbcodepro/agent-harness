@@ -73,7 +73,7 @@ Windows này và sửa những gì hỏng. Đọc README.md và docs/WINDOWS.md 
 
 ## Đã kiểm trên GitHub Actions (Windows Server)
 
-Lần chạy gần nhất: commit `57faf2c` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Những gì thêm sau commit đó chưa được chạy trên Windows.
+Lần chạy gần nhất: commit `3fea852` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Lần đó gồm cả các phần thêm sau lượt kiểm trên máy thật (lệnh và loại subagent từ file, cài plugin, MCP không trạng thái, đăng nhập OAuth, tool `script`, thay secret tại proxy), nhưng chỉ ở mức biên dịch và test tự động: chúng chưa được dùng thử bằng tay trên Windows.
 
 - Build cả workspace và toàn bộ test chạy được trên Windows.
 - Ghi và sửa file trong thư mục dự án được, kể cả file có sẵn từ trước.
