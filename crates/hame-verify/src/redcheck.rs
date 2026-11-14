@@ -50,7 +50,10 @@ fn changes_source(name: &str, input: &serde_json::Value) -> bool {
             .is_some_and(|(_, extension)| SOURCE_EXTENSIONS.contains(&extension))
     };
     match name {
-        "edit" | "edit_lines" | "write" => input["path"].as_str().is_some_and(is_source),
+        // A rename starts from one source file, whatever else it reaches.
+        "edit" | "edit_lines" | "write" | "rename_symbol" => {
+            input["path"].as_str().is_some_and(is_source)
+        }
         "apply_patch" => input["patch"].as_str().is_some_and(|patch| {
             patch.lines().any(|line| {
                 line.strip_prefix("*** Update File: ")
@@ -363,6 +366,9 @@ mod tests {
         assert!(changes_source("edit_lines", &lines("src/a.rs")));
         assert!(!changes_source("edit_lines", &lines("notes.md")));
         assert!(!changes_source("read", &lines("src/a.rs")));
+        let rename = |path: &str| json!({"path": path, "line": 1, "symbol": "a", "new_name": "b"});
+        assert!(changes_source("rename_symbol", &rename("src/a.rs")));
+        assert!(!changes_source("references", &rename("src/a.rs")));
     }
 
     #[tokio::test]

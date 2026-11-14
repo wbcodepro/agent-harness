@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use bash::Bash;
-pub use files::{Edit, Read, Write};
+pub use files::{Edit, Read, Write, write_atomic};
 pub use hame_kernel::BoxFuture;
 use hame_session::ToolSpec;
 pub use hashline::{EditLines, ReadAnchored};

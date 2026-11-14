@@ -9,7 +9,7 @@ use crate::{BoxFuture, Effect, Tool, ToolContext, ToolOutput, parse_input};
 /// Replaces a file's content in one step: the new content goes to a
 /// sibling file that is then renamed over the old one, so a full disk or a
 /// killed worker leaves the old file whole instead of cut short.
-pub(crate) fn write_atomic(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+pub fn write_atomic(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);

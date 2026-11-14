@@ -40,7 +40,8 @@ pub struct Config {
     pub rules: Vec<Rule>,
     /// Model Context Protocol servers, by name.
     pub mcp: BTreeMap<String, McpServerConfig>,
-    /// Language servers for the `diagnostics` tool, by name.
+    /// Language servers for the `diagnostics`, `references` and
+    /// `rename_symbol` tools, by name.
     pub lsp: BTreeMap<String, LspServerConfig>,
     /// Commands run before and after tool calls.
     #[serde(rename = "hook")]

@@ -605,12 +605,14 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         }
     }
     if !config.lsp.is_empty() {
-        tools.insert(Arc::new(hame_ext::lsp::DiagnosticsTool::new(
+        hame_ext::lsp::tools(
             &config.lsp,
             policy.is_confined().then(|| policy.clone()),
             helper.clone(),
             cwd.to_path_buf(),
-        )));
+        )
+        .into_iter()
+        .for_each(|tool| tools.insert(tool));
     }
     for (name, plugin) in &config.plugins {
         let loaded = hame_ext::wasm::WasmPlugin::load(name, plugin, cwd).and_then(|p| p.tools());
@@ -842,11 +844,13 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
 
 /// hame's own tools beyond files, search and the shell. A `minimal` tool
 /// profile leaves them out.
-const OPTIONAL_TOOLS: [&str; 7] = [
+const OPTIONAL_TOOLS: [&str; 9] = [
     "repo_map",
     "subagent",
     "skill",
     "diagnostics",
+    "references",
+    "rename_symbol",
     "task_create",
     "task_update",
     "task_list",

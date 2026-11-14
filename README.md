@@ -76,9 +76,11 @@ Máy chủ cũng được kiểm thử tự động bằng runtime client chính
 
 ## Tool có sẵn
 
-`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill và `diagnostics` khi có cấu hình language server. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
+`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill; khi có cấu hình language server thì thêm `diagnostics`, `references` và `rename_symbol`. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
 
 `write` từ chối ghi đè một file đã tồn tại mà model chưa đọc trong phiên (nó phải đọc trước, vì nội dung file thường là thứ đề bài phụ thuộc vào); khi ghi làm file nhỏ đi quá nửa, kết quả nói rõ là cả file đã bị thay. `edit` không tìm thấy đoạn cần thay thì chỉ ra khớp tới dòng nào và khác ở đâu. `grep` ghi kèm tên hàm hoặc lớp bao quanh mỗi dòng khớp. Sau mỗi lần `edit`, `write` hay `apply_patch`, nếu file nguồn đang hợp lệ trở nên sai cú pháp thì kết quả báo ngay dòng lỗi (Python được kiểm bằng `python3` khi có; Rust, JS, TS, Go bằng tree-sitter).
+
+`references` và `rename_symbol` hỏi thẳng language server thay cho một chuỗi `grep` rồi `edit`: model chỉ ra symbol bằng file, số dòng và tên (không phải đếm cột). `references` liệt kê mọi nơi dùng symbol dưới dạng `path:line: nội dung dòng`, tối đa 100 dòng. `rename_symbol` đổi tên ở mọi file trong một lần gọi và trả về số chỗ sửa theo từng file; mọi chỗ sửa được tính xong trước khi ghi, và nếu có chỗ nằm ngoài thư mục làm việc hoặc server đòi đổi tên, tạo hay xoá file thì không file nào bị đổi. Khi không có server cho loại file đó, hoặc server không hỗ trợ, kết quả bảo model quay về `grep` và `edit`.
 
 `edit` và `apply_patch` chấp nhận sai lệch về khoảng trắng, thụt lề và kiểu xuống dòng khi chỉ có đúng một chỗ khớp; dòng không đổi luôn giữ nguyên như trong file. Tham số gọi tool bị bọc trong code fence hoặc lẫn chữ được gỡ ra trước khi chạy.
 
@@ -183,7 +185,7 @@ args = ["--stdio"]
 url = "https://mcp.example.com/mcp"
 headers = { Authorization = "Bearer $TRACKER_TOKEN" }   # $TÊN lấy từ biến môi trường hoặc file .env
 
-[lsp.rust]                      # language server cho tool `diagnostics`
+[lsp.rust]                      # language server cho `diagnostics`, `references`, `rename_symbol`
 command = "rust-analyzer"
 extensions = ["rs"]
 
@@ -232,7 +234,7 @@ Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 | `hame-checkpoint` | Checkpoint workspace bằng kho git riêng |
 | `hame-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
 | `hame-verify` | Cổng kiểm chứng trước khi kết thúc lượt; phát hiện lặp; leo thang model |
-| `hame-ext` | MCP, chẩn đoán LSP, skills, hooks, plugin WebAssembly |
+| `hame-ext` | MCP, LSP (chẩn đoán, tìm nơi dùng, đổi tên symbol), skills, hooks, plugin WebAssembly |
 | `hame-multi` | Subagent, worktree, bảng việc, ngân sách chung |
 | `hame-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
 | `hame-acp` | Máy chủ Agent Client Protocol; giao diện terminal cũng là một client của nó |
