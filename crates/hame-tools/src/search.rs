@@ -756,8 +756,11 @@ fn narrow_test_command(tests: &[(&Path, &str)]) -> Option<String> {
         "rs" => Some(format!("cargo test -q -- {}", names.join(" "))),
         "py" => {
             tests.iter().for_each(|(file, _)| add(display_path(file)));
+            // Windows calls it `python`; its `python3` is a stub that offers
+            // to open the Store.
+            let python = hame_kernel::python_program().unwrap_or("python3");
             Some(format!(
-                "python3 -m pytest -q {} -k \"{}\"",
+                "{python} -m pytest -q {} -k \"{}\"",
                 places.join(" "),
                 names.join(" or ")
             ))
@@ -949,10 +952,11 @@ mod tests {
             note.contains("Tests that call `parse_money`: test_parse, test_cents."),
             "{note}"
         );
+        let python = hame_kernel::python_program().unwrap_or("python3");
         assert!(
-            note.contains(
-                "python3 -m pytest -q tests/test_money.py -k \"test_parse or test_cents\""
-            ),
+            note.contains(&format!(
+                "{python} -m pytest -q tests/test_money.py -k \"test_parse or test_cents\""
+            )),
             "{note}"
         );
 
