@@ -175,6 +175,8 @@ commands = ["cargo test -q"]    # phải đạt trước khi một lượt có s
 checklist = false               # true: trước khi kết thúc, yêu cầu model rà lại từng điểm của đề bài
 stop_on_red = true              # model định dừng khi lệnh test/build cuối cùng còn hỏng, hoặc khi vừa sửa mã nguồn
                                 # mà chưa chạy gì: nhắc nó làm tiếp (tối đa 2 lần mỗi lượt)
+review = false                  # true: trước khi kết thúc, một agent mới (chỉ thấy đề bài và file) dò những luật
+                                # dễ sót rồi báo vi phạm cho model sửa; một lần mỗi lượt, tốn thêm token của agent đó
 
 [limits]
 tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn

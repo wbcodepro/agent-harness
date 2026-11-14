@@ -147,6 +147,20 @@ So sánh trên `calendar-rules` với `claude-haiku-5-5`, bốn lần mỗi cấ
 
 Một lần trượt trong tám không đủ để nói cấu hình nào hơn. Lần trượt có trạng thái bằng chứng `passed`: bộ kiểm của chính model đạt, nhưng `occurrences` trả ngày trùng lặp khi luật dời ngày (`preceding`, `nearest`) đẩy hai lần lặp vào cùng một ngày (18/2.151 ca). Đây là giới hạn của mọi lớp kiểm chứng dựa trên bộ kiểm của model: model không viết ca cho luật mình đọc sót thì hame cũng không thấy. Tóm lại, trên ba tác vụ dài, các lớp hỗ trợ của hame chưa cho thấy khác biệt nào đo được về độ chính xác hay chi phí với Haiku.
 
+### Người chấm độc lập trước khi lượt kết thúc (`[verify] review`)
+
+Lấy từ nhóm kiểm chứng: reviewer riêng xác nhận hoàn thành (`code-yeongyu/lazycodex`, "Oracle"), giai đoạn phản biện và tái hiện (`google/mantis`), thoát pha bằng bằng chứng chứ không bằng lời agent (`rpamis/comet`). Lần trượt ở trên cho thấy vì sao cần: bộ kiểm của model chỉ phủ những gì model hiểu, nên luật đọc sót thì các lớp kiểm chứng sẵn có đều im lặng.
+
+Cách làm: khi một lượt có sửa file sắp kết thúc, một agent mới cùng model, không thấy gì của quá trình làm, đọc đề bài và tài liệu đề bài nhắc tới, chọn các luật dễ sai, tự tính kết quả đúng từ tài liệu rồi chạy thử trên mã hiện tại. Nó không có tool sửa file (chỉ dò qua shell, script để trong `/tmp`), tối đa 30 request, dừng khi đã xác nhận được hai ba vi phạm. Vi phạm nó báo được gửi lại cho model như một tin nhắn `[hame review]`, một lần mỗi lượt. Nếu nó trả `NO FINDINGS` hoặc không chạy được thì lượt kết thúc như thường. Mặc định tắt vì tốn thêm token.
+
+Số đo, giữ ít lần gọi model:
+
+- Trên đúng workspace của lần trượt (bộ kiểm của model đạt, bộ kiểm ẩn sai 18/2.151 ca), người chấm Haiku tìm ra lỗi thật: hàm trả ngày trùng khi luật dời ngày gom hai lần lặp vào một ngày, vi phạm luật 28. Nó còn chạy 4.500 lời gọi ngẫu nhiên và thấy đây là sai khác duy nhất. Lần thử này chưa có giới hạn bước nên bị dừng tay khi đang dò tiếp; giới hạn 30 request được thêm sau đó.
+- Trên `calendar-rules`, hai lần chạy đầu-cuối có bật người chấm: 2/2, 29 và 31 request (mặc định 14–23), token prompt khoảng 1,76 triệu mỗi lần so với 1,52 triệu, token đầu ra 160 nghìn so với 116 nghìn, thời gian 596 và 738 giây so với khoảng 475. Tức là tốn thêm khoảng 30–40%.
+- Hai lần chạy không đủ để nói tỷ lệ đạt có tăng không (mặc định trượt khoảng 1/4 đến 1/8 lần). Bằng chứng hiện có là người chấm bắt được đúng lỗi mà mọi lớp kiểm chứng khác bỏ qua.
+
+Nên bật khi sai đắt hơn token: việc theo đặc tả dài, nhiều luật tương tác.
+
 Từ log của lần DeepSeek hỏng có hai bản sửa: các mảnh stream đến cùng lúc giờ được ghi gộp (log của lần đó có 114.000 bản ghi, 13 MB), và mô tả tool shell nói rõ lệnh đã chạy sẵn trong thư mục làm việc (model gắn `cd <đường dẫn tuyệt đối>` vào mọi lệnh).
 
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.

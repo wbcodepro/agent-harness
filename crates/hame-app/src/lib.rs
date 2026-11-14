@@ -697,6 +697,16 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                 })
             })
         });
+        // The agent the user talks to is reviewed; the reviewer and other
+        // subagents are not.
+        if verify.review && lineage.depth == 0 {
+            hooks.push(Arc::new(hame_multi::Reviewer {
+                factory: Arc::clone(&factory),
+                store: session_store(home),
+                cwd: cwd.to_path_buf(),
+                depth: lineage.depth,
+            }));
+        }
         tools.insert(Arc::new(hame_multi::SubagentTool {
             factory,
             store: session_store(home),

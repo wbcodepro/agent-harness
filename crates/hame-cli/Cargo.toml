@@ -23,6 +23,7 @@ hame-eval.workspace = true
 hame-ext.workspace = true
 hame-kernel.workspace = true
 hame-llm.workspace = true
+hame-multi.workspace = true
 hame-session.workspace = true
 hame-tools.workspace = true
 hame-tui.workspace = true

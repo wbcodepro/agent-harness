@@ -15,7 +15,7 @@ use std::process::{ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::Args;
-use hame_session::{Event, SessionStore};
+use hame_session::{Block, Event, SessionStore};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -80,6 +80,8 @@ struct Outcome {
     output_tokens: u64,
     /// Whether a stronger model took over at some point.
     escalated: bool,
+    /// The independent reviewer found something and sent the agent back.
+    reviewed: bool,
     /// What the agent's own session shows was run after its last change:
     /// `passed`, `failing`, `unchecked` or `no-change`.
     evidence: &'static str,
@@ -231,6 +233,7 @@ async fn run_task(
         cached_tokens: 0,
         output_tokens: 0,
         escalated: false,
+        reviewed: false,
         evidence: "no-change",
     };
     let store = SessionStore::new(home.join("sessions"));
@@ -253,6 +256,12 @@ async fn run_task(
                 }
                 Event::ToolCall { .. } => outcome.tool_calls += 1,
                 Event::ModelSwitched { .. } => outcome.escalated = true,
+                Event::UserMessage { content }
+                    if matches!(content.first(), Some(Block::Text { text })
+                        if text.starts_with(hame_multi::REVIEW_PREFIX)) =>
+                {
+                    outcome.reviewed = true;
+                }
                 _ => {}
             }
         }
@@ -498,6 +507,15 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         );
     }
 
+    let reviewed = outcomes.iter().filter(|o| o.reviewed).count();
+    if reviewed > 0 {
+        println!(
+            "{reviewed} of {} task runs were sent back by the reviewer ({} of them passed)",
+            outcomes.len(),
+            outcomes.iter().filter(|o| o.reviewed && o.passed).count()
+        );
+    }
+
     if let Some(path) = &args.json {
         let report = json!({
             "provider": args.provider,
@@ -510,6 +528,7 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
                 "requests": o.requests, "tool_calls": o.tool_calls,
                 "input_tokens": o.input_tokens, "cached_tokens": o.cached_tokens,
                 "output_tokens": o.output_tokens, "escalated": o.escalated,
+                "reviewed": o.reviewed,
                 "evidence": o.evidence,
             })).collect::<Vec<_>>(),
         });

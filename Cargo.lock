@@ -1603,6 +1603,7 @@ dependencies = [
  "hame-ext",
  "hame-kernel",
  "hame-llm",
+ "hame-multi",
  "hame-sandbox",
  "hame-session",
  "hame-tools",

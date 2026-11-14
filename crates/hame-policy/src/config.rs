@@ -391,6 +391,11 @@ pub struct VerifyConfig {
     /// Send the model back to work, at most twice a turn, when the last
     /// test, build or lint command it ran failed and it is stopping.
     pub stop_on_red: bool,
+    /// Before a turn that changed files ends, have a fresh agent that saw
+    /// none of the work read the request, probe the code where mistakes are
+    /// likely, and report what it can show is wrong. Once per turn; costs a
+    /// second agent's tokens.
+    pub review: bool,
 }
 
 impl Default for VerifyConfig {
@@ -401,6 +406,7 @@ impl Default for VerifyConfig {
             timeout_ms: 300_000,
             checklist: false,
             stop_on_red: true,
+            review: false,
         }
     }
 }
