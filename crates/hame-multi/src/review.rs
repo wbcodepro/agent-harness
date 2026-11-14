@@ -40,20 +40,22 @@ fn request(records: &[Record]) -> Option<String> {
         .iter()
         .rposition(|record| matches!(record.event, Event::TurnStart { .. }))
         .unwrap_or(0);
-    records[start..].iter().find_map(|record| match &record.event {
-        Event::UserMessage { content } => {
-            let text: String = content
-                .iter()
-                .filter_map(|block| match block {
-                    Block::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.trim().is_empty() && !text.starts_with("[hame ")).then_some(text)
-        }
-        _ => None,
-    })
+    records[start..]
+        .iter()
+        .find_map(|record| match &record.event {
+            Event::UserMessage { content } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|block| match block {
+                        Block::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!text.trim().is_empty() && !text.starts_with("[hame ")).then_some(text)
+            }
+            _ => None,
+        })
 }
 
 fn reviewed_this_turn(records: &[Record]) -> bool {
@@ -127,7 +129,10 @@ impl Reviewer {
             .agent
             .tools
             .retain(|tool| tool.effect() != Effect::Write && tool.spec().name != "subagent");
-        child.agent.deferred.retain(|tool| tool.effect() != Effect::Write);
+        child
+            .agent
+            .deferred
+            .retain(|tool| tool.effect() != Effect::Write);
         child.agent.max_steps = child.agent.max_steps.min(REVIEW_STEPS);
         let id = SessionId::generate();
         let writer = self

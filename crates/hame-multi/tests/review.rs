@@ -73,7 +73,10 @@ fn session(root: &Path) -> Session {
             cwd: root.display().to_string(),
         })
         .unwrap();
-    Session::new(store.read(&SessionId::parse("main").unwrap()).unwrap(), writer)
+    Session::new(
+        store.read(&SessionId::parse("main").unwrap()).unwrap(),
+        writer,
+    )
 }
 
 fn user_texts(session: &Session) -> Vec<String> {
@@ -115,7 +118,10 @@ async fn findings_go_back_to_the_agent_once() {
         .unwrap();
 
     let texts = user_texts(&session);
-    let reviews: Vec<&String> = texts.iter().filter(|t| t.starts_with(REVIEW_PREFIX)).collect();
+    let reviews: Vec<&String> = texts
+        .iter()
+        .filter(|t| t.starts_with(REVIEW_PREFIX))
+        .collect();
     assert_eq!(reviews.len(), 1, "{texts:?}");
     assert!(reviews[0].contains("f() returns 1, expected 2"));
     assert_eq!(asked.lock().unwrap().len(), 1);
@@ -126,7 +132,10 @@ async fn a_clean_review_lets_the_turn_end() {
     let work = tempfile::tempdir().unwrap();
     let logs = tempfile::tempdir().unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
-    let mut main = agent(vec![write_call(), ScriptedResponse::text("Done.")], work.path());
+    let mut main = agent(
+        vec![write_call(), ScriptedResponse::text("Done.")],
+        work.path(),
+    );
     main.hooks.push(Arc::new(reviewer(
         "I probed rules 1 to 5.\n\nNO FINDINGS",
         work.path(),
@@ -136,7 +145,11 @@ async fn a_clean_review_lets_the_turn_end() {
     main.run_turn(&mut session, vec![Block::text("Implement SPEC.md.")])
         .await
         .unwrap();
-    assert!(!user_texts(&session).iter().any(|t| t.starts_with(REVIEW_PREFIX)));
+    assert!(
+        !user_texts(&session)
+            .iter()
+            .any(|t| t.starts_with(REVIEW_PREFIX))
+    );
     assert_eq!(asked.lock().unwrap().len(), 1);
 }
 
@@ -146,7 +159,11 @@ async fn a_turn_that_changed_nothing_is_not_reviewed() {
     let logs = tempfile::tempdir().unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
     let mut main = agent(vec![ScriptedResponse::text("It does X.")], work.path());
-    main.hooks.push(Arc::new(reviewer("Rule 1 broken", work.path(), Arc::clone(&asked))));
+    main.hooks.push(Arc::new(reviewer(
+        "Rule 1 broken",
+        work.path(),
+        Arc::clone(&asked),
+    )));
     let mut session = session(logs.path());
     main.run_turn(&mut session, vec![Block::text("What does it do?")])
         .await
