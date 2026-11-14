@@ -59,8 +59,12 @@ pub enum PluginCommand {
     /// Copy a plugin packaged for Claude Code into your plugins directory
     /// after scanning it. Installed plugins are loaded in every session.
     Install {
-        /// A plugin directory, or a git repository URL.
+        /// A plugin directory or git repository, or a marketplace (a
+        /// directory or repository with a catalogue of plugins).
         source: String,
+        /// Which plugin of a marketplace to install.
+        #[arg(long)]
+        plugin: Option<String>,
         /// Where the plugin is inside the repository or directory.
         #[arg(long)]
         path: Option<PathBuf>,
@@ -69,8 +73,98 @@ pub enum PluginCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Fetch installed plugins again from where they came from, scan them
+    /// again, and replace the installed copies.
+    Update {
+        /// The plugin to update. Without it, every installed plugin.
+        name: Option<String>,
+    },
     /// List installed plugins.
     List,
+}
+
+/// Where an installed plugin came from, kept beside it for updates.
+const ORIGIN_FILE: &str = ".zcode-origin.json";
+
+/// Fetches a git repository into a fresh temporary directory, at `commit`
+/// when one is given.
+fn fetch(url: &str, commit: Option<&str>, tag: &str) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("zcode-install-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .status()
+            .map_err(|e| format!("cannot run git: {e}"))
+            .map(|status| status.success())
+    };
+    let at = dir.to_string_lossy().into_owned();
+    if !git(&["clone", "--quiet", "--depth", "1", "--", url, &at])? {
+        return Err(format!(
+            "{url} is neither a directory nor a repository git can clone"
+        ));
+    }
+    if let Some(commit) = commit {
+        let fetched = git(&[
+            "-C", &at, "fetch", "--quiet", "--depth", "1", "origin", commit,
+        ])? && git(&["-C", &at, "checkout", "--quiet", "FETCH_HEAD"])?;
+        if !fetched {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(format!("{url} has no commit or tag {commit}"));
+        }
+    }
+    Ok(dir)
+}
+
+/// Installs one plugin from `source`, which may be a plugin or a
+/// marketplace. Returns the process exit code.
+fn install_plugin_from(
+    home: &Path,
+    source: &str,
+    plugin: Option<&str>,
+    path: Option<&Path>,
+    force: bool,
+    replace: bool,
+) -> Result<ExitCode, String> {
+    use zcode_ext::skill_install::{PluginSource, install_plugin, marketplace_entry};
+    let mut fetched: Vec<PathBuf> = Vec::new();
+    let result: Result<Outcome, String> = (|| {
+        let local = PathBuf::from(source);
+        let base = if local.is_dir() {
+            local
+        } else {
+            let dir = fetch(source, None, "a")?;
+            fetched.push(dir.clone());
+            dir
+        };
+        let base = match path {
+            Some(path) => base.join(path),
+            None => base,
+        };
+        // A marketplace points at the plugin; anything else is the plugin.
+        let plugin_dir = match marketplace_entry(&base, plugin)? {
+            None => base,
+            Some(PluginSource::Local(dir)) => dir,
+            Some(PluginSource::Git { url, commit, path }) => {
+                let dir = fetch(&url, commit.as_deref(), "b")?;
+                fetched.push(dir.clone());
+                match path {
+                    Some(path) => dir.join(path),
+                    None => dir,
+                }
+            }
+        };
+        let outcome = install_plugin(&plugin_dir, &home.join("plugins"), force, replace)?;
+        if let Some(installed) = &outcome.0 {
+            let origin = serde_json::json!({"source": source, "plugin": plugin, "path": path});
+            let _ = std::fs::write(installed.dir.join(ORIGIN_FILE), origin.to_string());
+        }
+        Ok(outcome)
+    })();
+    for dir in fetched {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    report(result?)
 }
 
 pub fn run_plugin(home: &Path, command: PluginCommand) -> Result<ExitCode, String> {
@@ -83,11 +177,56 @@ pub fn run_plugin(home: &Path, command: PluginCommand) -> Result<ExitCode, Strin
         }
         PluginCommand::Install {
             source,
+            plugin,
             path,
             force,
-        } => install_from(&source, path.as_deref(), |dir| {
-            zcode_ext::skill_install::install_plugin(dir, &home.join("plugins"), force)
-        }),
+        } => install_plugin_from(
+            home,
+            &source,
+            plugin.as_deref(),
+            path.as_deref(),
+            force,
+            false,
+        ),
+        PluginCommand::Update { name } => {
+            let mut failed = false;
+            let mut updated = 0;
+            for plugin in zcode_app::installed_plugins(home) {
+                if name.as_ref().is_some_and(|name| *name != plugin.name) {
+                    continue;
+                }
+                let origin = std::fs::read_to_string(plugin.root.join(ORIGIN_FILE))
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+                let Some(origin) = origin else {
+                    eprintln!(
+                        "zcode: {} has no recorded origin; install it again",
+                        plugin.name
+                    );
+                    failed = true;
+                    continue;
+                };
+                eprintln!("updating {}", plugin.name);
+                let code = install_plugin_from(
+                    home,
+                    origin["source"].as_str().unwrap_or(""),
+                    origin["plugin"].as_str(),
+                    origin["path"].as_str().map(Path::new),
+                    false,
+                    true,
+                )?;
+                failed |= code != ExitCode::SUCCESS;
+                updated += 1;
+            }
+            if updated == 0 && !failed {
+                eprintln!("zcode: no installed plugin to update");
+            }
+            Ok(if failed {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
+        }
     }
 }
 
@@ -109,20 +248,7 @@ fn install_from(
     let fetched = if local.is_dir() {
         None
     } else {
-        let dir = std::env::temp_dir().join(format!("zcode-install-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let cloned = std::process::Command::new("git")
-            .args(["clone", "--quiet", "--depth", "1", "--"])
-            .arg(source)
-            .arg(&dir)
-            .status()
-            .map_err(|e| format!("cannot run git: {e}"))?;
-        if !cloned.success() {
-            return Err(format!(
-                "{source} is neither a directory nor a repository git can clone"
-            ));
-        }
-        Some(dir)
+        Some(fetch(source, None, "s")?)
     };
     let base = fetched.clone().unwrap_or(local);
     let target = match path {
@@ -133,8 +259,11 @@ fn install_from(
     if let Some(dir) = fetched {
         let _ = std::fs::remove_dir_all(dir);
     }
-    let (installed, findings) = outcome?;
+    report(outcome?)
+}
 
+/// Prints what a scan found and whether the thing was installed.
+fn report((installed, findings): Outcome) -> Result<ExitCode, String> {
     for finding in &findings {
         let place = match finding.line {
             0 => finding.file.clone(),

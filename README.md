@@ -39,6 +39,8 @@ zcode eval evals/harder --command 'codex exec "$ZCODE_EVAL_PROMPT"'   # đo mộ
 zcode skill install <thư mục | URL git> [--path thư/mục/con]   # quét rồi cài một skill vào ~/.zcode/skills
 zcode skill list
 zcode plugin install <thư mục | URL git> [--path thư/mục/con]  # quét rồi cài một plugin kiểu Claude Code vào ~/.zcode/plugins
+zcode plugin install <marketplace> --plugin <tên>               # cài một plugin từ danh mục của một marketplace
+zcode plugin update [tên]                                       # lấy lại từ nguồn, quét lại, thay bản đã cài
 zcode plugin list
 zcode mcp login <server> | logout <server>   # đăng nhập OAuth vào một server MCP qua HTTP
 zcode probe evals/harder --model <tên> # thử model với từng định dạng sửa file và bộ tool, in cấu hình tốt nhất
@@ -191,7 +193,7 @@ MCP: server stdio chạy trong sandbox; server HTTP được gọi từ tiến t
 
 Hooks của Claude Code: zcode đọc cùng file `settings.json` và nói cùng giao thức (JSON qua stdin, mã thoát 2 để chặn, JSON trên stdout) cho các sự kiện `PreToolUse`, `PostToolUse`, `UserPromptSubmit` và `Stop`, với hook loại `command`, `matcher` và `if`. Tên tool và tham số được đổi sang dạng Claude Code (`Bash`, `Edit`, `file_path`…). Sự kiện và loại hook khác được báo một lần lúc khởi động rồi bỏ qua. Khác biệt cần biết: hook chạy lần lượt chứ không song song; `permissionDecision: "ask"` bị coi là chặn; `"allow"` không bỏ qua luật quyền của zcode; `tool_response` chỉ có trường `output`; `transcript_path` trỏ tới log của zcode, không cùng định dạng với Claude Code. Hook chạy ngoài sandbox, nên chỉ bật `"project"` với repo bạn tin.
 
-Plugin của Claude Code: với mỗi plugin đã cài bằng `zcode plugin install` (nằm trong `~/.zcode/plugins`) và mỗi thư mục trong `claude_plugins`, zcode nạp `skills/`, `commands/`, `agents/`, `hooks/hooks.json` (kể cả biến `${CLAUDE_PLUGIN_ROOT}`) và các server trong `.mcp.json` (stdio và HTTP; tool mang tên `mcp__<plugin>_<server>__<tool>`). Trình cài quét toàn bộ plugin như với skill và nói rõ khi plugin có hook hoặc server MCP. Chưa hỗ trợ: danh mục marketplace (`marketplace.json`), tự cập nhật, và các phần khác của plugin (output style, theme, LSP).
+Plugin của Claude Code: với mỗi plugin đã cài bằng `zcode plugin install` (nằm trong `~/.zcode/plugins`) và mỗi thư mục trong `claude_plugins`, zcode nạp `skills/`, `commands/`, `agents/`, `hooks/hooks.json` (kể cả biến `${CLAUDE_PLUGIN_ROOT}`) và các server trong `.mcp.json` (stdio và HTTP; tool mang tên `mcp__<plugin>_<server>__<tool>`). Trình cài quét toàn bộ plugin như với skill và nói rõ khi plugin có hook hoặc server MCP. Nguồn cài có thể là một marketplace (thư mục hoặc kho git có `.claude-plugin/marketplace.json`): chọn plugin bằng `--plugin`; mục trỏ sang kho git khác được lấy đúng commit mà danh mục ghim. `zcode plugin update` lấy lại từ nguồn đã ghi nhớ và quét lại trước khi thay; không có cập nhật tự động. Chưa hỗ trợ: các phần khác của plugin (output style, theme, LSP) và plugin phân phối bằng lệnh cài riêng.
 
 Lệnh và loại subagent: file `commands/<tên>.md` trong `.zcode/`, `.claude/`, `~/.zcode/` hoặc trong plugin là một prompt gọi bằng `/<tên> tham số` (hỗ trợ `$ARGUMENTS`, `$1`…`$9`), dùng được với `zcode run`, giao diện terminal và ACP. File `agents/<tên>.md` (front matter `name`, `description`, `tools`) định nghĩa một loại subagent mà model chọn qua tham số `agent` của tool `subagent`; nó chạy với chỉ dẫn trong file và, nếu có `tools`, chỉ với các tool đó.
 

@@ -275,13 +275,101 @@ pub fn install(
     Ok((Some(Installed { name, dir }), findings))
 }
 
+/// Where a marketplace says one of its plugins is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginSource {
+    /// A directory inside the marketplace itself.
+    Local(PathBuf),
+    /// A git repository, optionally at an exact commit and in a
+    /// subdirectory.
+    Git {
+        url: String,
+        commit: Option<String>,
+        path: Option<PathBuf>,
+    },
+}
+
+/// Looks `plugin` up in the catalogue of the marketplace at `dir`
+/// (`.claude-plugin/marketplace.json`). `Ok(None)` when `dir` is not a
+/// marketplace.
+pub fn marketplace_entry(dir: &Path, plugin: Option<&str>) -> Result<Option<PluginSource>, String> {
+    let file = dir.join(".claude-plugin/marketplace.json");
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return Ok(None);
+    };
+    let catalogue: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    let entries: Vec<&serde_json::Value> = catalogue["plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    let names = || {
+        let mut shown: Vec<&str> = entries
+            .iter()
+            .filter_map(|entry| entry["name"].as_str())
+            .take(40)
+            .collect();
+        if entries.len() > shown.len() {
+            shown.push("...");
+        }
+        format!("{} plugins: {}", entries.len(), shown.join(", "))
+    };
+    let Some(plugin) = plugin else {
+        return Err(format!(
+            "this is a marketplace; say which plugin with --plugin <name>. It has {}",
+            names()
+        ));
+    };
+    let entry = entries
+        .iter()
+        .find(|entry| entry["name"] == plugin)
+        .ok_or_else(|| {
+            format!(
+                "the marketplace has no plugin named {plugin}. It has {}",
+                names()
+            )
+        })?;
+    let source = &entry["source"];
+    let subdirectory = source["path"].as_str().map(PathBuf::from);
+    Ok(Some(
+        match (
+            source.as_str(),
+            source["source"].as_str(),
+            source["url"].as_str(),
+        ) {
+            (Some(relative), _, _) => PluginSource::Local(dir.join(relative)),
+            (None, Some("url" | "git-subdir"), Some(url)) => PluginSource::Git {
+                url: url.to_string(),
+                // An exact commit when the catalogue pins one, else a tag or
+                // branch if it names one.
+                commit: source["sha"]
+                    .as_str()
+                    .or(source["ref"].as_str())
+                    .map(String::from),
+                path: subdirectory,
+            },
+            (None, kind, _) => {
+                return Err(format!(
+                    "plugin {plugin} is distributed in a way this client does not support ({})",
+                    kind.unwrap_or("unknown")
+                ));
+            }
+        },
+    ))
+}
+
 /// Copies the Claude Code plugin in `source` into `root/<name>` after the
 /// same scan a skill gets, over everything the plugin holds: its skills,
 /// commands, agent definitions, hook scripts and server configuration.
+///
+/// `force` installs in spite of dangerous findings; `replace` lets an
+/// installed plugin of the same name be overwritten, as an update does.
 pub fn install_plugin(
     source: &Path,
     root: &Path,
     force: bool,
+    replace: bool,
 ) -> Result<(Option<Installed>, Vec<Finding>), String> {
     let parts = [
         "skills",
@@ -334,7 +422,7 @@ pub fn install_plugin(
     }
     let dir = root.join(&name);
     if dir.exists() {
-        if !force {
+        if !force && !replace {
             return Err(format!(
                 "a plugin named {name} is already installed at {}",
                 dir.display()
@@ -465,7 +553,7 @@ mod tests {
         std::fs::write(plugin.join("commands/release.md"), "Cut the release.\n").unwrap();
         std::fs::write(plugin.join("hooks/hooks.json"), "{\"hooks\": {}}").unwrap();
 
-        let (installed, findings) = install_plugin(&plugin, &root, false).unwrap();
+        let (installed, findings) = install_plugin(&plugin, &root, false, false).unwrap();
         assert_eq!(installed.unwrap().dir, root.join("relkit"));
         assert!(root.join("relkit/commands/release.md").is_file());
         assert!(findings.iter().any(|f| f.what.starts_with("defines hooks")));
@@ -477,7 +565,7 @@ mod tests {
         )
         .unwrap();
         let (installed, findings) =
-            install_plugin(&plugin, &dir.path().join("other"), false).unwrap();
+            install_plugin(&plugin, &dir.path().join("other"), false, false).unwrap();
         assert!(installed.is_none());
         assert!(
             findings
@@ -488,9 +576,60 @@ mod tests {
         let empty = dir.path().join("empty");
         std::fs::create_dir_all(&empty).unwrap();
         assert!(
-            install_plugin(&empty, &root, false)
+            install_plugin(&empty, &root, false, false)
                 .unwrap_err()
                 .contains("does not look like a plugin")
+        );
+    }
+
+    #[test]
+    fn a_marketplace_catalogue_says_where_each_plugin_is() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(marketplace_entry(dir.path(), Some("x")).unwrap(), None);
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/marketplace.json"),
+            r#"{"name": "m", "plugins": [
+                {"name": "inside", "source": "./plugins/inside"},
+                {"name": "pinned", "source": {"source": "git-subdir", "url": "https://h.example/r.git", "path": "p/q", "ref": "v1", "sha": "abc123"}},
+                {"name": "whole", "source": {"source": "url", "url": "https://h.example/w.git"}},
+                {"name": "odd", "source": {"source": "command", "command": "x"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            marketplace_entry(dir.path(), Some("inside")).unwrap(),
+            Some(PluginSource::Local(dir.path().join("./plugins/inside")))
+        );
+        assert_eq!(
+            marketplace_entry(dir.path(), Some("pinned")).unwrap(),
+            Some(PluginSource::Git {
+                url: "https://h.example/r.git".into(),
+                commit: Some("abc123".into()),
+                path: Some("p/q".into()),
+            })
+        );
+        assert_eq!(
+            marketplace_entry(dir.path(), Some("whole")).unwrap(),
+            Some(PluginSource::Git {
+                url: "https://h.example/w.git".into(),
+                commit: None,
+                path: None,
+            })
+        );
+        assert!(
+            marketplace_entry(dir.path(), Some("odd"))
+                .unwrap_err()
+                .contains("does not support (command)")
+        );
+        assert!(
+            marketplace_entry(dir.path(), Some("nope"))
+                .unwrap_err()
+                .contains("4 plugins: inside, pinned")
+        );
+        assert!(
+            marketplace_entry(dir.path(), None)
+                .unwrap_err()
+                .contains("--plugin <name>")
         );
     }
 }
