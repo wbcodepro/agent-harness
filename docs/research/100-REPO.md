@@ -20,11 +20,11 @@ Phần lớn giá trị nằm ở một số ít ý lặp lại ở nhiều repo
 |---|---|---|---|---|---|
 | 1 | Lọc đầu ra lệnh theo định dạng trước khi ghi vào phiên: bỏ dòng test đạt và tiến trình build, giữ nguyên văn dòng lỗi và dòng tổng kết, bản đầy đủ lưu ra file | `Sev7eEn7/dsh-sieve`, `JuliusBrussee/caveman`, `headroomlabs-ai/headroom`, `Austin1serb/agents-md` | Giảm 21–33% token đầu vào; 86% trên một log vitest mẫu | Luật theo định dạng có thể bỏ sót runner lạ (khi đó không lọc gì); không được bỏ dòng tổng kết | **Đã làm** (`[context] condense_output`, bật mặc định); số đo ở dưới |
 | 2 | Gộp hành động: lệnh sửa file mang theo lệnh kiểm tra, trả cả hai kết quả trong một lần gọi | `NVlabs/SoL-Pi` | Giảm 37% chi phí và 13% số lần gọi model trên một tác vụ | Model phải biết dùng; lệnh kèm theo phải qua đúng các lớp quyền như lệnh shell thường | **Đã làm** (tham số `then_run`, `[model] fuse_actions`); số đo ở dưới |
-| 3 | Sửa file theo neo: mỗi dòng đọc ra có mã băm ngắn, lệnh sửa chỉ dòng theo mã, mã cũ thì bị từ chối | `can1357/oh-my-pi` | Sửa trúng ngay lần đầu với model yếu, model không phải chép lại đoạn cũ | Tốn thêm token ở mỗi dòng đọc; định dạng lạ với model | Chưa làm; nên thử như một `edit_format` thứ tư và đo |
+| 3 | Sửa file theo neo: mỗi dòng đọc ra có mã băm ngắn, lệnh sửa chỉ dòng theo mã, mã cũ thì bị từ chối | `can1357/oh-my-pi` | Sửa trúng ngay lần đầu với model yếu, model không phải chép lại đoạn cũ | Tốn thêm token ở mỗi dòng đọc; định dạng lạ với model | **Đã làm** (`edit_format = "hashline"`, không phải mặc định); số đo ở dưới |
 | 4 | Sau mỗi lần sửa một hàm, cho model thấy nơi gọi và test chạm tới hàm đó; chọn đúng lệnh kiểm tra thay vì chạy tất cả | `trailhq/Trail-Code`, `redhat-et/ripwire`, `tirth8205/code-review-graph` | 33 so với 27 trên 50 bài SWE-bench Verified, ít hơn 46% lời gọi tool, 60% thời gian | Cần chỉ mục tham chiếu chính xác; chỉ mục sai thì gợi ý sai | **Làm một phần**: khi dòng đầu của một định nghĩa đổi hoặc bị xóa, kết quả sửa liệt kê nơi khác dùng nó, test xếp trước. Chưa chọn lệnh kiểm tra theo đó |
 | 5 | Chọn model và mức suy luận theo từng lượt: việc dễ dùng mức thấp, chỉ leo thang khi kẹt | `JuliusBrussee/caveman`, `codewhale-hq/Codewhale`, `microsoft/TokenEconomizer` | Khoảng nửa chi phí và nửa thời gian ở tỷ lệ giải tương đương; 18,4–30,9% chi phí thấp hơn mà Pass@1 không giảm | Phân loại sai việc khó thành dễ làm giảm độ chính xác | **Đã làm** theo cách ngược lại: bắt đầu ở mức thấp, nâng mức (hoặc đổi model, kể cả sang nhà cung cấp khác) khi lượt bị kẹt; số đo ở dưới. Chưa có bộ phân loại việc dễ/khó trước khi làm |
 | 6 | Cắt nguyên văn trước khi tóm tắt: bỏ kết quả tool cũ, giữ nguyên mọi lời của người dùng và model | `tamaratran/fast-jev-compaction`, `esengine/DeepSeek-Reasonix` | Giữ được đường dẫn, lỗi và ràng buộc mà bản tóm tắt hay làm mất | Viết lại phần đầu prompt làm mất cache một lần | Đã có (`[context] clear_tool_results`), mặc định tắt vì số đo trước đây không cho thấy lợi rõ |
-| 7 | Tool theo ký hiệu qua LSP: tìm tham chiếu chính xác, đổi tên xuyên file, thay thân hàm | `oraios/serena` | Một lời gọi đúng thay cho nhiều bước sửa chữ | Phụ thuộc language server của từng ngôn ngữ | Có client LSP cho chẩn đoán; chưa có tool đổi tên và tìm tham chiếu |
+| 7 | Tool theo ký hiệu qua LSP: tìm tham chiếu chính xác, đổi tên xuyên file, thay thân hàm | `oraios/serena` | Một lời gọi đúng thay cho nhiều bước sửa chữ | Phụ thuộc language server của từng ngôn ngữ | **Đã làm** (`references`, `rename_symbol`), đã thử với rust-analyzer |
 | 8 | Ghi nhận chi phí theo từng nguồn trong prompt (hệ thống, tool, lịch sử, kết quả tool) và theo từng lần gọi model | `tigerless-labs/cost-xray`, `getagentseal/codeburn` | Thấy được schema tool không dùng và những lần cache bị viết lại | Không có; chỉ là đo | Một phần: tổng token và tỷ lệ cache; từ hôm nay tính cả lần gọi tóm tắt |
 | 9 | Bài học rút từ thất bại lặp lại giữa các phiên, lưu thành dữ kiện của repo | `microsoft/TokenEconomizer`, `riponcm/projectmem` | Nằm trong kết quả 18,4–30,9% ở trên | Bài học sai hoặc cũ gây hại lâu dài; cần điều kiện hết hiệu lực | Chưa làm |
 | 10 | Thay kết quả lớn bị lặp lại bằng tham chiếu ổn định, đọc lại theo trang | `NVlabs/SoL-Pi` | Không có số riêng | Model có thể không tìm lại được nội dung sau khi lịch sử bị nén | Chưa làm |
@@ -68,6 +68,21 @@ Cách đọc các con số này:
 | `effort = "low"` | 20/20 | 84 | 33.998 | 196 giây |
 
 Ở cấu hình giữa, 2 trong 20 tác vụ được nâng mức và cả hai đều đạt. Trên bộ tác vụ này mức thấp đã đủ, nên số đo chỉ cho thấy phần tiết kiệm (khoảng 37% token đầu ra, 31% thời gian so với mức cao), chưa cho thấy lưới an toàn có cứu được tác vụ nào không. Mỗi cấu hình chỉ chạy một lần. Mặc định chưa đổi.
+
+### Sửa file theo neo (mục 3 trong bảng)
+
+`[model] edit_format = "hashline"`: `read` in mỗi dòng kèm số dòng và ba ký tự băm (`12:a3f|...`), tool `edit_lines` thay dòng theo neo và từ chối khi neo đã cũ. Đo với `deepseek-flash` trên 20 tác vụ, mỗi định dạng một lần chạy, cùng một bản build:
+
+| Định dạng | Đạt | Request | Token prompt | Token đầu ra | Thời gian |
+|---|---|---|---|---|---|
+| `search-replace` (mặc định) | 20/20 | 127 | 585.791 | 49.943 | 352 giây |
+| `hashline` | 20/20 | 114 | 495.849 | 42.601 | 298 giây |
+
+Một lần chạy mỗi bên nên chênh lệch (khoảng 10% request, 15% token) nằm trong mức dao động đã thấy giữa các lần chạy; mặc định chưa đổi. Lợi ích được kỳ vọng nhất là với model yếu, và chưa đo ở đó. Ba ký tự băm nghĩa là một dòng đã đổi vẫn giữ neo cũ với xác suất khoảng 1/4096.
+
+### Tool theo ký hiệu qua LSP (mục 7 trong bảng)
+
+`references` và `rename_symbol` đã cài trên client LSP sẵn có. Thử thật với rust-analyzer trên một dự án Rust nhỏ: tìm đủ 4 chỗ dùng ở 2 file, đổi tên 4 chỗ trong một lời gọi, `cargo test` đạt. Giới hạn đã biết: luật quyền theo đường dẫn chỉ thấy file xuất phát của lệnh đổi tên, không thấy các file khác nó sửa (lệnh vẫn từ chối sửa ngoài thư mục làm việc và trong `.git`); lần gọi đầu khi server còn lập chỉ mục có thể trả về rỗng.
 
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.
 

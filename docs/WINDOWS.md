@@ -98,6 +98,13 @@ sửa một commit. Trước khi push luôn git fetch và rebase.
    lưu bản đầy đủ phải đọc được bằng tool read.
 6. hame run in dòng "evidence: ..." sau một lượt có sửa mã nguồn; --output json có trường
    evidence.
+7. [model] edit_format = "hashline": read in dòng dạng "12:a3f|..."; yêu cầu agent sửa một file
+   có kết thúc dòng CRLF bằng edit_lines và xác nhận file vẫn là CRLF; sửa file bằng tay giữa
+   hai bước để neo cũ đi, lệnh phải bị từ chối và không ghi gì.
+8. Tool LSP: khai báo [lsp.rust] command = "rust-analyzer" (hoặc server khác có trên máy), rồi
+   yêu cầu agent dùng references và rename_symbol trên một dự án nhỏ. Phần đổi URI file sang
+   đường dẫn Windows (file:///C%3A/...) mới chỉ qua test đơn vị chạy trên macOS; các test với
+   server giả trong crates/hame-ext/src/lsp.rs đang giới hạn cho Unix, hãy thử bỏ giới hạn đó.
 
 Không chạy CI trên GitHub trừ khi cần (gh workflow run ci).
 ```
