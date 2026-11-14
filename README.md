@@ -68,7 +68,7 @@ Máy chủ được kiểm thử bằng runtime client chính thức của giao 
 
 `edit` và `apply_patch` chấp nhận sai lệch về khoảng trắng, thụt lề và kiểu xuống dòng khi chỉ có đúng một chỗ khớp; dòng không đổi luôn giữ nguyên như trong file. Tham số gọi tool bị bọc trong code fence hoặc lẫn chữ được gỡ ra trước khi chạy.
 
-Khi tool từ server MCP và plugin nhiều hơn `defer_tools_over`, chúng không nằm trong danh sách tool gửi cho model (mỗi tool khai báo tốn token ở mọi request). Model tìm bằng `tool_search` và chạy bằng `tool_call`; luật quyền và hook vẫn thấy tên thật của tool được gọi.
+Khi tool từ server MCP và plugin nhiều hơn `defer_tools_over`, chúng không nằm trong danh sách tool gửi cho model (mỗi tool khai báo tốn token ở mọi request). Model tìm bằng `tool_search` và chạy bằng `tool_call`; luật quyền và hook vẫn thấy tên thật của tool được gọi. Khi đó còn có tool `script`: model viết một đoạn Python gọi các tool ấy như hàm (`call(tên, **tham_số)`), nên một chuỗi lời gọi chỉ tốn một bước và chỉ những gì đoạn mã in ra mới vào ngữ cảnh. Đoạn mã chạy trong sandbox như lệnh shell; từng lời gọi bên trong vẫn qua luật quyền và hook; kết quả dài hơn `spill_at_bytes` tới đoạn mã ở dạng đã cắt. Cần `python3` (hoặc `python`); tắt bằng `[context] scripts = false`.
 
 Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song song. `subagent` giao việc cho một agent mới có ngữ cảnh riêng; với `isolate` nó làm trên một git worktree và nhánh riêng.
 

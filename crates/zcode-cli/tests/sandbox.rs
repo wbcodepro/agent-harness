@@ -540,6 +540,16 @@ for line in sys.stdin:
                 "tool_call",
                 json!({"name": "wc__file_stats", "input": {"path": "../home/config.toml"}}),
             ),
+            // A script chains calls in the sandbox and returns what it
+            // prints; it cannot write outside the workspace either.
+            (
+                "script",
+                json!({"code": "values = [call('mcp__calc__add', a=n, b=n) for n in (1, 20)]\nprint(sum(int(v) for v in values))"}),
+            ),
+            (
+                "script",
+                json!({"code": "open('../escaped.txt', 'w').write('x')"}),
+            ),
         ],
         &[],
     );
@@ -550,6 +560,13 @@ for line in sys.stdin:
     );
     assert_eq!(results[1], ("42".to_string(), false), "{stderr}");
     assert!(results[2].1 && results[2].0.contains("not been granted"));
+    assert_eq!(results[3], ("42\n".to_string(), false), "{stderr}");
+    assert!(
+        results[4].1 && results[4].0.contains("PermissionError"),
+        "{}",
+        results[4].0
+    );
+    assert!(!fx.root.join("escaped.txt").exists());
     let records = store
         .read(&store.list().unwrap().pop().unwrap().id)
         .unwrap();
@@ -562,6 +579,7 @@ for line in sys.stdin:
         .unwrap();
     assert!(offered.contains(&"tool_search".to_string()), "{offered:?}");
     assert!(offered.contains(&"tool_call".to_string()), "{offered:?}");
+    assert!(offered.contains(&"script".to_string()), "{offered:?}");
     assert!(
         !offered
             .iter()

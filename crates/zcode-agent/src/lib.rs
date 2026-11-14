@@ -179,7 +179,9 @@ const STEPS_LEFT_WARNING: u64 = 3;
 pub struct Agent {
     pub llm: Arc<dyn Llm>,
     pub tools: ToolSet,
-    pub pipeline: ToolPipeline,
+    /// Shared, so a tool that makes calls of its own can send them through
+    /// the same layers.
+    pub pipeline: Arc<ToolPipeline>,
     pub tool_context: ToolContext,
     /// Executes tool bodies, in process or in a confined worker.
     pub runner: Arc<dyn ToolRunner>,

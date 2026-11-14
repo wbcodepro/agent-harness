@@ -309,7 +309,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     // calls that keep coming back the same, undo changes to git's own
     // settings, redact
     // (so refusals are covered too), then decide whether the call runs.
-    let pipeline = ToolPipeline::new();
+    let pipeline = Arc::new(ToolPipeline::new());
     pipeline.push(SpillLayer {
         dir: checkpoint_dir(home, cwd)
             .file_name()
@@ -651,6 +651,15 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
 
     zcode_agent::deferred::declare_deferred(&mut tools, &deferred);
+    // With tools behind tool_call, a script can chain them in one step.
+    if !deferred.specs().is_empty() && config.context.scripts {
+        tools.insert(Arc::new(zcode_ext::script::ScriptTool {
+            tools: deferred.clone(),
+            pipeline: Arc::clone(&pipeline),
+            policy: policy.is_confined().then(|| policy.clone()),
+            helper: helper.clone(),
+        }));
+    }
     // Last, so every other hook has had its say before a queued message
     // is added to the conversation.
     let steering = options.steering.clone().unwrap_or_default();

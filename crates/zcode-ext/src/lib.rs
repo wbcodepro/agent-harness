@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod lsp;
 pub mod mcp;
 pub mod mcp_auth;
+pub mod script;
 pub mod skill_install;
 pub mod skills;
 pub mod wasm;

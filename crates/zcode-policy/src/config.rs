@@ -294,6 +294,10 @@ pub struct ContextConfig {
     /// to the model: it finds them with `tool_search` and runs them with
     /// `tool_call`, so they cost no prompt tokens until used.
     pub defer_tools_over: usize,
+    /// When tools are deferred, also offer `script`: a Python program that
+    /// calls them as functions, so a chain of calls takes one step and
+    /// only its printed result enters the context.
+    pub scripts: bool,
     /// Past the threshold, first clear old tool results from what the model
     /// sees, and summarize only if that is not enough. Off by default: on
     /// the one task it was measured on, a model that had not noted what it
@@ -307,6 +311,7 @@ impl Default for ContextConfig {
             compact_at_tokens: 100_000,
             spill_at_bytes: 16_000,
             defer_tools_over: 20,
+            scripts: true,
             clear_tool_results: false,
         }
     }

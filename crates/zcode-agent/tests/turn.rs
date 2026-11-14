@@ -59,7 +59,7 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
     Agent {
         llm,
         tools: ToolSet::builtin(),
-        pipeline: ToolPipeline::new(),
+        pipeline: Arc::new(ToolPipeline::new()),
         tool_context: ToolContext::new(workspace),
         runner: Arc::new(InProcess),
         checkpointer: None,
