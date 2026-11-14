@@ -150,6 +150,12 @@ impl SandboxedRunner {
             for name in ["TEMP", "TMP"] {
                 env.push((name.into(), tmp.clone().into()));
             }
+            // npm and pip keep their caches under the profile, where a
+            // confined tool cannot write, and pip stalls on its check for a
+            // newer pip.
+            env.push(("npm_config_cache".into(), tmp.join("npm-cache").into()));
+            env.push(("PIP_CACHE_DIR".into(), tmp.join("pip-cache").into()));
+            env.push(("PIP_DISABLE_PIP_VERSION_CHECK".into(), "1".into()));
         }
         for (name, value) in &self.env {
             env.push((name.into(), value.into()));
