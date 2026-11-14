@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::intercept::{Authority, Substitution, applying, rewrite_head};
+use crate::intercept::{
+    Authority, MAX_REWRITTEN_BODY, Substitution, applying, declared_length, rewrite_head,
+    rewrite_request,
+};
 
 /// Hosts the sandbox may reach. A pattern is a host name, or `*.suffix` for
 /// every subdomain of `suffix`; either may end in `:port`. Without a port,
@@ -308,11 +311,31 @@ async fn intercept(
             return Ok(());
         }
     };
-    let head = String::from_utf8_lossy(&buffer[..head_end]);
-    upstream
-        .write_all(rewrite_head(&head, substitutions).as_bytes())
-        .await?;
-    upstream.write_all(&buffer[head_end..]).await?;
+    let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
+    match declared_length(&head).filter(|length| *length <= MAX_REWRITTEN_BODY) {
+        // A body small enough to hold is read whole and rewritten.
+        Some(length) => {
+            while buffer.len() < head_end + length {
+                let mut chunk = [0u8; 8192];
+                let n = client.read(&mut chunk).await?;
+                if n == 0 {
+                    return Ok(());
+                }
+                buffer.extend_from_slice(&chunk[..n]);
+            }
+            let (body, after) = buffer[head_end..].split_at(length);
+            upstream
+                .write_all(&rewrite_request(&head, body, substitutions))
+                .await?;
+            upstream.write_all(after).await?;
+        }
+        None => {
+            upstream
+                .write_all(rewrite_head(&head, substitutions).as_bytes())
+                .await?;
+            upstream.write_all(&buffer[head_end..]).await?;
+        }
+    }
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
 }
@@ -578,6 +601,13 @@ mod tests {
         );
         assert!(!response.contains("PLACEHOLDER-1"), "{response}");
         assert!(response.contains("Connection: close"), "{response}");
+
+        // In a body of declared length too, with the length corrected.
+        let posted = "POST /login HTTP/1.1\r\nHost: localhost\r\nContent-Length: 19\r\n\r\ntoken=PLACEHOLDER-1";
+        let response = through_tunnel(proxy.port(), origin_port, authority.clone(), posted)
+            .await
+            .unwrap();
+        assert!(response.contains("Content-Length: 24"), "{response}");
 
         // A host with no secret of its own is tunnelled untouched: the
         // tool sees the host's own certificate and its placeholder stays

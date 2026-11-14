@@ -7,10 +7,12 @@
 //! connection itself, with a certificate from an authority made for this
 //! run, and opens its own verified connection to the real host.
 //!
-//! Only the request head is rewritten (the request line and headers,
-//! including a Basic `Authorization` header): changing a body would change
-//! its length. Each connection carries one request, so every request's
-//! head passes through here.
+//! The request head is always rewritten (the request line and headers,
+//! including a Basic `Authorization` header). A body is rewritten when
+//! its length is declared and it is small enough to hold: its length
+//! changes with the replacement, so the declared length is corrected. A
+//! chunked or very large body passes through as it is. Each connection
+//! carries one request, so every request passes through here.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -198,6 +200,60 @@ pub(crate) fn rewrite_head(head: &str, substitutions: &[&Substitution]) -> Strin
     out
 }
 
+/// Bodies up to this size are held to be rewritten.
+pub(crate) const MAX_REWRITTEN_BODY: usize = 1024 * 1024;
+
+/// The length a request head declares for its body, when it declares one
+/// and does not also say the body is chunked.
+pub(crate) fn declared_length(head: &str) -> Option<usize> {
+    let mut length = None;
+    for line in head.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("transfer-encoding:") {
+            return None;
+        }
+        if let Some(value) = lower.strip_prefix("content-length:") {
+            length = value.trim().parse().ok();
+        }
+    }
+    length
+}
+
+/// A whole request (its head and its complete body) with placeholders
+/// replaced in both and the declared length made to fit the new body.
+pub(crate) fn rewrite_request(head: &str, body: &[u8], substitutions: &[&Substitution]) -> Vec<u8> {
+    let mut body = body.to_vec();
+    for substitution in substitutions {
+        let (from, to) = (
+            substitution.placeholder.as_bytes(),
+            substitution.secret.as_bytes(),
+        );
+        let mut replaced = Vec::with_capacity(body.len());
+        let mut rest = body.as_slice();
+        while let Some(at) = rest.windows(from.len()).position(|window| window == from) {
+            replaced.extend_from_slice(&rest[..at]);
+            replaced.extend_from_slice(to);
+            rest = &rest[at + from.len()..];
+        }
+        replaced.extend_from_slice(rest);
+        body = replaced;
+    }
+    let head: String = head
+        .split("\r\n")
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            if line.to_ascii_lowercase().starts_with("content-length:") {
+                format!("Content-Length: {}\r\n", body.len())
+            } else {
+                format!("{line}\r\n")
+            }
+        })
+        .collect();
+    let mut request = rewrite_head(&head, substitutions).into_bytes();
+    request.extend_from_slice(&body);
+    request
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +293,27 @@ mod tests {
             "GET /v1?key=real-a HTTP/1.1\r\nHost: api.example.com\r\n\
              Authorization: Bearer real-a\r\nX-Other: PLACEHOLDER-B\r\nConnection: close\r\n\r\n"
         );
+        // A body of declared length is rewritten too, and the length kept
+        // true; a chunked one is left for the caller to pass through.
+        let posted = "POST /login HTTP/1.1\r\nContent-Length: 19\r\n\r\n";
+        assert_eq!(declared_length(posted), Some(19));
+        assert_eq!(
+            String::from_utf8(rewrite_request(
+                posted,
+                b"token=PLACEHOLDER-A",
+                &applying(&substitutions, "api.example.com", 443)
+            ))
+            .unwrap(),
+            "POST /login HTTP/1.1\r\nContent-Length: 12\r\nConnection: close\r\n\r\ntoken=real-a"
+        );
+        assert_eq!(
+            declared_length(
+                "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n"
+            ),
+            None
+        );
+        assert_eq!(declared_length("GET / HTTP/1.1\r\n\r\n"), None);
+
         let with_basic = format!("GET / HTTP/1.1\r\nAuthorization: Basic {basic}\r\n\r\n");
         let rewritten = rewrite_head(
             &with_basic,
