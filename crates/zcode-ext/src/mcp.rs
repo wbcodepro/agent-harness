@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,6 +16,12 @@ use zcode_session::ToolSpec;
 use zcode_tools::{Effect, GroupGuard, Tool, ToolContext, ToolOutput};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The stateless revision: no handshake and no session; every request
+/// says which version it speaks and who is asking.
+const STATELESS_VERSION: &str = "2026-07-28";
+/// How many times a call is sent again when the server answers that it
+/// needs another round before it can finish.
+const MAX_ROUNDS: usize = 5;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const CALL_TIMEOUT: Duration = Duration::from_secs(300);
 /// Environment a server inherits; the rest of the harness's environment,
@@ -149,13 +155,14 @@ impl HttpLink {
         name: &str,
         message: &Value,
         id: Option<u64>,
+        extra: &[(String, String)],
     ) -> Result<Option<Value>, String> {
         let mut request = self
             .http
             .post(&self.url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream");
-        for (header, value) in &self.headers {
+        for (header, value) in self.headers.iter().chain(extra.iter().map(|(h, v)| (h, v))) {
             request = request.header(header, value);
         }
         let session = self.session.lock().expect("mcp lock").clone();
@@ -172,6 +179,21 @@ impl HttpLink {
             .await
             .map_err(|e| format!("cannot reach MCP server {name}: {e}"))?;
         let status = response.status();
+        // A server of the stateless revision rejects a request it cannot
+        // take with an HTTP error whose body is a JSON-RPC error. That is
+        // an answer, and the caller needs its code.
+        if matches!(status.as_u16(), 400 | 404) && id.is_some() {
+            let answer = response
+                .bytes()
+                .await
+                .ok()
+                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+                .filter(|answer| answer["error"]["code"].is_i64());
+            return match answer {
+                Some(answer) => Ok(Some(answer)),
+                None => Err(format!("MCP server {name} answered HTTP {status}")),
+            };
+        }
         if !status.is_success() {
             return Err(match status.as_u16() {
                 401 | 403 => format!(
@@ -236,6 +258,45 @@ pub struct McpClient {
     name: String,
     link: Link,
     next_id: AtomicU64,
+    /// Whether the server speaks the stateless revision.
+    stateless: AtomicBool,
+}
+
+/// Why a request got no result, as a sentence for the user.
+struct Refusal {
+    message: String,
+    /// The server answered and said no, as opposed to not answering.
+    answered: bool,
+}
+
+/// A header value as the stateless revision wants it: plain when it is
+/// visible ASCII, otherwise base64 inside a marker.
+fn header_value(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .bytes()
+            .all(|b| (0x21..=0x7e).contains(&b) || b == b' ')
+        && text.trim() == text
+        && !text.starts_with("=?base64?");
+    if plain {
+        return text.to_string();
+    }
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in text.as_bytes().chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                encoded.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 63] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    format!("=?base64?{encoded}?=")
 }
 
 impl McpClient {
@@ -350,6 +411,7 @@ impl McpClient {
                 _group: group,
             },
             next_id: AtomicU64::new(1),
+            stateless: AtomicBool::new(false),
         });
         client.handshake().await?;
         Ok(client)
@@ -375,23 +437,55 @@ impl McpClient {
                 version: Mutex::new(None),
             }),
             next_id: AtomicU64::new(1),
+            stateless: AtomicBool::new(false),
         });
         client.handshake().await?;
         Ok(client)
     }
 
+    /// Finds out how to talk to the server.
+    ///
+    /// The handshake of the older revisions is tried first, because a
+    /// server that expects it may not survive anything else arriving
+    /// before it. A server that speaks only the stateless revision refuses
+    /// `initialize`; it is then asked what it supports with
+    /// `server/discover`, and from there on every request carries its own
+    /// version and identity.
     async fn handshake(&self) -> Result<(), String> {
-        let agreed = self
-            .request(
-                "initialize",
-                json!({
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {"name": "zcode", "version": env!("CARGO_PKG_VERSION")},
-                }),
-                STARTUP_TIMEOUT,
-            )
-            .await?;
+        let hello = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "zcode", "version": env!("CARGO_PKG_VERSION")},
+        });
+        let agreed = match self.call("initialize", hello, STARTUP_TIMEOUT, &[]).await {
+            Ok(agreed) => agreed,
+            // A server that is not there cannot be asked anything else.
+            Err(refused) if !refused.answered => return Err(refused.message),
+            Err(refused) => {
+                self.stateless.store(true, Ordering::Relaxed);
+                let found = self
+                    .call("server/discover", json!({}), STARTUP_TIMEOUT, &[])
+                    .await;
+                let speaks_ours = found.as_ref().is_ok_and(|found| {
+                    found["supportedVersions"]
+                        .as_array()
+                        .is_some_and(|versions| versions.iter().any(|v| v == STATELESS_VERSION))
+                });
+                if speaks_ours {
+                    return Ok(());
+                }
+                self.stateless.store(false, Ordering::Relaxed);
+                return Err(match found {
+                    Ok(found) => format!(
+                        "MCP server {} speaks protocol versions {} and this client does not",
+                        self.name, found["supportedVersions"]
+                    ),
+                    // Not a stateless server either: what went wrong is
+                    // whatever the handshake said.
+                    Err(_) => refused.message,
+                });
+            }
+        };
         let ready = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         match &self.link {
             Link::Stdio { outbox, .. } => {
@@ -404,13 +498,45 @@ impl McpClient {
                         .unwrap_or(PROTOCOL_VERSION)
                         .to_string(),
                 );
-                link.exchange(&self.name, &ready, None).await?;
+                link.exchange(&self.name, &ready, None, &[]).await?;
             }
         }
         Ok(())
     }
 
     async fn request(&self, method: &str, params: Value, limit: Duration) -> Result<Value, String> {
+        self.call(method, params, limit, &[])
+            .await
+            .map_err(|refused| refused.message)
+    }
+
+    /// Sends one request and returns its result. `extra` are headers for
+    /// this request alone, used only over HTTP.
+    async fn call(
+        &self,
+        method: &str,
+        mut params: Value,
+        limit: Duration,
+        extra: &[(String, String)],
+    ) -> Result<Value, Refusal> {
+        let fail = |message: String| Refusal {
+            message,
+            answered: false,
+        };
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if self.stateless.load(Ordering::Relaxed) {
+            // No handshake happened, so each request introduces itself.
+            params["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!(STATELESS_VERSION);
+            params["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json!({});
+            params["_meta"]["io.modelcontextprotocol/clientInfo"] =
+                json!({"name": "zcode", "version": env!("CARGO_PKG_VERSION")});
+            headers.push(("MCP-Protocol-Version".into(), STATELESS_VERSION.into()));
+            headers.push(("Mcp-Method".into(), method.into()));
+            if let Some(name) = params["name"].as_str() {
+                headers.push(("Mcp-Name".into(), header_value(name)));
+            }
+            headers.extend(extra.iter().cloned());
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let gone = || format!("MCP server {} stopped responding", self.name);
@@ -427,31 +553,40 @@ impl McpClient {
             } => {
                 let (answer, answered) = oneshot::channel();
                 waiting.lock().expect("mcp lock").insert(id, answer);
-                outbox.send(message.to_string()).map_err(|_| gone())?;
+                outbox.send(message.to_string()).map_err(|_| fail(gone()))?;
                 match tokio::time::timeout(limit, answered).await {
                     Ok(Ok(response)) => response,
-                    Ok(Err(_)) => return Err(gone()),
+                    Ok(Err(_)) => return Err(fail(gone())),
                     Err(_) => {
                         waiting.lock().expect("mcp lock").remove(&id);
-                        return Err(late());
+                        return Err(fail(late()));
                     }
                 }
             }
             Link::Http(link) => {
-                match tokio::time::timeout(limit, link.exchange(&self.name, &message, Some(id)))
-                    .await
-                {
-                    Ok(exchanged) => exchanged?.ok_or_else(gone)?,
-                    Err(_) => return Err(late()),
+                // The stateless revision has no session to send back.
+                if self.stateless.load(Ordering::Relaxed) {
+                    *link.session.lock().expect("mcp lock") = None;
+                    *link.version.lock().expect("mcp lock") = None;
+                }
+                let exchanged = link.exchange(&self.name, &message, Some(id), &headers);
+                match tokio::time::timeout(limit, exchanged).await {
+                    Ok(Ok(Some(response))) => response,
+                    Ok(Ok(None)) => return Err(fail(gone())),
+                    Ok(Err(message)) => return Err(fail(message)),
+                    Err(_) => return Err(fail(late())),
                 }
             }
         };
         if let Some(error) = response.get("error") {
-            return Err(format!(
-                "MCP server {} refused {method}: {}",
-                self.name,
-                error["message"].as_str().unwrap_or("unknown error")
-            ));
+            return Err(Refusal {
+                answered: true,
+                message: format!(
+                    "MCP server {} refused {method}: {}",
+                    self.name,
+                    error["message"].as_str().unwrap_or("unknown error")
+                ),
+            });
         }
         Ok(response["result"].clone())
     }
@@ -470,9 +605,19 @@ impl McpClient {
                 let Some(remote) = tool["name"].as_str() else {
                     continue;
                 };
+                // Arguments the server wants repeated as HTTP headers.
+                let header_params = tool["inputSchema"]["properties"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(param, schema)| {
+                        Some((param.clone(), schema["x-mcp-header"].as_str()?.to_string()))
+                    })
+                    .collect();
                 tools.push(Arc::new(McpTool {
                     client: Arc::clone(self),
                     remote: remote.to_string(),
+                    header_params,
                     spec: ToolSpec {
                         name: exposed_name(&self.name, remote),
                         description: tool["description"].as_str().unwrap_or("").to_string(),
@@ -509,6 +654,8 @@ fn exposed_name(server: &str, tool: &str) -> String {
 struct McpTool {
     client: Arc<McpClient>,
     remote: String,
+    /// Argument name and the header suffix it is to be sent under.
+    header_params: Vec<(String, String)>,
     spec: ToolSpec,
 }
 
@@ -529,14 +676,57 @@ impl Tool for McpTool {
 
     fn call<'a>(&'a self, input: &'a Value, _ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
-            let params = json!({"name": self.remote, "arguments": input});
-            let result = match self
-                .client
-                .request("tools/call", params, CALL_TIMEOUT)
-                .await
-            {
-                Ok(result) => result,
-                Err(e) => return ToolOutput::error(e),
+            let headers: Vec<(String, String)> = self
+                .header_params
+                .iter()
+                .filter_map(|(param, header)| {
+                    let value = match input.get(param)? {
+                        Value::String(text) => text.clone(),
+                        Value::Null => return None,
+                        other => other.to_string(),
+                    };
+                    Some((format!("Mcp-Param-{header}"), header_value(&value)))
+                })
+                .collect();
+            let mut params = json!({"name": self.remote, "arguments": input});
+            let mut rounds = 0;
+            let result = loop {
+                let result = match self
+                    .client
+                    .call("tools/call", params.clone(), CALL_TIMEOUT, &headers)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(refused) => return ToolOutput::error(refused.message),
+                };
+                match result["resultType"].as_str() {
+                    // The server needs another round. This client offers
+                    // nothing a server could ask the user or the model
+                    // for, so the only round it can make is handing the
+                    // server its own state back.
+                    Some("input_required") => {
+                        let asks = result["inputRequests"]
+                            .as_object()
+                            .is_some_and(|requests| !requests.is_empty());
+                        rounds += 1;
+                        if asks || rounds > MAX_ROUNDS || result["requestState"].is_null() {
+                            return ToolOutput::error(format!(
+                                "MCP server {} needs input to finish {} (a question to the \
+                                 user, or a model request), which this client does not provide.",
+                                self.client.name, self.remote
+                            ));
+                        }
+                        params["requestState"] = result["requestState"].clone();
+                    }
+                    Some("task") => {
+                        return ToolOutput::error(format!(
+                            "MCP server {} started {} as a background task, which this \
+                             client does not follow.",
+                            self.client.name, self.remote
+                        ));
+                    }
+                    _ => break result,
+                }
             };
             let mut text = String::new();
             for item in result["content"].as_array().into_iter().flatten() {
@@ -546,6 +736,10 @@ impl Tool for McpTool {
                     None => {}
                 }
                 text.push('\n');
+            }
+            // A result given only as structured data is still a result.
+            if text.trim().is_empty() && !result["structuredContent"].is_null() {
+                text = result["structuredContent"].to_string();
             }
             let text = text.trim_end().to_string();
             ToolOutput {
@@ -643,6 +837,13 @@ for line in sys.stdin:
     /// and answers `tools/list` as an event stream with a notification in
     /// front of the answer.
     async fn http_server() -> String {
+        http_server_of(false).await
+    }
+
+    /// With `stateless`, a server of the stateless revision only: it
+    /// answers `initialize` with a header-mismatch error, hands out no
+    /// session, and checks the headers that revision requires.
+    async fn http_server_of(stateless: bool) -> String {
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/mcp", listener.local_addr().unwrap());
@@ -681,10 +882,42 @@ for line in sys.stdin:
                     let (id, method) = (&message["id"], message["method"].as_str().unwrap_or(""));
                     let answer =
                         |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result});
+                    let refuse = |code: i64| {
+                        json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": "no"}})
+                            .to_string()
+                    };
                     let (status, kind, extra, payload) = if !head
                         .contains("authorization: bearer t0ken")
                     {
                         ("401 Unauthorized", "text/plain", "", String::new())
+                    } else if stateless {
+                        let named = message["params"]["name"].as_str().unwrap_or("");
+                        let introduced = message["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]
+                            == "2026-07-28";
+                        if !head.contains(&format!("mcp-method: {}", method.to_lowercase()))
+                            || !head.contains("mcp-protocol-version: 2026-07-28")
+                            || head.contains("mcp-session-id")
+                            || !introduced
+                        {
+                            ("400 Bad Request", "application/json", "", refuse(-32020))
+                        } else if method == "server/discover" {
+                            let result = json!({"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}}});
+                            ("200 OK", "application/json", "", answer(result).to_string())
+                        } else if method == "tools/list" {
+                            let tools = json!({"resultType": "complete", "tools": [{"name": "greet", "description": "Greet someone.",
+                                "inputSchema": {"type": "object", "properties": {"region": {"type": "string", "x-mcp-header": "Region"}}}}]});
+                            ("200 OK", "application/json", "", answer(tools).to_string())
+                        } else if !head.contains(&format!("mcp-name: {named}"))
+                            || !head.contains("mcp-param-region: =?base64?")
+                        {
+                            ("400 Bad Request", "application/json", "", refuse(-32020))
+                        } else {
+                            let who = message["params"]["arguments"]["name"]
+                                .as_str()
+                                .unwrap_or("?");
+                            let result = json!({"resultType": "complete", "content": [{"type": "text", "text": format!("xin chào {who}")}]});
+                            ("200 OK", "application/json", "", answer(result).to_string())
+                        }
                     } else if method == "initialize" {
                         let result = json!({"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "h", "version": "0"}});
                         (
@@ -725,6 +958,109 @@ for line in sys.stdin:
             }
         });
         url
+    }
+
+    /// A server of the stateless revision only, over stdio: it refuses
+    /// `initialize`, and wants every request to introduce itself.
+    const STATELESS_SERVER: &str = r#"
+import json, sys
+def send(m): sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    m = json.loads(line)
+    i, method, p = m.get("id"), m.get("method"), m.get("params", {})
+    meta = p.get("_meta", {})
+    if method == "initialize" or "id" not in m:
+        if "id" in m: send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    if meta.get("io.modelcontextprotocol/protocolVersion") != "2026-07-28" or "io.modelcontextprotocol/clientInfo" not in meta:
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32022, "message": "unsupported protocol version", "data": {"supported": ["2026-07-28"]}}})
+    elif method == "server/discover":
+        send({"jsonrpc": "2.0", "id": i, "result": {"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}}}})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"resultType": "complete", "ttlMs": 1000, "cacheScope": "private", "tools": [
+            {"name": "total", "description": "Add up.", "inputSchema": {"type": "object"}},
+            {"name": "slow", "description": "Two rounds."},
+            {"name": "ask", "description": "Asks the user."}]}})
+    elif method == "tools/call":
+        if p["name"] == "total":
+            send({"jsonrpc": "2.0", "id": i, "result": {"resultType": "complete", "content": [], "structuredContent": {"sum": sum(p["arguments"]["values"])}}})
+        elif p["name"] == "slow":
+            if p.get("requestState") == "step-2":
+                send({"jsonrpc": "2.0", "id": i, "result": {"resultType": "complete", "content": [{"type": "text", "text": "finished"}]}})
+            else:
+                send({"jsonrpc": "2.0", "id": i, "result": {"resultType": "input_required", "requestState": "step-2"}})
+        else:
+            send({"jsonrpc": "2.0", "id": i, "result": {"resultType": "input_required", "inputRequests": {"q": {"method": "elicitation/create", "params": {}}}}})
+"#;
+
+    #[tokio::test]
+    async fn a_server_that_only_speaks_the_stateless_revision_is_found_and_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("stateless.py");
+        std::fs::write(&script, STATELESS_SERVER).unwrap();
+        let config = McpServerConfig {
+            command: "python3".into(),
+            args: vec![script.display().to_string()],
+            ..McpServerConfig::default()
+        };
+        let client = McpClient::start("new", &config, None, Path::new("zcode"), dir.path())
+            .await
+            .unwrap();
+        let tools = client.tools().await.unwrap();
+        let names: Vec<String> = tools.iter().map(|tool| tool.spec().name).collect();
+        assert_eq!(
+            names,
+            ["mcp__new__total", "mcp__new__slow", "mcp__new__ask"]
+        );
+
+        let ctx = ToolContext::new(dir.path());
+        // A result that is only structured data.
+        let total = tools[0].call(&json!({"values": [1, 2, 39]}), &ctx).await;
+        assert_eq!(total, ToolOutput::ok("{\"sum\":42}"));
+        // The server asks for its own state back: one more round.
+        assert_eq!(
+            tools[1].call(&json!({}), &ctx).await,
+            ToolOutput::ok("finished")
+        );
+        // It asks for something only a person could give.
+        let asked = tools[2].call(&json!({}), &ctx).await;
+        assert!(
+            asked.is_error && asked.text.contains("needs input"),
+            "{}",
+            asked.text
+        );
+    }
+
+    #[tokio::test]
+    async fn the_stateless_revision_over_http_sends_its_headers_and_no_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = McpServerConfig {
+            url: Some(http_server_of(true).await),
+            headers: BTreeMap::from([("Authorization".to_string(), "Bearer t0ken".to_string())]),
+            ..McpServerConfig::default()
+        };
+        let client = McpClient::start("web", &config, None, Path::new("zcode"), dir.path())
+            .await
+            .unwrap();
+        let tools = client.tools().await.unwrap();
+        assert_eq!(tools[0].spec().name, "mcp__web__greet");
+        // The tool's name and the argument the server marked travel as
+        // headers too, the non-ASCII one encoded.
+        let greeted = tools[0]
+            .call(
+                &json!({"name": "Lan", "region": "Hà Nội"}),
+                &ToolContext::new(dir.path()),
+            )
+            .await;
+        assert_eq!(greeted, ToolOutput::ok("xin chào Lan"));
+    }
+
+    #[test]
+    fn header_values_that_are_not_plain_ascii_are_wrapped_in_base64() {
+        assert_eq!(header_value("get_weather"), "get_weather");
+        assert_eq!(header_value("Hà Nội"), "=?base64?SMOgIE7hu5lp?=");
+        assert_eq!(header_value(" padded"), "=?base64?IHBhZGRlZA==?=");
+        assert_eq!(header_value(""), "=?base64??=");
     }
 
     #[tokio::test]
