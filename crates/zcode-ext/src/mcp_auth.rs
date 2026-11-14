@@ -134,12 +134,18 @@ fn challenge_param(header: &str, key: &str) -> Option<String> {
     Some(value.to_string())
 }
 
-/// Finds the authorization server's metadata for the MCP server at
-/// `server_url`. Returns it with the scopes the server says it needs.
-async fn discover(
-    http: &reqwest::Client,
-    server_url: &Url,
-) -> Result<(Value, Vec<String>), String> {
+/// What signing in to a server needs to know about it.
+struct Discovered {
+    /// The authorization server's metadata.
+    metadata: Value,
+    /// The scopes the server says it needs.
+    scopes: Vec<String>,
+    /// The name the server gives itself, which tokens are asked for.
+    resource: String,
+}
+
+/// Finds the authorization server for the MCP server at `server_url`.
+async fn discover(http: &reqwest::Client, server_url: &Url) -> Result<Discovered, String> {
     let origin = server_url.origin().ascii_serialization();
     // The server points at its own description when asked without a token.
     let unauthenticated = http
@@ -150,11 +156,13 @@ async fn discover(
         .send()
         .await
         .map_err(|e| format!("cannot reach {server_url}: {e}"))?;
-    let pointed = unauthenticated
+    let challenge = unauthenticated
         .headers()
         .get("www-authenticate")
         .and_then(|header| header.to_str().ok())
-        .and_then(|header| challenge_param(header, "resource_metadata"));
+        .unwrap_or("")
+        .to_string();
+    let pointed = challenge_param(&challenge, "resource_metadata");
     let mut candidates: Vec<String> = pointed.into_iter().collect();
     candidates.push(format!(
         "{origin}/.well-known/oauth-protected-resource{}",
@@ -168,13 +176,23 @@ async fn discover(
             break;
         }
     }
-    let scopes: Vec<String> = resource
+    // The scopes asked for in the refusal itself are the ones this request
+    // needs; the description lists everything the server knows.
+    let scopes: Vec<String> = match challenge_param(&challenge, "scope") {
+        Some(asked) => asked.split_whitespace().map(String::from).collect(),
+        None => resource
+            .as_ref()
+            .and_then(|resource| resource["scopes_supported"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|scope| scope.as_str().map(String::from))
+            .collect(),
+    };
+    let named = resource
         .as_ref()
-        .and_then(|resource| resource["scopes_supported"].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|scope| scope.as_str().map(String::from))
-        .collect();
+        .and_then(|resource| resource["resource"].as_str())
+        .unwrap_or(server_url.as_str())
+        .to_string();
     // No description: the server is assumed to be its own authorization
     // server, as the earlier revisions of the protocol had it.
     let issuer = resource
@@ -198,7 +216,11 @@ async fn discover(
             && found["authorization_endpoint"].is_string()
             && found["token_endpoint"].is_string()
         {
-            return Ok((found, scopes));
+            return Ok(Discovered {
+                metadata: found,
+                scopes,
+                resource: named,
+            });
         }
     }
     Err(format!(
@@ -299,7 +321,12 @@ pub async fn login(
     let http = reqwest::Client::new();
     let server =
         Url::parse(server_url).map_err(|e| format!("bad server address {server_url}: {e}"))?;
-    let (metadata, scopes) = discover(&http, &server).await?;
+    let Discovered {
+        metadata,
+        scopes,
+        resource,
+    } = discover(&http, &server).await?;
+    let resource = resource.as_str();
     let endpoint = |name: &str| metadata[name].as_str().unwrap_or("").to_string();
     let supports_s256 = metadata["code_challenge_methods_supported"]
         .as_array()
@@ -370,7 +397,7 @@ pub async fn login(
             .append_pair("code_challenge", &challenge)
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", &state)
-            .append_pair("resource", server_url);
+            .append_pair("resource", resource);
         if !scopes.is_empty() {
             query.append_pair("scope", &scopes.join(" "));
         }
@@ -409,11 +436,11 @@ pub async fn login(
             ("redirect_uri", &redirect),
             ("client_id", &client_id),
             ("code_verifier", &verifier),
-            ("resource", server_url),
+            ("resource", resource),
         ],
     )
     .await?;
-    tokens_from(&answer, &token_endpoint, &client_id, server_url, None)
+    tokens_from(&answer, &token_endpoint, &client_id, resource, None)
 }
 
 /// The access token stored at `path`, refreshed first if it is about to
@@ -743,5 +770,28 @@ mod tests {
             "https://h/m"
         );
         assert_eq!(challenge_param("Bearer", "resource_metadata"), None);
+        assert_eq!(challenge_param(header, "scope").unwrap(), "a b");
+    }
+
+    /// Reads the public metadata of real servers; needs the network, so it
+    /// only runs when asked for (`cargo test -- --ignored`). It registers
+    /// nothing and signs in to nothing.
+    #[tokio::test]
+    #[ignore]
+    async fn real_servers_describe_themselves_the_way_discovery_expects() {
+        let http = reqwest::Client::new();
+        for server in ["https://mcp.linear.app/mcp", "https://mcp.notion.com/mcp"] {
+            let found = discover(&http, &Url::parse(server).unwrap()).await.unwrap();
+            assert!(
+                found.metadata["authorization_endpoint"].is_string(),
+                "{server}"
+            );
+            assert!(
+                found.metadata["registration_endpoint"].is_string(),
+                "{server}"
+            );
+            assert!(!found.scopes.is_empty(), "{server}");
+            assert!(found.resource.starts_with("https://"), "{server}");
+        }
     }
 }
