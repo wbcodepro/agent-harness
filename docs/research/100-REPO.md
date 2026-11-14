@@ -96,6 +96,29 @@ Cũng từ lượt thử này, bảng ngữ cảnh theo nguồn cho thấy ở p
 
 `hame probe evals/harder` với `deepseek-flash`: chọn cấu hình trên 14 tác vụ, giữ lại 6. Cả năm cấu hình đạt 14/14; cấu hình được chọn (`search-replace`, bộ tool đầy đủ) đạt 6/6 trên phần giữ lại.
 
+### Bộ tác vụ khó `evals/expert` và phép đo độ chính xác
+
+Vì bộ `evals/harder` không phân biệt được độ chính xác, mười tác vụ mới được viết để phạt việc đọc lướt và đi tắt: bất biến bị phá ở module không được nhắc tới, đặc tả có thứ tự ưu tiên và trường hợp biên chỉ nêu bằng lời, traceback chỉ sai chỗ, di chuyển dữ liệu có bản ghi hỏng, tranh chấp luồng, tái cấu trúc lifetime trong Rust, hủy tác vụ trong Go, phục hồi lỗi trong bộ phân tích cú pháp, lỗi nằm ở hàm dùng chung giữa 80 module, và tối ưu tốc độ phải giữ nguyên kết quả. Mỗi tác vụ được kiểm ba cách: bản gốc hỏng, lời giải mẫu đạt, lời giải tắt hỏng.
+
+| Cấu hình | Đạt | Request | Token prompt | Token đầu ra | Thời gian |
+|---|---|---|---|---|---|
+| hame, `deepseek-flash`, lần 1 | 10/10 | 162 | 2.520.666 | 153.925 | 1.203 giây |
+| hame, `deepseek-flash`, lần 2 | 10/10 | 173 | 3.196.887 | 154.155 | 895 giây |
+| hame tắt các lớp hỗ trợ, `deepseek-flash` | 10/10 | 174 | 3.113.289 | 160.720 | 1.071 giây |
+| hame, `claude-haiku-5-5`, lần 1 | 10/10 | 125 | 2.867.139 | 189.384 | 943 giây |
+| hame, `claude-haiku-5-5`, lần 2 | 10/10 | 122 | 2.944.029 | 202.547 | 1.019 giây |
+| Claude Code, `claude-haiku-5-5` | 10/10 | không đo được | không đo được | không đo được | 1.147 giây |
+
+"Tắt các lớp hỗ trợ" là tắt `stop_on_red`, `fuse_actions`, `condense_output`, `dedupe_results` và `project_facts`.
+
+Điều rút ra, nói thẳng:
+
+- **Bộ này vẫn chưa đủ khó cho lớp model này.** Mọi cấu hình đạt 10/10, kể cả khi tắt các lớp hỗ trợ và kể cả Claude Code. Vì vậy đến nay **chưa có số đo nào chứng minh các lớp kiểm chứng của hame làm tăng độ chính xác** với `deepseek-flash` hay `claude-haiku-5-5`; chúng chỉ được chứng minh ở lượt đo `gpt-4o-mini` trước đây (19/32 lên 29/32).
+- Về chi phí, ba lượt `deepseek-flash` dao động từ 2,5 đến 3,2 triệu token prompt, và lượt tắt hỗ trợ nằm giữa khoảng đó: trên tác vụ dài, phần tiết kiệm của các lớp mới không tách được khỏi dao động giữa các lần chạy.
+- So với Claude Code trên cùng model, hame nhanh hơn ở cả hai lần chạy (943 và 1.019 giây so với 1.147), một lần chạy phía Claude Code.
+
+Muốn đo được độ chính xác thì cần tác vụ khó hơn nữa hoặc model yếu hơn; cả hai đều chưa làm.
+
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.
 
 ## Bảng đầy đủ theo nhóm

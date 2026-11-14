@@ -36,6 +36,7 @@ hame sessions | show <id> | fork <id> | rewind <id> | recover <id>
 hame import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
 hame eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token (--keep <thư mục>: giữ log của tác vụ hỏng; --runs N: chạy N lần, báo tỷ lệ đạt từng tác vụ)
 hame eval evals/harder --command 'codex exec "$HAME_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
+hame eval evals/expert                # mười tác vụ khó hơn, có bộ chấm ẩn (Python, Rust, Go, Node)
 hame skill install <thư mục | URL git> [--path thư/mục/con]   # quét rồi cài một skill vào ~/.hame/skills
 hame skill list
 hame plugin install <thư mục | URL git> [--path thư/mục/con]  # quét rồi cài một plugin kiểu Claude Code vào ~/.hame/plugins
