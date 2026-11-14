@@ -48,6 +48,12 @@ pub struct McpServerConfig {
     /// id (`http://127.0.0.1:<port>/callback`).
     #[serde(default)]
     pub oauth_redirect_port: Option<u16>,
+    /// Which revision of the protocol to speak, when the choice should not
+    /// be left to trying: `2026-07-28` goes straight to the stateless
+    /// revision without attempting the older handshake. Empty tries the
+    /// handshake first and falls back.
+    #[serde(default)]
+    pub protocol: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
@@ -70,6 +76,7 @@ impl Default for McpServerConfig {
             headers: BTreeMap::new(),
             oauth_client_id: None,
             oauth_redirect_port: None,
+            protocol: None,
             args: Vec::new(),
             env: BTreeMap::new(),
             sandbox: true,
@@ -318,8 +325,20 @@ impl McpClient {
         helper: &Path,
         cwd: &Path,
     ) -> Result<Arc<Self>, String> {
+        let stateless_only = match config.protocol.as_deref() {
+            None | Some("") => false,
+            Some(STATELESS_VERSION) => true,
+            Some(other) => {
+                return Err(format!(
+                    "MCP server {name}: unknown protocol {other:?}; leave it out, or use \
+                     {STATELESS_VERSION}"
+                ));
+            }
+        };
         match (&config.url, config.command.is_empty()) {
-            (Some(url), true) => return Self::connect(name, url, &config.headers).await,
+            (Some(url), true) => {
+                return Self::connect(name, url, &config.headers, stateless_only).await;
+            }
             (Some(_), false) => {
                 return Err(format!(
                     "MCP server {name}: give either `command` or `url`, not both"
@@ -416,7 +435,7 @@ impl McpClient {
             next_id: AtomicU64::new(1),
             stateless: AtomicBool::new(false),
         });
-        client.handshake().await?;
+        client.handshake(stateless_only).await?;
         Ok(client)
     }
 
@@ -425,6 +444,7 @@ impl McpClient {
         name: &str,
         url: &str,
         headers: &BTreeMap<String, String>,
+        stateless_only: bool,
     ) -> Result<Arc<Self>, String> {
         let http = reqwest::Client::builder()
             .connect_timeout(STARTUP_TIMEOUT)
@@ -442,7 +462,7 @@ impl McpClient {
             next_id: AtomicU64::new(1),
             stateless: AtomicBool::new(false),
         });
-        client.handshake().await?;
+        client.handshake(stateless_only).await?;
         Ok(client)
     }
 
@@ -454,7 +474,28 @@ impl McpClient {
     /// `initialize`; it is then asked what it supports with
     /// `server/discover`, and from there on every request carries its own
     /// version and identity.
-    async fn handshake(&self) -> Result<(), String> {
+    ///
+    /// With `stateless_only` the older handshake is not attempted.
+    async fn handshake(&self, stateless_only: bool) -> Result<(), String> {
+        if stateless_only {
+            self.stateless.store(true, Ordering::Relaxed);
+            let found = self
+                .call("server/discover", json!({}), STARTUP_TIMEOUT, &[])
+                .await
+                .map_err(|refused| refused.message)?;
+            let versions = &found["supportedVersions"];
+            return if versions
+                .as_array()
+                .is_some_and(|versions| versions.iter().any(|v| v == STATELESS_VERSION))
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "MCP server {} does not speak protocol {STATELESS_VERSION} (it offers {versions})",
+                    self.name
+                ))
+            };
+        }
         let hello = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
