@@ -162,6 +162,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         }
     }
     let spent = Spent::of(&session.records()[logged_before..]);
+    let proof = hame_verify::evidence(session.records());
     if args.output != OutputArg::Text {
         let (status, error, code) = match &outcome {
             Some(Ok(())) => ("completed", None, ExitCode::SUCCESS),
@@ -185,12 +186,28 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
             "input_tokens": spent.input,
             "cached_tokens": spent.cached,
             "output_tokens": spent.output,
+            // Ending is not the same as being right: what was run after
+            // the last change, and how it came out.
+            "evidence": proof.status(),
+            "evidence_command": proof.command(),
         });
         println!("{result}");
         return Ok(code);
     }
     if spent.requests > 0 {
         eprintln!("{spent}");
+        match &proof {
+            hame_verify::Evidence::NoChange => {}
+            hame_verify::Evidence::Unchecked => {
+                eprintln!("evidence: none; code was changed and nothing was run afterwards");
+            }
+            hame_verify::Evidence::Failing(command) => {
+                eprintln!("evidence: FAILING; the last check after the changes failed: {command}");
+            }
+            hame_verify::Evidence::Passed(command) => {
+                eprintln!("evidence: passed after the last change: {command}");
+            }
+        }
         if spent.cache_is_cold() {
             eprintln!(
                 "cache: little of the prompt was reused between requests; with this provider \

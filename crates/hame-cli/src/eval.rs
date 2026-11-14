@@ -80,6 +80,9 @@ struct Outcome {
     output_tokens: u64,
     /// Whether a stronger model took over at some point.
     escalated: bool,
+    /// What the agent's own session shows was run after its last change:
+    /// `passed`, `failing`, `unchecked` or `no-change`.
+    evidence: &'static str,
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -228,10 +231,18 @@ async fn run_task(
         cached_tokens: 0,
         output_tokens: 0,
         escalated: false,
+        evidence: "no-change",
     };
     let store = SessionStore::new(home.join("sessions"));
+    let mut longest = 0;
     for header in store.list().unwrap_or_default() {
-        for record in store.read(&header.id).unwrap_or_default() {
+        let records = store.read(&header.id).unwrap_or_default();
+        // The agent's own session is the long one; a subagent's is short.
+        if records.len() > longest {
+            longest = records.len();
+            outcome.evidence = hame_verify::evidence(&records).status();
+        }
+        for record in records {
             match record.event {
                 // A summary is a model request too, and is paid for.
                 Event::AssistantMessage { usage, .. } | Event::Compaction { usage, .. } => {
@@ -460,6 +471,24 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         sum(|o| o.output_tokens),
     );
 
+    // The agent stopping is one thing and the work being right another:
+    // how often it stopped with a passing check behind it, and how often
+    // that agreed with the task's own check.
+    let stopped_unproven = outcomes
+        .iter()
+        .filter(|o| matches!(o.evidence, "unchecked" | "failing"))
+        .count();
+    let false_done = outcomes
+        .iter()
+        .filter(|o| o.evidence == "passed" && !o.passed)
+        .count();
+    if stopped_unproven + false_done > 0 {
+        println!(
+            "{stopped_unproven} task runs ended with changes and no passing check of the \
+             agent's own; {false_done} ended with a passing check of its own and still failed \
+             the task's check"
+        );
+    }
     let escalated = outcomes.iter().filter(|o| o.escalated).count();
     if escalated > 0 {
         println!(
@@ -481,6 +510,7 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
                 "requests": o.requests, "tool_calls": o.tool_calls,
                 "input_tokens": o.input_tokens, "cached_tokens": o.cached_tokens,
                 "output_tokens": o.output_tokens, "escalated": o.escalated,
+                "evidence": o.evidence,
             })).collect::<Vec<_>>(),
         });
         std::fs::write(path, format!("{report:#}\n"))

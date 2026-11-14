@@ -62,6 +62,85 @@ fn changes_source(name: &str, input: &serde_json::Value) -> bool {
     }
 }
 
+/// What a turn leaves behind as grounds for believing its changes work.
+/// That the turn ended says only that the model stopped; this says what
+/// was run after the last change to source, and how it came out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Evidence {
+    /// No source file was changed.
+    NoChange,
+    /// Source was changed and nothing was run afterwards.
+    Unchecked,
+    /// The last thing run after the last change failed.
+    Failing(String),
+    /// The last thing run after the last change succeeded.
+    Passed(String),
+}
+
+impl Evidence {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::NoChange => "no-change",
+            Self::Unchecked => "unchecked",
+            Self::Failing(_) => "failing",
+            Self::Passed(_) => "passed",
+        }
+    }
+
+    pub fn command(&self) -> Option<&str> {
+        match self {
+            Self::Failing(command) | Self::Passed(command) => Some(command),
+            Self::NoChange | Self::Unchecked => None,
+        }
+    }
+}
+
+/// The evidence the last turn in `records` ends with. Where a test, build
+/// or lint ran after the last change, the last of those decides; otherwise
+/// the last command of any kind does.
+pub fn evidence(records: &[Record]) -> Evidence {
+    let start = records
+        .iter()
+        .rposition(|record| matches!(record.event, Event::TurnStart { .. }))
+        .unwrap_or(0);
+    let turn = &records[start..];
+    let Some(last_change) = turn.iter().rposition(|record| {
+        matches!(&record.event, Event::ToolCall { name, input, .. } if changes_source(name, input))
+    }) else {
+        return Evidence::NoChange;
+    };
+    let failed = |id: &str| {
+        turn.iter().any(|record| {
+            matches!(&record.event, Event::ToolResult { call_id, is_error: true, .. }
+                if call_id == id)
+        })
+    };
+    let runs: Vec<(&str, &str)> = turn[last_change..]
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ToolCall {
+                call_id,
+                name,
+                input,
+            } if name == "bash" => Some((call_id.as_str(), input["command"].as_str()?)),
+            Event::ToolCall { call_id, input, .. } => {
+                Some((call_id.as_str(), input["then_run"].as_str()?))
+            }
+            _ => None,
+        })
+        .collect();
+    let decisive = runs
+        .iter()
+        .rev()
+        .find(|(_, command)| looks_like_a_check(command))
+        .or(runs.last());
+    match decisive {
+        None => Evidence::Unchecked,
+        Some((id, command)) if failed(id) => Evidence::Failing((*command).to_string()),
+        Some((_, command)) => Evidence::Passed((*command).to_string()),
+    }
+}
+
 fn text_of(content: &[Block]) -> String {
     content
         .iter()
@@ -219,6 +298,68 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn evidence_is_what_ran_after_the_last_change() {
+        // (tool, argument, failed): a write of a source file, or a command.
+        let turn = |steps: &[(&str, &str, bool)]| {
+            let mut records = log("Fix it", &[]);
+            for (tool, argument, failed) in steps {
+                let seq = records.len() as u64;
+                let input = match *tool {
+                    "bash" => json!({ "command": argument }),
+                    "fused" => json!({"path": "a.py", "content": "x", "then_run": argument}),
+                    _ => json!({"path": argument, "content": "x"}),
+                };
+                let name = if *tool == "bash" { "bash" } else { "write" };
+                records.push(Record {
+                    seq,
+                    ts: 0,
+                    event: Event::ToolCall {
+                        call_id: format!("e{seq}"),
+                        name: name.into(),
+                        input,
+                    },
+                });
+                records.push(Record {
+                    seq: seq + 1,
+                    ts: 0,
+                    event: Event::ToolResult {
+                        call_id: format!("e{seq}"),
+                        content: vec![Block::text("out")],
+                        is_error: *failed,
+                    },
+                });
+            }
+            evidence(&records)
+        };
+        assert_eq!(turn(&[("write", "a.py", false)]), Evidence::Unchecked);
+        // A check that passed before the last change proves nothing now.
+        assert_eq!(
+            turn(&[("bash", "pytest -q", false), ("write", "a.py", false)]),
+            Evidence::Unchecked
+        );
+        assert_eq!(
+            turn(&[("write", "a.py", false), ("bash", "pytest -q", false)]),
+            Evidence::Passed("pytest -q".into())
+        );
+        // An unrelated command after a failed check does not make it pass.
+        assert_eq!(
+            turn(&[
+                ("write", "a.py", false),
+                ("bash", "pytest -q", true),
+                ("bash", "git status", false)
+            ]),
+            Evidence::Failing("pytest -q".into())
+        );
+        // A change that carried its check.
+        assert_eq!(
+            turn(&[("fused", "python3 -m pytest", false)]),
+            Evidence::Passed("python3 -m pytest".into())
+        );
+        // Notes are not source.
+        assert_eq!(turn(&[("write", "notes.md", false)]), Evidence::NoChange);
+    }
+
     #[tokio::test]
     async fn stopping_on_a_failing_check_sends_the_model_back_twice_at_most() {
         let objects = |records: Vec<Record>| async move {
@@ -268,6 +409,13 @@ mod tests {
                 ]
             ))
             .await
+        );
+        // What each of those turns leaves as evidence.
+        assert_eq!(evidence(&log("Explain", &[])), Evidence::NoChange);
+        assert_eq!(
+            evidence(&log("Fix it", &[("cargo test", true)])),
+            Evidence::NoChange,
+            "nothing was changed"
         );
         // A failed lookup at the end of a turn is not a failing check.
         assert!(!objects(log("Where is it?", &[("ls missing-dir", true)])).await);

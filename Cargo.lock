@@ -1606,6 +1606,7 @@ dependencies = [
  "hame-session",
  "hame-tools",
  "hame-tui",
+ "hame-verify",
  "hame-web",
  "serde",
  "serde_json",

@@ -20,7 +20,7 @@ use serde_json::json;
 /// the user typed.
 pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, trouble_this_turn};
 
-pub use redcheck::{CHECK_PREFIX, RedCheck};
+pub use redcheck::{CHECK_PREFIX, Evidence, RedCheck, evidence};
 
 pub const VERIFY_PREFIX: &str = "[hame verify]";
 
