@@ -124,3 +124,62 @@ Chạy tool trong một **AppContainer** thay cho mức Low. Tạo AppContainer 
 Cái giá, và lý do chưa làm: tool phải đọc được chính các chương trình nó chạy. `C:\Windows` và `C:\Program Files` có sẵn ACE cho `ALL APPLICATION PACKAGES`, nhưng Git ở `D:\Program Files\Git`, Python dưới `AppData\Local\Programs`, `~/.cargo`, `~/.rustup`, Node thì không. Phải thêm ACE ở những nơi đó, tức sửa ACL ngoài thư mục dự án, điều `docs/WINDOWS.md` yêu cầu không tự làm. Một bản thử nên bắt đầu bằng việc liệt kê chính xác những thư mục cần cấp quyền trên một máy thật rồi để người dùng quyết định.
 
 Các hướng khác đã cân nhắc: restricted token không ẩn được file do chính người dùng sở hữu nếu không sửa ACL; luật Windows Firewall cần quyền admin; biến môi trường proxy chỉ có tác dụng với chương trình tự nguyện tuân theo.
+
+# Lượt hai
+
+Thực hiện ngày 2026-11-14 trên cùng máy, theo khối lệnh ở mục 3 của `docs/KIEM-THU-TAY.md`: các phần thêm sau lượt đầu. Các lần kiểm phát lại phản hồi viết sẵn qua `ZCODE_SCRIPT`, trừ chỗ ghi "model thật".
+
+## Build và test
+
+| | đạt | hỏng |
+|---|---|---|
+| Sau `git pull` (commit `f54f2e4`) | 127 | 0 |
+| Sau các bản sửa của lượt này | 134 | 0 |
+
+Bảy test thêm là các test client MCP, trước đây chỉ biên dịch trên Unix (xem lỗi 4). `cargo clippy --workspace --all-targets -- -D warnings` sạch.
+
+## Các lỗi đã sửa
+
+Mỗi lỗi một commit, tên commit ghi trong ngoặc.
+
+1. **Tool `script` không chạy được** ("The script tool runs on Windows"). Tool lấy cái đầu tiên trong `python3`, `python` mà *khởi động* được. `python3` trên Windows là stub khởi động rồi không chạy gì, và dưới lớp bọc sandbox thì tên nào cũng "khởi động được", nên mọi script kết thúc bằng "Python may have failed to start it". Giờ mỗi ứng viên được yêu cầu chạy một chương trình rỗng, một lần.
+2. **`[secrets] substitute` bị từ chối hẳn** ("Secrets can be substituted on Windows"). zcode không khởi động, báo cần chế độ allowlist trong khi đang ở đúng chế độ đó: trên Windows proxy không bao giờ được bật vì không ép được tool đi qua. Giờ proxy được bật khi có secret cần thay; nó được *mời*, không bị *ép* (xem bảng bên dưới), zcode nói rõ điều đó lúc khởi động và prompt hệ thống không còn nói mạng bị giới hạn. Git for Windows được chuyển sang backend OpenSSL cho tool bị giam, vì backend mặc định (Schannel) không đọc file chứng chỉ của proxy.
+3. **`fetch` của Node bỏ qua proxy** ("Node's fetch goes through the egress proxy"). Không riêng Windows: thiếu `NODE_USE_ENV_PROXY`, `fetch` không nhìn biến proxy, nên secret được gửi đi dưới dạng giá trị giả. Worker sau proxy giờ được đặt biến này.
+4. **Test client MCP không chạy trên Windows** ("The MCP client tests run on Windows too"). Chúng bị giới hạn cho Unix chỉ vì hai tên chương trình, `python3` và `true`.
+5. **Server MCP stdio và language server không khởi động** ("MCP and language servers start on Windows"). Chúng chỉ được thừa hưởng biến môi trường tên đúng là `PATH`, `HOME`…; Windows đặt tên là `Path`, nên khi zcode chạy từ PowerShell hay cmd, server không có đường tìm chương trình và không có `SystemRoot` (thiếu nó Python không khởi động): mọi server MCP stdio báo "stopped responding". Dưới cargo và Python tên biến viết hoa nên test và kịch bản phát lại không thấy lỗi; nó lộ ra ở lần chạy bằng model thật. Giờ cả hai dùng chung bộ lọc của worker, không phân biệt hoa thường.
+
+## Từng mục
+
+| Mục | Kết quả |
+|---|---|
+| 1. Lệnh từ file (`.zcode\commands\tong-ket.md`, `zcode run "/tong-ket README.md"`) | Đạt. Prompt ghi trong log là "Tóm tắt README.md trong ba dòng." Tên lệnh không tồn tại được gửi nguyên văn |
+| 2. Loại subagent (`.zcode\agents\kiem-tra.md`, `tools: Read, Grep`) | Đạt, cả với model thật: session con chỉ khai báo `read` và `grep` |
+| 3. `zcode plugin install` | Đạt: từ thư mục, từ URL git `file://`, từ marketplace với `--plugin`; marketplace thiếu `--plugin` thì liệt kê các plugin có. `plugin list` đúng; `plugin update` (một plugin và tất cả) lấy được file mới từ thư mục và từ commit mới của kho git |
+| 4. Tool `script` với server MCP stdio viết bằng Python, `defer_tools_over = 0` | Hỏng lúc đầu (lỗi 1 và 5). Sau khi sửa: script gọi tool hai lần trong một bước, chạy bằng `python` 3.12, ghi được trong dự án, ghi ra ngoài bị từ chối. Chính server MCP cũng chạy trong sandbox: nó tạo được file trong dự án, không tạo được file bên ngoài |
+| 5. Thay secret tại proxy | Hỏng lúc đầu (lỗi 2). Sau khi sửa: xem bảng dưới |
+| 6. Cảnh báo cú pháp | Đạt: sửa `.py` cho sai thụt lề thì kết quả `edit` có "the file no longer parses (…line 3…)"; sửa hợp lệ thì không có cảnh báo |
+| 7. MCP không trạng thái `2026-07-28` và `zcode mcp login` | Sau lỗi 4, cả 7 test trong `mcp.rs` đạt, gồm bản không trạng thái qua stdio và qua HTTP. 4 test của `mcp_auth.rs` (máy chủ cấp quyền giả lập) đạt; test thứ năm cần server thật và bị bỏ qua theo thiết kế. Chưa đăng nhập với nhà cung cấp thật trên máy này |
+
+### Thay secret tại proxy trên Windows
+
+Cấu hình: `[network] mode = "allowlist"`, `allow = ["httpbin.org", "example.com"]` (hoặc `github.com`), `substitute = { DEMO_TOKEN = ["httpbin.org"] }`.
+
+| Kiểm tra | Kết quả |
+|---|---|
+| `echo $DEMO_TOKEN` trong sandbox | Giá trị giả `zcode-secret-DEMO_TOKEN-…` |
+| `HTTPS_PROXY`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS` | Được đặt; proxy thật sự nhận kết nối |
+| Python (`urllib`) tới `httpbin.org` | httpbin trả về header có secret thật, đầu ra bị che thành `[secret:DEMO_TOKEN]` |
+| Node (`fetch`) tới `httpbin.org` | Trước lỗi 3: đi thẳng, gửi giá trị giả. Sau: như Python |
+| git tới `httpbin.org` và tới `github.com` | Trước lỗi 2: `SEC_E_UNTRUSTED_ROOT`. Sau: "SSL certificate verified via OpenSSL"; `git ls-remote` một repo GitHub chạy được |
+| curl của Git for Windows tới `httpbin.org` | **Không được**: bản này chỉ có Schannel, bỏ qua `CURL_CA_BUNDLE`, từ chối chứng chỉ của proxy. `CURL_SSL_BACKEND=openssl` không đổi được gì |
+| curl tới host khác trong allowlist (`example.com`, HTTPS) | Được, 200 |
+| curl qua proxy tới host ngoài allowlist | Proxy trả 403 |
+| curl `--noproxy "*"` tới host ngoài allowlist | **Được, 200**: proxy không bị ép. Chương trình đi vòng chỉ cầm giá trị giả |
+
+Điều cần nhớ: trên Windows tool đọc được mọi file bạn đọc được. Secret chỉ thật sự nằm ngoài tầm tool khi nó chỉ có trong biến môi trường của zcode; nếu nó nằm trong một file `.env`, tool đọc được file đó.
+
+## Chưa kiểm
+
+- Tool `diagnostics`: máy không có language server nào (`rust-analyzer` chỉ là proxy của rustup, chưa cài component). Lỗi 5 sửa cùng một lỗi ở phần khởi động language server, nhưng chưa có lần chạy nào xác nhận.
+- `zcode mcp login` với nhà cung cấp thật, `zcode acp` trong một editor: cần người làm theo `docs/KIEM-THU-TAY.md`.
+- Các mục còn lại của lượt đầu: subagent với `isolate`, `[approval] reviewer`, `zcode web` qua giao diện, ổ không phải NTFS.
