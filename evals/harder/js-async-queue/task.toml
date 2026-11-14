@@ -1,0 +1,2 @@
+prompt = "Implement createQueue(limit) in queue.js. queue.add(task) takes a function returning a promise and returns a promise for its result; at most `limit` tasks run at the same time, in the order added; a task that rejects rejects its own promise and does not stop the others; queue.idle() resolves when nothing is running or waiting. node test.js must pass. Do not change test.js."
+check = "node test.js"

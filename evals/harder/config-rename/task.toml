@@ -1,0 +1,2 @@
+prompt = "The setting `timeout` is being renamed to `request_timeout_ms` everywhere in this project, and its unit changes from seconds to milliseconds (so the default 30 becomes 30000). Update the default config, the example config, the loader, the code that uses the value, and the documentation. A config file that still uses the old `timeout` key (in seconds) must keep working, with the value converted, and loading it must print one warning line to stderr that names both keys. python3 test_config.py must pass."
+check = "python3 test_config.py"

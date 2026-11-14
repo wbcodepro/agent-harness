@@ -1,0 +1,11 @@
+2026-01-05T10:00:01Z INFO req=a1 took=12ms started
+2026-01-05T10:00:02Z WARN req=a2 took=340ms slow query
+garbage line without shape
+2026-01-05T10:00:03Z INFO req=a3 took=7ms ok
+2026-01-05T10:00:04Z ERROR req=a4 took=1500ms upstream took=3ms retried
+2026-01-05T10:00:05Z DEBUG req=a5 took=1ms noise
+2026-01-05T10:00:06Z ERROR req=a6 took=90ms failed
+
+2026-01-05T10:00:07Z INFO req=a7 took=30ms ok
+INFO req=zz took=99999ms no timestamp
+2026-01-05T10:00:08Z WARN req=a8 took=20ms retry

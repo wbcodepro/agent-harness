@@ -1,0 +1,2 @@
+prompt = "`python3 -m shop` fails with an ImportError. Restructure the shop package so it runs and prints the same receipt as expected.txt, without putting import statements inside functions and without merging the modules into one. python3 test_shop.py must pass."
+check = "python3 test_shop.py"

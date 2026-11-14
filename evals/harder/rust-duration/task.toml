@@ -1,0 +1,2 @@
+prompt = "This is a Rust crate. Implement parse_duration in src/lib.rs so that `cargo test --offline` passes. Do not change the tests."
+check = "cargo test --offline -q 2>&1 | tail -3 | grep -q 'test result: ok'"

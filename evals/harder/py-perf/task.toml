@@ -1,0 +1,2 @@
+prompt = "pairs.py is correct but far too slow. Make count_pairs fast enough that python3 test_pairs.py finishes within its time limit, without changing what it returns. Do not change the test."
+check = "python3 test_pairs.py"

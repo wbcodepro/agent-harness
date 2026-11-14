@@ -1,0 +1,2 @@
+prompt = "node test.js fails. Fix emitter.js so every assertion passes: once() listeners fire a single time, off() removes exactly the listener given (also one registered with once), and a listener removed while an event is being emitted is not called later in that same emit. Do not change test.js."
+check = "node test.js"

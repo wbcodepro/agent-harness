@@ -1,0 +1,2 @@
+prompt = "This is a Go module. `go test ./...` fails. Fix limiter.go so the tests pass; do not change limiter_test.go. The limiter is a token bucket: it holds at most `burst` tokens, gains `rate` tokens per second of elapsed time, and Allow(now) takes one token if one is available."
+check = "go test ./... 2>&1 | tail -3 | grep -q '^ok'"

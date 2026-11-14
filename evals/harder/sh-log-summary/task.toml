@@ -1,0 +1,2 @@
+prompt = "Write summary.sh. Run as `bash summary.sh app.log` it prints, for each log level that occurs, one line `<LEVEL> <count>`, most frequent first and ties in alphabetical order, then a last line `slowest <request id> <ms>` for the request with the largest duration. A log line looks like `2026-01-05T10:00:01Z INFO req=a1 took=12ms message text`; lines that do not have that shape are ignored. bash test.sh must pass."
+check = "bash test.sh"

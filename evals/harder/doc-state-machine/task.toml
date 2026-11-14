@@ -1,0 +1,2 @@
+prompt = "Implement the order workflow described in WORKFLOW.md as the class Order in order.py. There are no tests in this directory; the table in WORKFLOW.md is the specification and your work will be checked against it."
+check = "python3 test_order.py"
