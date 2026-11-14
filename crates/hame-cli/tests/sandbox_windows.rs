@@ -367,16 +367,18 @@ fn no_route_leads_out_of_the_workspace() {
 }
 
 /// Windows has no process groups: a job object ends what a command started
-/// when it times out, and lets go of what it left in the background.
+/// when hame exits with it still running past its time limit, and lets go
+/// of what a command deliberately left in the background.
 #[test]
-fn a_timeout_ends_the_whole_process_tree_and_a_background_process_is_let_go() {
+fn a_job_past_its_limit_ends_with_hame_and_a_background_process_is_let_go() {
     let fx = Fixture::new();
     let home = fx.home("home", "[sandbox]\nallow_partial = true\n");
     let started = std::time::Instant::now();
     let (output, results) = fx.run(
         &home,
         vec![
-            // The grandchild would write the marker if it outlived the timeout.
+            // Moved to the background at its limit; the grandchild would
+            // write the marker if it outlived hame.
             (
                 "bash",
                 json!({"command": "(sleep 4; echo x > survived.txt) & sleep 300", "timeout_ms": 1000}),
@@ -394,7 +396,7 @@ fn a_timeout_ends_the_whole_process_tree_and_a_background_process_is_let_go() {
     assert!(output.status.success(), "{stderr}");
     assert_eq!(results.len(), 2, "{stderr}");
     assert!(
-        results[0].1 && results[0].0.contains("was killed"),
+        !results[0].1 && results[0].0.contains("moved to the background as job"),
         "{results:#?}"
     );
     assert_eq!(results[1], ("started\n".to_string(), false));

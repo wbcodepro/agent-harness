@@ -221,6 +221,9 @@ fn finish(dir: &Path, text: String, is_error: bool, started: Instant) {
 
 /// Ends the command and everything it started.
 async fn kill(running: &mut Running) {
+    // Windows has no process groups: the tree is ended through the command.
+    #[cfg(not(unix))]
+    let _ = running.shared_group;
     #[cfg(unix)]
     if running.shared_group {
         // The group is this worker's own; it goes down with the command.
