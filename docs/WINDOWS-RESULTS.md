@@ -15,7 +15,7 @@ Thực hiện ngày 2026-11-14 theo `docs/WINDOWS.md`, bằng Claude Code trên 
 | | đạt | hỏng |
 |---|---|---|
 | Trước (commit `57c9ca4`) | 109 | 1 |
-| Sau (commit `cc8d89e`, đã gồm 9 commit mới của `origin/main`) | 120 | 0 |
+| Sau (commit `813bb3f`, đã gồm 10 commit mới của `origin/main`) | 120 | 0 |
 
 Test hỏng lúc đầu: `commands_started_by_the_shell_tool_inherit_the_confinement`. Nguyên nhân là lỗi sản phẩm (lỗi 1 bên dưới), không phải test.
 
@@ -31,7 +31,7 @@ Các test sandbox dùng bash của Git: nếu có một Git Bash đang mở trê
 4. **Giao diện terminal bị in đè** (`f00cd9b`). Dòng "tools are confined for writes only" in ra stderr đè lên màn hình, ở mọi session và đè cả ô nhập sau `/new`, `/rewind`. Giờ nó là một dòng trong bản ghi hội thoại, nói một lần.
 5. **Bash hỏng khi có Git Bash khác đang mở, không rõ lý do** (`d82b900`). Xem mục "Giới hạn mới phát hiện". Chưa sửa được tận gốc; tool giờ giải thích, và `ZCODE_BASH` cho phép dùng một bản Git riêng.
 6. **Timeout và hủy không dừng được cây tiến trình** (`6c5a67a`). Việc kết thúc nhóm tiến trình chỉ có trên Unix. Trên Windows một lệnh quá thời hạn được báo là "killed" nhưng các tiến trình con vẫn chạy, và zcode đợi chúng: một `pip install` treo làm lượt treo vô hạn. Hủy bằng Esc cũng để lại cây tiến trình. Giờ mỗi lần gọi tool chạy trong một job object; tiến trình cố ý để chạy nền vẫn sống sau lần gọi, như trên Unix.
-7. **`npm install` và `pip install` không chạy trong sandbox** (`cc8d89e`). Cả hai giữ cache dưới hồ sơ người dùng, nơi tiến trình Low không ghi được; pip còn treo ở bước tự kiểm tra phiên bản mới. Worker bị giam giờ nhận `npm_config_cache`, `PIP_CACHE_DIR` trong thư mục tạm của sandbox và `PIP_DISABLE_PIP_VERSION_CHECK=1`.
+7. **`npm install` và `pip install` không chạy trong sandbox** (`813bb3f`). Cả hai giữ cache dưới hồ sơ người dùng, nơi tiến trình Low không ghi được; pip còn treo ở bước tự kiểm tra phiên bản mới. Worker bị giam giờ nhận `npm_config_cache`, `PIP_CACHE_DIR` trong thư mục tạm của sandbox và `PIP_DISABLE_PIP_VERSION_CHECK=1`.
 
 ## Sandbox: chạy bằng model thật
 
