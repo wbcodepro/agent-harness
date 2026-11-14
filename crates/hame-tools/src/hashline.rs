@@ -36,9 +36,31 @@ fn line_hash(line: &str) -> String {
     format!("{:03x}", (hash ^ (hash >> 12) ^ (hash >> 24)) & 0xfff)
 }
 
-/// What goes before a line: `12:a3f|`.
-fn prefix(number: usize, line: &str) -> String {
-    format!("{number}:{}|", line_hash(line))
+/// A line shorter than this (blank, `}`, `end`) reads the same in many
+/// places, so its own text cannot tell whether it is still the same line.
+const SHORT_LINE: usize = 4;
+
+/// The hash in the anchor of line `index`. A short line's hash takes in
+/// the nearest fuller line above it: after lines are added higher up, an
+/// old anchor for a blank line would otherwise match whichever blank line
+/// now has that number, and the edit would land in the wrong place.
+fn anchor_hash(lines: &[&str], index: usize) -> String {
+    let line = lines[index];
+    if line.trim().len() >= SHORT_LINE {
+        return line_hash(line);
+    }
+    let above = lines[..index]
+        .iter()
+        .rev()
+        .find(|above| above.trim().len() >= SHORT_LINE)
+        .copied()
+        .unwrap_or("");
+    line_hash(&format!("{}\n{}", above.trim_end(), line.trim_end()))
+}
+
+/// What goes before line `index`: `12:a3f|`.
+fn prefix(lines: &[&str], index: usize) -> String {
+    format!("{}:{}|", index + 1, anchor_hash(lines, index))
 }
 
 /// Reads `12:a3f`. A model often copies the bar, or the whole line, along
@@ -107,7 +129,7 @@ fn show(lines: &[&str], spans: &[(usize, usize)]) -> String {
     let mut out = String::new();
     let line = |index: usize| {
         let text: String = lines[index].chars().take(MAX_SHOWN_CHARS).collect();
-        format!("{}{text}\n", prefix(index + 1, lines[index]))
+        format!("{}{text}\n", prefix(lines, index))
     };
     for (at, &(from, to)) in windows.iter().enumerate() {
         if at > 0 {
@@ -264,11 +286,11 @@ impl Tool for EditLines {
                     };
                     *end = number - 1;
                     match lines.get(number - 1) {
-                        Some(line) if line_hash(line) == hash => {}
-                        Some(line) => {
+                        Some(_) if anchor_hash(&lines, number - 1) == hash => {}
+                        Some(_) => {
                             stale.push(format!(
                                 "`{number}:{hash}` is stale: line {number} is now `{number}:{}`.",
-                                line_hash(line)
+                                anchor_hash(&lines, number - 1)
                             ));
                             stale_at.push((number - 1, 1));
                         }
@@ -579,7 +601,7 @@ mod tests {
         assert!(done.text.starts_with("Applied 4 edit(s)"), "{}", done.text);
         assert!(
             done.text
-                .ends_with(&format!("5:{}|SIX\n", line_hash("SIX"))),
+                .ends_with(&format!("5:{}|SIX\n", anchor_hash(&["five", "SIX"], 1))),
             "{}",
             done.text
         );
@@ -628,7 +650,18 @@ mod tests {
             "one\r\n2\r\n2.5\r\n3\r\n4\r\n"
         );
         // The anchors shown do not depend on the line ending.
-        assert!(done.text.contains(&format!("2:{}|2\n", line_hash("2"))));
+        assert!(
+            done.text
+                .contains(&format!("2:{}|2\n", anchor_hash(&["one", "2"], 1)))
+        );
+
+        // A short line's anchor depends on the fuller line above it, so
+        // an old anchor does not fit another blank line that has taken
+        // its number.
+        let before = ["def a():", "    pass", "", "def b():", "    pass", ""];
+        let after = ["import os", "", "def a():", "    pass", "", "def b():"];
+        assert_ne!(anchor_hash(&before, 2), anchor_hash(&after, 1));
+        assert_eq!(anchor_hash(&before, 2), anchor_hash(&after, 4));
     }
 
     // Python files are checked with python3, which the test machines

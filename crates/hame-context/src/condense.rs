@@ -40,6 +40,19 @@ fn says_nothing_new(line: &str) -> bool {
             .expect("valid pattern")
         })
         .is_match(line)
+        && !carries_an_outcome(line)
+}
+
+/// A progress line that also reports how something came out
+/// (`Building wheel for x: finished with status 'error'`) is kept.
+fn carries_an_outcome(line: &str) -> bool {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            Regex::new(r"(?i)error|fail|warn|denied|not found|cannot|unable|missing|pending")
+                .expect("valid pattern")
+        })
+        .is_match(line)
 }
 
 /// `text` without its uninformative lines, and how many were dropped.
@@ -130,5 +143,15 @@ mod tests {
         let (shown, dropped) = condense(&log).unwrap();
         assert_eq!(dropped, 45);
         assert!(shown.contains("test_x FAILED") && shown.contains("--- FAIL: TestOther"));
+
+        // A progress line that says something went wrong stays.
+        let mut log: String = (0..60)
+            .map(|n| format!("  Collecting package{n}==1.0.{n}\n"))
+            .collect();
+        log.push_str("  Building wheel for foo (pyproject.toml): finished with status 'error'\n");
+        log.push_str("Checking migrations ... FAILED: 3 pending\n");
+        let (shown, _) = condense(&log).unwrap();
+        assert!(shown.contains("finished with status 'error'"));
+        assert!(shown.contains("FAILED: 3 pending"));
     }
 }

@@ -39,6 +39,21 @@ fn subject(request: &ToolRequest) -> &str {
     request.input[key].as_str().unwrap_or("")
 }
 
+/// The files a patch adds, changes, deletes or moves to.
+fn patch_paths(patch: &str) -> impl Iterator<Item = &str> {
+    patch.lines().filter_map(|line| {
+        [
+            "*** Add File:",
+            "*** Update File:",
+            "*** Delete File:",
+            "*** Move to:",
+        ]
+        .iter()
+        .find_map(|marker| line.strip_prefix(marker))
+        .map(str::trim)
+    })
+}
+
 /// What a call the user said no to comes back with.
 pub const DENIED_BY_USER: &str = "Denied by the user. Do not make this call again or try another \
                                   way to do the same thing; ask the user what they want instead.";
@@ -86,7 +101,11 @@ impl ApprovalLayer {
                 // whichever tool the edit format gives the model for it.
                 (rule.tool == "*"
                     || rule.tool == request.name
-                    || (rule.tool == "edit" && request.name == "edit_lines"))
+                    || (rule.tool == "edit" && request.name == "edit_lines")
+                    // A patch edits and writes files; rules about either
+                    // are about what it does.
+                    || (matches!(rule.tool.as_str(), "edit" | "write")
+                        && request.name == "apply_patch"))
                     && rule
                         .pattern
                         .as_deref()
@@ -103,6 +122,18 @@ impl ApprovalLayer {
             self.default
         };
         let whole = self.rule_for(request, subject);
+        if request.name == "apply_patch" {
+            // A patch names its files inside its text. It is as restricted
+            // as the most restricted file it touches.
+            let patch = request.input["patch"].as_str().unwrap_or("");
+            return patch_paths(patch)
+                .map(|path| self.rule_for(request, path).unwrap_or(fallback))
+                .reduce(stricter)
+                .map_or(whole.unwrap_or(fallback), |verdict| match whole {
+                    Some(action) => stricter(verdict, action),
+                    None => verdict,
+                });
+        }
         if request.name != "bash" {
             return whole.unwrap_or(fallback);
         }
@@ -304,6 +335,32 @@ mod tests {
         let lines = |path: &str| request("edit_lines", json!({"path": path}), Effect::Write);
         assert!(ran(&chain, lines("/w/vendor/a.rs")).await.is_error);
         assert!(!ran(&chain, lines("/w/src/a.rs")).await.is_error);
+        // A patch is held to the rules for every file it names.
+        let patch = |body: &str| {
+            request(
+                "apply_patch",
+                json!({ "patch": format!("*** Begin Patch\n{body}\n*** End Patch") }),
+                Effect::Write,
+            )
+        };
+        assert!(
+            !ran(&chain, patch("*** Update File: /w/src/a.rs\n@@\n-a\n+b"))
+                .await
+                .is_error
+        );
+        assert!(
+            ran(&chain, patch("*** Delete File: /w/vendor/a.rs"))
+                .await
+                .is_error
+        );
+        assert!(
+            ran(
+                &chain,
+                patch("*** Update File: /w/src/a.rs\n*** Move to: /w/secrets/k\n@@\n-a\n+b")
+            )
+            .await
+            .is_error
+        );
         // Rules can restrict even read-only tools.
         let read = |path: &str| request("read", json!({"path": path}), Effect::ReadOnly);
         assert!(ran(&chain, read("id.pem")).await.is_error);

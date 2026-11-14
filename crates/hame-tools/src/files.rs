@@ -33,17 +33,32 @@ pub fn write_atomic(path: &std::path::Path, content: &[u8]) -> std::io::Result<(
     else {
         return fs::write(&target, content);
     };
-    let written = file.write_all(content).and_then(|()| {
+    let ready = file.write_all(content).and_then(|()| {
         if let Ok(meta) = fs::metadata(&target) {
             fs::set_permissions(&sibling, meta.permissions())?;
         }
-        drop(file);
-        fs::rename(&sibling, &target)
+        Ok(())
     });
-    if written.is_err() {
+    drop(file);
+    if let Err(e) = ready {
         let _ = fs::remove_file(&sibling);
+        return Err(e);
     }
-    written
+    // A file with other names keeps them only if it is written in place.
+    #[cfg(unix)]
+    let shared = {
+        use std::os::unix::fs::MetadataExt as _;
+        fs::metadata(&target).is_ok_and(|meta| meta.nlink() > 1)
+    };
+    #[cfg(not(unix))]
+    let shared = false;
+    if shared || fs::rename(&sibling, &target).is_err() {
+        // Some files cannot be replaced, only written: one that is a
+        // mount of its own, or one another program holds open.
+        let _ = fs::remove_file(&sibling);
+        return fs::write(&target, content);
+    }
+    Ok(())
 }
 
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
@@ -81,7 +96,7 @@ pub(crate) fn read_schema() -> Value {
 pub(crate) fn read_lines(
     input: &Value,
     ctx: &ToolContext,
-    prefix: impl Fn(usize, &str) -> String,
+    prefix: impl Fn(&[&str], usize) -> String,
 ) -> ToolOutput {
     let input: ReadInput = match parse_input(input) {
         Ok(input) => input,
@@ -122,9 +137,10 @@ pub(crate) fn read_lines(
         ));
     }
     let mut out = String::new();
-    for (index, line) in text.lines().enumerate().skip(offset - 1).take(limit) {
+    let all: Vec<&str> = text.lines().collect();
+    for (index, line) in all.iter().copied().enumerate().skip(offset - 1).take(limit) {
         let shown: String = line.chars().take(MAX_LINE_CHARS).collect();
-        out.push_str(&prefix(index + 1, line));
+        out.push_str(&prefix(&all, index));
         out.push_str(&shown);
         if shown.len() < line.len() {
             out.push_str(" [line truncated]");
@@ -157,7 +173,7 @@ impl Tool for Read {
     }
 
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
-        Box::pin(async move { read_lines(input, ctx, |number, _| format!("{number}\t")) })
+        Box::pin(async move { read_lines(input, ctx, |_, index| format!("{}\t", index + 1)) })
     }
 }
 

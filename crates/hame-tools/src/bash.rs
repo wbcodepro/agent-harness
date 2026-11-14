@@ -138,7 +138,9 @@ impl Tool for Bash {
             }
             // A reader that stopped early (`... | head`) kills the writer
             // with SIGPIPE; that is how such a pipeline normally ends.
-            let closed_pipe = status.code() == Some(141) && input.command.contains('|');
+            // `a || b` is not a pipe.
+            let piped = input.command.replace("||", "").contains('|');
+            let closed_pipe = status.code() == Some(141) && piped;
             if status.success() || closed_pipe {
                 if text.is_empty() {
                     text.push_str("(no output)");
@@ -149,9 +151,10 @@ impl Tool for Bash {
                     text.push('\n');
                 }
                 match status.code() {
-                    Some(code) if input.command.contains('|') => text.push_str(&format!(
-                        "[exit code {code}: a command in the pipeline failed; the shell runs \
-                         with pipefail]"
+                    Some(code) if piped => text.push_str(&format!(
+                        "[exit code {code}: some command in the pipeline exited with it (the \
+                         shell runs with pipefail). That is not always a failure: grep exits 1 \
+                         when nothing matches. The output above is what the pipeline printed.]"
                     )),
                     Some(code) => text.push_str(&format!("[exit code {code}]")),
                     None => text.push_str("[killed by a signal]"),

@@ -619,8 +619,10 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
     let started = std::time::Instant::now();
     let own = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut uses: Vec<(String, String)> = Vec::new();
+    let mut cut_short = false;
     for file in walk(root) {
         if started.elapsed() > USES_TIME_LIMIT {
+            cut_short = true;
             break;
         }
         if file.canonicalize().is_ok_and(|file| file == own) {
@@ -646,6 +648,12 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
             .map(|(_, place)| place.as_str())
             .collect();
         if places.is_empty() {
+            if cut_short {
+                note.push_str(&format!(
+                    "\n[The first line of `{name}` changed or it is gone. The project is too \
+                     large to look through here: grep for `{name}` to find what uses it.]"
+                ));
+            }
             continue;
         }
         // Tests first: they are what will fail.
@@ -655,7 +663,9 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
             "\n[The first line of `{name}` changed or it is gone. It is also used in: {}{}. \
              Make sure those still fit.]",
             places[..places.len().min(SHOWN_USES)].join(", "),
-            if more > 0 {
+            if cut_short {
+                " and possibly more (the search stopped early; grep for the rest)".to_string()
+            } else if more > 0 {
                 format!(" and {more} more places")
             } else {
                 String::new()

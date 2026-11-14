@@ -24,16 +24,44 @@ const MAX_NUDGES: usize = 2;
 #[derive(Default)]
 pub struct RedCheck;
 
+/// Commands that look at things and decide nothing: `cat tests/a.py`
+/// passing is not a test passing.
+const LOOKS_ONLY: [&str; 22] = [
+    "cat", "ls", "grep", "rg", "find", "head", "tail", "echo", "cd", "mkdir", "git", "sed", "awk",
+    "wc", "less", "which", "touch", "rm", "cp", "mv", "pwd", "tree",
+];
+
+/// The command of one part of a command line: its first word, past any
+/// `VAR=value` settings and the usual wrappers.
+pub(crate) fn command_word(part: &str) -> &str {
+    part.split_whitespace()
+        .find(|word| {
+            !(word.contains('=') && !word.starts_with('-') && !word.contains('/'))
+                && !matches!(*word, "sudo" | "time" | "env" | "exec" | "nohup")
+        })
+        .map(|word| word.rsplit('/').next().unwrap_or(word))
+        .unwrap_or("")
+}
+
+/// The parts of a command line that run as commands of their own.
+pub(crate) fn command_parts(command: &str) -> impl Iterator<Item = &str> {
+    command
+        .split(['\n', ';', '|', '&'])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+}
+
+/// Whether some part of the command line runs a test, build or lint.
 pub(crate) fn looks_like_a_check(command: &str) -> bool {
     static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    PATTERN
-        .get_or_init(|| {
-            Regex::new(
-                r"(?i)\b(tests?|pytest|unittest|jest|vitest|mocha|rspec|check|lint|tsc|mypy|ruff|clippy|build|compile|make)\b",
-            )
-            .expect("valid pattern")
-        })
-        .is_match(command)
+    let pattern = PATTERN.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(tests?|pytest|unittest|jest|vitest|mocha|rspec|check|lint|tsc|mypy|ruff|clippy|build|compile|make)\b",
+        )
+        .expect("valid pattern")
+    });
+    command_parts(command)
+        .any(|part| !LOOKS_ONLY.contains(&command_word(part)) && pattern.is_match(part))
 }
 
 /// File types whose content can be run or tested.
@@ -428,6 +456,23 @@ mod tests {
             Evidence::NoChange,
             "nothing was changed"
         );
+        // Looking at tests is not running them.
+        for looking in [
+            "cat tests/test_a.py",
+            "ls build",
+            "grep -rn foo tests/",
+            "cd tests",
+        ] {
+            assert!(!looks_like_a_check(looking), "{looking}");
+        }
+        for running in [
+            "cd pkg && cargo test -q",
+            "PYTHONPATH=. python3 -m pytest",
+            "make",
+            "cargo test 2>&1 | tail -5",
+        ] {
+            assert!(looks_like_a_check(running), "{running}");
+        }
         // A failed lookup at the end of a turn is not a failing check.
         assert!(!objects(log("Where is it?", &[("ls missing-dir", true)])).await);
         assert!(!objects(log("Explain", &[])).await);

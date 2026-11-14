@@ -84,9 +84,16 @@ impl Layer<ToolRequest, ToolOutput> for SpillLayer {
             let path = self.dir.join(format!("{stamp}-{name}.txt"));
             let saved = std::fs::create_dir_all(&self.dir)
                 .and_then(|()| std::fs::write(&path, &output.text));
+            // The saved file holds the output as printed; the notes speak
+            // of that, not of what is left after lines were taken out.
+            let (whole_bytes, whole_lines) = (output.text.len(), output.text.lines().count());
+            let mut left_out = String::new();
             if let Some((shown, dropped)) = condensed {
                 let whole = output.text.len();
                 output.text = shown;
+                left_out = format!(
+                    " {dropped} lines of passing tests or build progress were also left out."
+                );
                 if output.text.len() <= self.threshold {
                     if !output.text.ends_with('\n') {
                         output.text.push('\n');
@@ -111,16 +118,14 @@ impl Layer<ToolRequest, ToolOutput> for SpillLayer {
             let tail = ceil_boundary(text, text.len() - self.preview / 2);
             let note = match saved {
                 Ok(()) => format!(
-                    "[Output was {} bytes, {} lines; the middle is omitted here. The full \
-                     output is saved at {}. Use read (with offset and limit) or grep on that \
-                     file to see more.]",
-                    text.len(),
-                    text.lines().count(),
+                    "[Output was {whole_bytes} bytes, {whole_lines} lines; the middle is omitted \
+                     here.{left_out} The full output is saved at {}. Use read (with offset and \
+                     limit) or grep on that file to see more.]",
                     path.display()
                 ),
                 Err(e) => format!(
-                    "[Output was {} bytes; the middle is omitted and could not be saved ({e}).]",
-                    text.len()
+                    "[Output was {whole_bytes} bytes; the middle is omitted and could not be \
+                     saved ({e}).{left_out}]"
                 ),
             };
             output.text = format!(

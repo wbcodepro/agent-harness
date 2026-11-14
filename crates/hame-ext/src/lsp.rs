@@ -201,7 +201,21 @@ fn offset(text: &str, spans: &[(usize, usize)], position: &Value) -> Result<usiz
 /// `text` with the server's edits made, and how many there were. Every
 /// range refers to the text as it was, so the edits go in from the end
 /// backwards: none moves the place another one points at.
+#[cfg(test)]
 fn apply_edits(text: &str, edits: &[Value]) -> Result<(String, usize), String> {
+    apply_edits_replacing(text, edits, None)
+}
+
+/// As [`apply_edits`], and when `replaced` is given, every edit that
+/// replaces text must replace exactly that text. A rename replaces the old
+/// name wherever it stands; a range holding anything else was worked out
+/// against an older copy of the file, and applying it would overwrite
+/// whatever is there now.
+fn apply_edits_replacing(
+    text: &str,
+    edits: &[Value],
+    replaced: Option<&str>,
+) -> Result<(String, usize), String> {
     let spans = line_spans(text);
     let mut ranges = Vec::with_capacity(edits.len());
     for edit in edits {
@@ -210,6 +224,15 @@ fn apply_edits(text: &str, edits: &[Value]) -> Result<(String, usize), String> {
         let end = offset(text, &spans, &edit["range"]["end"])?;
         if end < start {
             return Err("an edit ends before it starts".into());
+        }
+        if let Some(expected) = replaced
+            && end > start
+            && &text[start..end] != expected
+        {
+            return Err(format!(
+                "an edit would replace {:?} where {expected:?} was expected",
+                text[start..end].chars().take(40).collect::<String>()
+            ));
         }
         ranges.push((start, end, new_text));
     }
@@ -773,6 +796,9 @@ impl Servers {
                 "No language server is configured for .{extension} files. {FALLBACK}"
             ));
         };
+        // This runs outside the sandbox, so it keeps to what the sandbox
+        // would let a tool read.
+        self.readable(&path)?;
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
         let character = column(&text, line, symbol)
@@ -794,7 +820,7 @@ impl Servers {
 
     /// Works out every file a rename changes, without writing anything, so
     /// one edit that cannot be made stops the whole rename.
-    fn plan(&self, edit: &Value) -> Result<Vec<Change>, String> {
+    fn plan(&self, edit: &Value, old_name: &str) -> Result<Vec<Change>, String> {
         let root = hame_kernel::real_path(&self.root).unwrap_or_else(|_| self.root.clone());
         let mut changes: BTreeMap<PathBuf, Change> = BTreeMap::new();
         for (uri, edits) in document_edits(edit)? {
@@ -818,12 +844,13 @@ impl Servers {
             }
             let text =
                 std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {shown}: {e}."))?;
-            let (text, count) = apply_edits(&text, &edits).map_err(|why| {
-                format!(
-                    "The language server's edits do not fit {shown} ({why}); it may have an \
+            let (text, count) =
+                apply_edits_replacing(&text, &edits, Some(old_name)).map_err(|why| {
+                    format!(
+                        "The language server's edits do not fit {shown} ({why}); it may have an \
                      old copy of the file."
-                )
-            })?;
+                    )
+                })?;
             let change = Change {
                 path: path.clone(),
                 shown,
@@ -847,6 +874,37 @@ impl Servers {
 
     /// Locations as `path:line: text`, one line each, sorted so that a
     /// file's lines stay together.
+    /// Whether a file is one these tools may read and show: inside the
+    /// working directory, and not hidden by the sandbox policy. The tools
+    /// run in the harness itself, where nothing else would stop them.
+    fn readable(&self, path: &Path) -> Result<(), String> {
+        let root = hame_kernel::real_path(&self.root).unwrap_or_else(|_| self.root.clone());
+        let path = hame_kernel::real_path(path).unwrap_or_else(|_| path.to_path_buf());
+        let refuse = || {
+            Err(format!(
+                "{} is not a file this tool may read.",
+                path.display()
+            ))
+        };
+        if !path.starts_with(&root) {
+            return refuse();
+        }
+        if let Some(policy) = &self.policy {
+            let hidden = policy.unreadable.iter().any(|hidden| {
+                let hidden = hame_kernel::real_path(hidden).unwrap_or_else(|_| hidden.clone());
+                path.starts_with(&hidden)
+            });
+            let env_file = policy.hide_env_files
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(".env"));
+            if hidden || env_file {
+                return refuse();
+            }
+        }
+        Ok(())
+    }
+
     fn render_references(&self, locations: &[Value]) -> String {
         let root = hame_kernel::real_path(&self.root).unwrap_or_else(|_| self.root.clone());
         let mut places: Vec<(PathBuf, u64)> = locations
@@ -869,7 +927,13 @@ impl Servers {
             .map(|(path, line)| {
                 let text = texts
                     .entry(path)
-                    .or_insert_with(|| std::fs::read_to_string(path).ok());
+                    // A use in a library outside the project is named,
+                    // not read.
+                    .or_insert_with(|| {
+                        self.readable(path)
+                            .ok()
+                            .and_then(|()| std::fs::read_to_string(path).ok())
+                    });
                 let content = text.as_deref().and_then(|text| {
                     let &(start, end) = line_spans(text).get(usize::try_from(*line).ok()?)?;
                     Some(text[start..end].trim())
@@ -1064,7 +1128,8 @@ impl Tool for RenameSymbolTool {
                 Ok(edit) => edit,
                 Err(why) => return ToolOutput::error(format!("{why}. {FALLBACK}")),
             };
-            let changes = match self.lsp.plan(&edit) {
+            let old_name = input["symbol"].as_str().unwrap_or("");
+            let changes = match self.lsp.plan(&edit, old_name) {
                 Ok(changes) => changes,
                 Err(why) => {
                     return ToolOutput::error(format!("{why} Nothing was changed. {FALLBACK}"));
@@ -1258,6 +1323,13 @@ mod text_tests {
         assert!(apply_edits(text, &[edit(0, 4, 9, "a"), edit(0, 8, 12, "b")]).is_err());
         assert!(apply_edits(text, &[edit(7, 0, 1, "a")]).is_err());
         assert!(apply_edits(text, &[json!({"range": {}, "newText": "a"})]).is_err());
+        // A rename only ever replaces the old name: a range that holds
+        // something else was worked out against an older copy.
+        let old = "let total = 1;\n";
+        assert!(apply_edits_replacing(old, &[edit(0, 4, 9, "sum")], Some("total")).is_ok());
+        let shifted = "// new\nlet total = 1;\n";
+        let refused = apply_edits_replacing(shifted, &[edit(0, 4, 9, "sum")], Some("total"));
+        assert!(refused.unwrap_err().contains("was expected"));
     }
 
     #[test]

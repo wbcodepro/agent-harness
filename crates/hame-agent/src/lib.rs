@@ -197,7 +197,18 @@ fn same_as_shown(records: &[Record], text: &str) -> Option<String> {
         .max()
         .map_or(0, |cut| cut + 1);
     let shown = || records.iter().filter(|record| record.seq >= shown_from);
-    let earlier = shown().find_map(|record| match &record.event {
+    let results_back = |id: &str| {
+        shown()
+            .rev()
+            .filter(|record| matches!(record.event, Event::ToolResult { .. }))
+            .position(|record| {
+                matches!(&record.event, Event::ToolResult { call_id, .. } if call_id == id)
+            })
+            .map_or(0, |back| back + 1)
+    };
+    // The most recent one: with outputs A, B, A the third is like the
+    // first, and saying which avoids it being taken for the second.
+    let earlier = shown().rev().find_map(|record| match &record.event {
         Event::ToolResult {
             call_id, content, ..
         } if matches!(content.as_slice(), [Block::Text { text: was }] if was == text) => {
@@ -222,10 +233,12 @@ fn same_as_shown(records: &[Record], text: &str) -> Option<String> {
         input.truncate(end);
         input.push('…');
     }
+    let first_line: String = text.lines().next().unwrap_or("").chars().take(80).collect();
     Some(format!(
-        "[Unchanged: the output is identical, byte for byte, to the result of the earlier \
-         `{name}` call with {input}, which is still shown above ({} bytes). It is not repeated \
-         here.]",
+        "[Unchanged: the output is identical, byte for byte, to the result of the `{name}` call \
+         with {input}, {} tool results back ({} bytes, beginning {first_line:?}). It is not \
+         repeated here; if that result is no longer shown, make the call again.]",
+        results_back(earlier),
         text.len()
     ))
 }
@@ -595,9 +608,12 @@ impl Agent {
                 serde_json::json!({ "command": command }),
             )
             .await;
-        output
-            .text
-            .push_str(&format!("\n\n[{THEN_RUN}] $ {command}\n{}", ran.text));
+        // The first words are what a front end shows: the change happened,
+        // whatever the command after it did.
+        output.text = format!(
+            "Change applied. {}\n\n[{THEN_RUN}] $ {command}\n{}",
+            output.text, ran.text
+        );
         if ran.is_error {
             output
                 .text
