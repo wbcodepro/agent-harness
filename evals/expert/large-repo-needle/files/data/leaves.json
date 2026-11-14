@@ -1,0 +1,38 @@
+[
+ {
+  "employee": "E-01",
+  "from": "2024-02-05",
+  "to": "2024-02-09",
+  "kind": "holiday"
+ },
+ {
+  "employee": "E-01",
+  "from": "2024-02-19",
+  "to": "2024-02-19",
+  "kind": "sick"
+ },
+ {
+  "employee": "E-01",
+  "from": "2024-02-28",
+  "to": "2024-03-04",
+  "kind": "holiday"
+ },
+ {
+  "employee": "E-02",
+  "from": "2024-01-22",
+  "to": "2024-02-02",
+  "kind": "parental"
+ },
+ {
+  "employee": "E-02",
+  "from": "2024-03-11",
+  "to": "2024-03-11",
+  "kind": "sick"
+ },
+ {
+  "employee": "E-03",
+  "from": "2024-02-14",
+  "to": "2024-02-16",
+  "kind": "training"
+ }
+]

@@ -1,0 +1,16 @@
+{
+  "records": [
+    {
+      "id": 10,
+      "mail": "plato@example.com",
+      "name": "Plato"
+    },
+    {
+      "id": 11,
+      "mail": "george@example.com",
+      "name": "Mary Ann Evans",
+      "phone": "555-0177"
+    }
+  ],
+  "version": 1
+}

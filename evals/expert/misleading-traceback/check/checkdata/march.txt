@@ -1,0 +1,36 @@
+# Orders for March
+
+order 1001
+customer Acme Ltd
+item widget 4
+item gadget 2
+end
+
+order 1002
+customer Birch & Sons
+item cable 1
+end
+
+order 1003
+customer Acme Ltd
+item widget 6
+item bracket 5
+item gadget 3
+end
+
+order 1004
+customer Corvid Labs
+item gadget 4
+item bracket 2
+end
+
+order 1005
+customer Dunmore
+item manual 1
+end
+
+order 1006
+customer Birch & Sons
+item widget 3
+item usb hub 2
+end

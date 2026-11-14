@@ -1,0 +1,20 @@
+{
+  "records": [
+    {
+      "id": 20,
+      "mail": "ole@example.net",
+      "name": "Ole Kirk Christiansen"
+    },
+    {
+      "id": 21,
+      "mail": "nobody@example.net"
+    },
+    {
+      "id": 22,
+      "mail": "ruth@example.net",
+      "name": "Ruth Handler",
+      "phone": "555-0122"
+    }
+  ],
+  "version": 1
+}

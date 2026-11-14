@@ -1,0 +1,2 @@
+prompt = "Implement decide(request, rules) in access.py exactly as SPEC.md describes. The spec is the only source of truth: it defines how rules are validated, how paths and patterns are compared, when a rule applies, and the order of the criteria that pick the winning rule. Several cases are described only in prose, without an example, and each of them counts. Use only the Python standard library and keep the function's name and signature."
+check = "python3 check_access.py"

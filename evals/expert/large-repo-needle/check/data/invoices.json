@@ -1,0 +1,100 @@
+[
+ {
+  "id": "INV-0001",
+  "customer": "C-101",
+  "issued": "2024-01-21",
+  "amount_cents": 8300,
+  "paid": false
+ },
+ {
+  "id": "INV-0002",
+  "customer": "C-102",
+  "issued": "2024-02-16",
+  "amount_cents": 6100,
+  "paid": false
+ },
+ {
+  "id": "INV-0003",
+  "customer": "C-103",
+  "issued": "2024-03-23",
+  "amount_cents": 3200,
+  "paid": false
+ },
+ {
+  "id": "INV-0004",
+  "customer": "C-104",
+  "issued": "2024-04-07",
+  "amount_cents": 6300,
+  "paid": false
+ },
+ {
+  "id": "INV-0005",
+  "customer": "C-105",
+  "issued": "2024-01-27",
+  "amount_cents": 6200,
+  "paid": false
+ },
+ {
+  "id": "INV-0006",
+  "customer": "C-106",
+  "issued": "2024-02-02",
+  "amount_cents": 7100,
+  "paid": true
+ },
+ {
+  "id": "INV-0007",
+  "customer": "C-107",
+  "issued": "2024-03-10",
+  "amount_cents": 8100,
+  "paid": false
+ },
+ {
+  "id": "INV-0008",
+  "customer": "C-108",
+  "issued": "2024-04-18",
+  "amount_cents": 1300,
+  "paid": false
+ },
+ {
+  "id": "INV-0009",
+  "customer": "C-101",
+  "issued": "2024-01-16",
+  "amount_cents": 3800,
+  "paid": false
+ },
+ {
+  "id": "INV-0010",
+  "customer": "C-102",
+  "issued": "2024-02-12",
+  "amount_cents": 5900,
+  "paid": false
+ },
+ {
+  "id": "INV-0011",
+  "customer": "C-103",
+  "issued": "2024-03-08",
+  "amount_cents": 7300,
+  "paid": true
+ },
+ {
+  "id": "INV-0012",
+  "customer": "C-104",
+  "issued": "2024-04-19",
+  "amount_cents": 1600,
+  "paid": true
+ },
+ {
+  "id": "INV-0013",
+  "customer": "C-105",
+  "issued": "2024-01-03",
+  "amount_cents": 8300,
+  "paid": false
+ },
+ {
+  "id": "INV-0014",
+  "customer": "C-106",
+  "issued": "2024-02-15",
+  "amount_cents": 5800,
+  "paid": false
+ }
+]

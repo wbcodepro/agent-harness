@@ -1,0 +1,2 @@
+prompt = "Running python3 -m salesreport top data/march.txt crashes with a traceback instead of printing the best-selling products. Find the cause and fix it so that the tool works for any valid orders file, not only this one: both commands, top and stats, must print correct figures as README.md describes them. README.md also defines what a valid orders file looks like. tests/test_march.py shows the expected output for the March file and must pass (python3 -m unittest discover -s tests -q); do not edit that test or the data file."
+check = "python3 check_salesreport.py"

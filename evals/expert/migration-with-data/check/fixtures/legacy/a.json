@@ -1,0 +1,4 @@
+{"version": 1, "records": [
+  {"id": 101, "name": "Katherine Johnson", "mail": "kj@example.org", "phone": "555-0001"},
+  {"id": 102, "name": "Cher", "mail": "cher@example.org"}
+]}

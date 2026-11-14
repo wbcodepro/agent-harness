@@ -1,0 +1,42 @@
+[
+ {
+  "id": "C-101",
+  "name": "Avery Holt",
+  "region": "north"
+ },
+ {
+  "id": "C-102",
+  "name": "Bruno Castell",
+  "region": "south"
+ },
+ {
+  "id": "C-103",
+  "name": "Chidi Okafor",
+  "region": "east"
+ },
+ {
+  "id": "C-104",
+  "name": "Dana Whitfield",
+  "region": "west"
+ },
+ {
+  "id": "C-105",
+  "name": "Elif Aksoy",
+  "region": "north"
+ },
+ {
+  "id": "C-106",
+  "name": "Farah Naseri",
+  "region": "south"
+ },
+ {
+  "id": "C-107",
+  "name": "Goran Petrov",
+  "region": "east"
+ },
+ {
+  "id": "C-108",
+  "name": "Hana Ito",
+  "region": "west"
+ }
+]

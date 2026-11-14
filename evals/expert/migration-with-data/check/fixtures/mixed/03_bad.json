@@ -1,0 +1,9 @@
+{"version": 1, "records": [
+  {"id": 5, "name": "Rosalind Franklin", "mail": "rf@example.org"},
+  "Barbara McClintock <bm@example.org>",
+  {"id": 6, "name": "Lise Meitner"},
+  {"id": "7", "name": "Chien-Shiung Wu", "mail": "wu@example.org"},
+  {"id": 8, "name": "   ", "mail": "blank@example.org"},
+  {"id": 9, "name": 42, "mail": "number@example.org"},
+  {"id": 10, "name": "Dorothy Crowfoot Hodgkin", "mail": "dh@example.org"}
+]}

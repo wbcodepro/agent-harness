@@ -1,0 +1,22 @@
+{
+  "records": [
+    {
+      "id": 1,
+      "mail": "ada@example.org",
+      "name": "Ada Lovelace",
+      "phone": "555-0101"
+    },
+    {
+      "id": 2,
+      "mail": "JL@example.org",
+      "name": "Jean-Luc van der Berg"
+    },
+    {
+      "id": 3,
+      "mail": "grace@example.org",
+      "name": "  Grace   Brewster Hopper ",
+      "notes": "prefers email"
+    }
+  ],
+  "version": 1
+}
