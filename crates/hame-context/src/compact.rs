@@ -43,11 +43,21 @@ fn block_chars(blocks: &[Block]) -> usize {
         .sum()
 }
 
+/// The size of tool declarations as sent: name, description and schema.
+/// A large set of tools is a large part of every request.
+fn tools_chars(tools: &[hame_session::ToolSpec]) -> usize {
+    tools
+        .iter()
+        .map(|tool| tool.name.len() + tool.description.len() + tool.input_schema.to_string().len())
+        .sum()
+}
+
 /// Estimates how many tokens the next request for this log will carry.
 ///
 /// Uses the provider's own count from the most recent response when there is
 /// one, and adds four bytes per token for everything logged since; without
-/// a count, estimates the whole history that way.
+/// a count, estimates the whole history that way. Tool declarations are
+/// part of both.
 pub fn context_tokens(records: &[Record]) -> u64 {
     // A provider count from before the context was last shrunk says nothing
     // about its size now.
@@ -79,6 +89,10 @@ pub fn context_tokens(records: &[Record]) -> u64 {
                     Event::UserMessage { content } | Event::ToolResult { content, .. } => {
                         block_chars(content)
                     }
+                    // Declared since the count was taken: a resumed session
+                    // with more tools, or new instructions.
+                    Event::SystemMessage { text } => text.len(),
+                    Event::ToolsDeclared { tools } => tools_chars(tools),
                     _ => 0,
                 })
                 .sum();
@@ -87,6 +101,7 @@ pub fn context_tokens(records: &[Record]) -> u64 {
         None => {
             let history = derive_history(records);
             let chars = history.system.map_or(0, |system| system.len())
+                + tools_chars(&history.tools)
                 + history
                     .messages
                     .iter()
@@ -367,6 +382,19 @@ mod tests {
             })
             .unwrap();
         assert_eq!(context_tokens(session.records()), 1530);
+
+        // Tools declared after the count was taken are part of what the
+        // next request carries.
+        session
+            .append(Event::ToolsDeclared {
+                tools: vec![hame_session::ToolSpec {
+                    name: "big".into(),
+                    description: "d".repeat(397),
+                    input_schema: serde_json::json!({}),
+                }],
+            })
+            .unwrap();
+        assert!(context_tokens(session.records()) > 1530 + 90);
     }
 
     /// Appends one step in which the model calls a tool and gets `chars`

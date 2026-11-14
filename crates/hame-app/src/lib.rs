@@ -991,7 +991,16 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
             llm: build(name.clone(), stronger_effort),
             name: name.clone(),
         }),
-        (None, None) => None,
+        // The same model thinking harder: work starts at the cheaper
+        // `effort` and only a turn that gets stuck pays for more.
+        (None, None) => match &config.model.escalate_effort {
+            Some(harder) if Some(harder) != effort.as_ref() => Some(Stronger {
+                usual_name: model.clone(),
+                llm: build(model.clone(), Some(harder.clone())),
+                name: format!("{model} (effort {harder})"),
+            }),
+            _ => None,
+        },
     };
     Ok(Models {
         main: build(model, effort.clone()),

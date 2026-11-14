@@ -128,7 +128,7 @@ fuse_actions = true             # edit/write/apply_patch nhận tham số then_r
 temperature = 0.0               # chỉ với API chat-completions (DeepSeek, máy chủ tương thích, model chạy tại chỗ)
 escalate_to = "claude-fable-5-2"     # model mạnh hơn tiếp quản phần còn lại của lượt khi model chính kẹt
 escalate_provider = "anthropic"      # tùy chọn: model mạnh thuộc nhà cung cấp khác (ví dụ model chính chạy tại chỗ)
-escalate_effort = "high"
+escalate_effort = "high"             # không kèm escalate_to: vẫn model đó nhưng suy luận kỹ hơn khi lượt bị kẹt, nên có thể đặt effort thấp cho việc thường ngày
 escalate_after = 2              # sau bấy nhiêu lần kiểm tra hỏng hoặc gọi lặp trong một lượt
 
 [sandbox]

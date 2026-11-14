@@ -114,7 +114,9 @@ pub struct ModelConfig {
     /// its own key. This is how a small local model hands over to a hosted
     /// one. Without `escalate_to`, the provider's default model is used.
     pub escalate_provider: Option<String>,
-    /// Reasoning effort for the stronger model. Empty keeps `effort`.
+    /// Reasoning effort for the stronger model. Empty keeps `effort`. Set
+    /// without `escalate_to`, it is the same model that thinks harder once
+    /// a turn is stuck, so `effort` can be set low for everyday work.
     pub escalate_effort: Option<String>,
     /// How many failed checks or repeated calls in one turn it takes.
     pub escalate_after: usize,
