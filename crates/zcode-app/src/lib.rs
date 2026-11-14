@@ -938,14 +938,52 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         }
     };
     let effort = config.model.effort.clone();
-    let stronger = config.model.escalate_to.clone().map(|name| Stronger {
-        usual_name: model.clone(),
-        llm: build(
-            name.clone(),
-            config.model.escalate_effort.clone().or(effort.clone()),
-        ),
-        name,
-    });
+    let stronger_effort = config.model.escalate_effort.clone().or(effort.clone());
+    let stronger = match (&config.model.escalate_provider, &config.model.escalate_to) {
+        // The stronger model lives elsewhere: its own provider, address
+        // and key, whatever the usual model's are.
+        (Some(elsewhere), named) => {
+            let other = Provider::parse(elsewhere)?;
+            let key = other
+                .key_names()
+                .iter()
+                .find_map(|name| lookup(name))
+                .ok_or_else(|| {
+                    format!(
+                        "[model] escalate_provider = {elsewhere:?} needs {}",
+                        other.key_names().join(" or ")
+                    )
+                })?;
+            let name = named
+                .clone()
+                .or_else(|| other.default_model().map(String::from))
+                .ok_or("[model] escalate_provider needs escalate_to to name the model")?;
+            let llm: Arc<dyn Llm> = match other {
+                Provider::Anthropic => Arc::new(
+                    zcode_llm::Anthropic::new(other.base_url(), key, name.clone())
+                        .with_effort(Some(stronger_effort.unwrap_or_else(|| "high".into()))),
+                ),
+                Provider::Openai => Arc::new(
+                    zcode_llm::Responses::new(other.base_url(), key, name.clone())
+                        .with_effort(stronger_effort),
+                ),
+                Provider::Deepseek => {
+                    Arc::new(ChatCompletions::new(other.base_url(), key, name.clone()))
+                }
+            };
+            Some(Stronger {
+                usual_name: model.clone(),
+                llm,
+                name,
+            })
+        }
+        (None, Some(name)) => Some(Stronger {
+            usual_name: model.clone(),
+            llm: build(name.clone(), stronger_effort),
+            name: name.clone(),
+        }),
+        (None, None) => None,
+    };
     Ok(Models {
         main: build(model, effort.clone()),
         summary: build(summary_model, effort),

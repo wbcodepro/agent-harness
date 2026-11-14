@@ -129,7 +129,7 @@ Trạng thái đợt 1 (2026-11-14), đã có trong mã:
 | 2 | Sự kiện `context/masked`: xóa kết quả tool cũ khỏi ngữ cảnh theo lô lớn, thử trước khi tóm tắt, không gọi model. **Mặc định tắt** (`[context] clear_tool_results`), xem số đo bên dưới | Đo trên phiên dài thật với ngưỡng mặc định |
 | 3 | `[model] tools`, `edit_format`, `max_tool_calls`; tool `apply_patch`; `edit` khoan dung với khoảng trắng; sửa tham số gọi tool | Tham số lấy mẫu theo model |
 | 4 | `zcode probe` | Bộ tác vụ đủ khó để phân biệt các cấu hình |
-| 5 | `escalate_to` / `escalate_effort` / `escalate_after`: model mạnh tiếp quản phần còn lại của lượt, ghi sự kiện `model/switched` | Leo thang riêng theo mức suy luận trên cùng model; chưa chạy với hai model thật |
+| 5 | `escalate_to` / `escalate_provider` / `escalate_effort` / `escalate_after`: model mạnh tiếp quản phần còn lại của lượt, ghi sự kiện `model/switched`; model mạnh có thể thuộc nhà cung cấp khác (model chính chạy tại chỗ, model mạnh trên đám mây) | Leo thang riêng theo mức suy luận trên cùng model; chưa đo tỷ lệ đạt khi leo thang khác nhà cung cấp |
 | 6 | `[verify] checklist`; ghi chú khi lời gọi tool lặp y hệt ba lần | — |
 
 Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình một hoặc hai lần chạy, nên chỉ là chỉ dấu):
@@ -137,6 +137,8 @@ Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình 
 - `zcode probe evals/harder`: cả bốn cấu hình đạt 8/8. Token cả bộ: search-replace 186.772; whole-file 163.649; apply-patch 168.714; whole-file với bộ tool rút gọn 116.937 (ít hơn khoảng 29% so với cùng định dạng với bộ tool đầy đủ).
 - Xóa kết quả tool cũ, trên một tác vụ phải đọc tám file lớn rồi cộng số liệu, ngưỡng hạ xuống 14.000 token để ép kích hoạt: bật thì 133.642 và 197.482 token (14 và 19 request); tắt (chỉ tóm tắt) thì 153.858 và 90.033 token (14 và 10 request); không giới hạn ngữ cảnh thì 97.567 token (9 request). Mọi lần đều ra đáp án đúng. Model không ghi lại số liệu trước khi kết quả bị xóa nên phải đọc lại file. Kết quả này không ủng hộ việc bật mặc định, trái với kết luận của các nghiên cứu ở mục 4; tác vụ này bất lợi cho kỹ thuật (cần mọi kết quả cũ, ngưỡng rất thấp), nên cần đo lại trên phiên dài thật trước khi kết luận.
 - Leo thang: với `claude-haiku-5-5` leo lên `claude-opus-5-5`, sau hai lần lệnh kiểm tra hỏng thì model mạnh tiếp quản giữa lượt, API không báo lỗi về khối suy luận.
+- Leo thang khác nhà cung cấp: `qwen3.5:4b` chạy tại chỗ qua Ollama với `escalate_provider = "deepseek"`, `escalate_after = 1`; sau một lần lệnh kiểm tra hỏng, `deepseek-flash` tiếp quản giữa lượt và trả lời bình thường (một lần chạy, chỉ xác nhận cơ chế).
+- Model tại chỗ `qwen3.5:4b` trên bộ `evals/harder`: ba tác vụ đầu (`api-change`, `config-rename`, `csv-report`) đều đạt, mất 58 đến 276 giây mỗi tác vụ; lượt đo dừng ở đó vì quá chậm, 17 tác vụ còn lại chưa đo.
 - `prompt_cache_key` được OpenAI Responses chấp nhận; một tác vụ bảy request có 77% token đầu vào đọc từ cache (không có số đo trước khi thêm khóa để so).
 
 ### Model yếu: đo bằng `gpt-4o-mini`, sửa theo log thất bại

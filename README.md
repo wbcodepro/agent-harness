@@ -126,6 +126,7 @@ edit_format = "search-replace"  # search-replace | whole-file | apply-patch
 max_tool_calls = 32             # số lời gọi tool tối đa trong một phản hồi
 temperature = 0.0               # chỉ với API chat-completions (DeepSeek, máy chủ tương thích, model chạy tại chỗ)
 escalate_to = "claude-fable-5-2"     # model mạnh hơn tiếp quản phần còn lại của lượt khi model chính kẹt
+escalate_provider = "anthropic"      # tùy chọn: model mạnh thuộc nhà cung cấp khác (ví dụ model chính chạy tại chỗ)
 escalate_effort = "high"
 escalate_after = 2              # sau bấy nhiêu lần kiểm tra hỏng hoặc gọi lặp trong một lượt
 

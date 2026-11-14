@@ -105,6 +105,11 @@ pub struct ModelConfig {
     /// A stronger model, on the same provider, that takes over the rest of
     /// a turn in which this one keeps failing.
     pub escalate_to: Option<String>,
+    /// The provider of the stronger model, when it is not this one's:
+    /// `deepseek`, `openai` or `anthropic`, reached at its own address with
+    /// its own key. This is how a small local model hands over to a hosted
+    /// one. Without `escalate_to`, the provider's default model is used.
+    pub escalate_provider: Option<String>,
     /// Reasoning effort for the stronger model. Empty keeps `effort`.
     pub escalate_effort: Option<String>,
     /// How many failed checks or repeated calls in one turn it takes.
@@ -153,6 +158,7 @@ impl Default for ModelConfig {
             tools: ToolProfile::Full,
             edit_format: EditFormat::SearchReplace,
             escalate_to: None,
+            escalate_provider: None,
             escalate_effort: None,
             escalate_after: 2,
         }
