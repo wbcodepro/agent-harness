@@ -164,6 +164,24 @@ impl Tool for Write {
                         before.as_deref(),
                         &input.content,
                     ));
+                    // Rewriting a long file to change a few lines costs the
+                    // whole file in output each time; say so once it shows.
+                    if let Some(before) = &before {
+                        let old: std::collections::HashSet<&str> = before.lines().collect();
+                        let total = input.content.lines().count();
+                        let changed = input
+                            .content
+                            .lines()
+                            .filter(|line| !old.contains(line))
+                            .count();
+                        if total >= 30 && changed > 0 && changed * 5 <= total {
+                            said.push_str(&format!(
+                                " Only {changed} of its {total} lines differ from what was \
+                                 there. For a change this small use edit: it is much faster \
+                                 than writing the whole file again."
+                            ));
+                        }
+                    }
                     if let Some(before) = before
                         && before.len() > 200
                         && input.content.len() * 2 < before.len()
@@ -731,10 +749,19 @@ mod tests {
                 .text
                 .contains("Note:")
         );
+        // A long file rewritten for one line's sake: edit would do.
+        let long: String = (1..=40).map(|n| format!("row {n}\n")).collect();
+        assert!(!write(long.clone()).await.text.contains("use edit"));
+        let touched = write(long.replace("row 7\n", "row seven\n")).await;
+        assert!(
+            touched.text.contains("Only 1 of its 40 lines differ"),
+            "{}",
+            touched.text
+        );
         let fragment = write("line of the fixed file\n".into()).await;
         assert!(!fragment.is_error);
         assert!(
-            fragment.text.contains("had 20 lines and now has 1"),
+            fragment.text.contains("had 40 lines and now has 1"),
             "{}",
             fragment.text
         );
