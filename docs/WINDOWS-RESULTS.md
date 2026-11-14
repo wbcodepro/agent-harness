@@ -235,6 +235,7 @@ Thực hiện ngày 2026-11-15 trên cùng máy, theo khối lệnh "Lượt b�
 |---|---|---|
 | Sau `git pull` (commit `267de4b`), `cargo build --release -p hame-cli` đạt | 179 | 0 |
 | Sau bản sửa của lượt này | 179 | 0 |
+| Sau khi rebase lên `353b0c6` (thêm một test cho tài khoản hết tiền) | 180 | 0 |
 
 Một test bị bỏ qua theo thiết kế (cần server OAuth thật). `cargo clippy --workspace --all-targets -- -D warnings` sạch.
 
