@@ -662,7 +662,15 @@ struct Servers {
     policy: Option<SandboxPolicy>,
     helper: PathBuf,
     root: PathBuf,
+    /// Says no to files a rename may not change.
+    guard: Option<PathGuard>,
 }
+
+/// Rules on a file a rename would change: given its absolute path and its
+/// path within the working directory, the reason it may not be changed.
+/// The approval rules only see the file a rename starts from; this is how
+/// they reach the others.
+pub type PathGuard = Arc<dyn Fn(&Path, &str) -> Result<(), String> + Send + Sync>;
 
 /// One file's part of a rename, ready to be written.
 struct Change {
@@ -697,6 +705,7 @@ impl Servers {
             policy,
             helper,
             root,
+            guard: None,
         }
     }
 
@@ -804,6 +813,9 @@ impl Servers {
             if inside.components().any(|part| part.as_os_str() == ".git") {
                 return Err(format!("The rename would change {shown}."));
             }
+            if let Some(guard) = &self.guard {
+                guard(&path, &shown)?;
+            }
             let text =
                 std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {shown}: {e}."))?;
             let (text, count) = apply_edits(&text, &edits).map_err(|why| {
@@ -883,8 +895,11 @@ pub fn tools(
     policy: Option<SandboxPolicy>,
     helper: PathBuf,
     root: PathBuf,
+    guard: Option<PathGuard>,
 ) -> Vec<Arc<dyn Tool>> {
-    let lsp = Arc::new(Servers::new(servers, policy, helper, root));
+    let mut lsp = Servers::new(servers, policy, helper, root);
+    lsp.guard = guard;
+    let lsp = Arc::new(lsp);
     vec![
         Arc::new(DiagnosticsTool {
             lsp: Arc::clone(&lsp),

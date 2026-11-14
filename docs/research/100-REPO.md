@@ -84,7 +84,7 @@ Một lượt `hame probe` sau đó trên 14 trong 20 tác vụ (cùng model) ch
 
 ### Tool theo ký hiệu qua LSP (mục 7 trong bảng)
 
-`references` và `rename_symbol` đã cài trên client LSP sẵn có. Thử thật với rust-analyzer trên một dự án Rust nhỏ: tìm đủ 4 chỗ dùng ở 2 file, đổi tên 4 chỗ trong một lời gọi, `cargo test` đạt. Giới hạn đã biết: luật quyền theo đường dẫn chỉ thấy file xuất phát của lệnh đổi tên, không thấy các file khác nó sửa (lệnh vẫn từ chối sửa ngoài thư mục làm việc và trong `.git`); lần gọi đầu khi server còn lập chỉ mục có thể trả về rỗng.
+`references` và `rename_symbol` đã cài trên client LSP sẵn có. Thử thật với rust-analyzer trên một dự án Rust nhỏ: tìm đủ 4 chỗ dùng ở 2 file, đổi tên 4 chỗ trong một lời gọi, `cargo test` đạt. Luật quyền theo đường dẫn được áp lên mọi file mà lệnh đổi tên sẽ sửa: gặp file bị cấm hoặc cần hỏi thì cả lệnh dừng, không ghi gì; lệnh cũng từ chối sửa ngoài thư mục làm việc và trong `.git`. Giới hạn đã biết: lần gọi đầu khi server còn lập chỉ mục có thể trả về rỗng.
 
 ### Dữ kiện dự án giữa các phiên (mục 9)
 

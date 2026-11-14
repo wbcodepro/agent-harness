@@ -624,6 +624,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             policy.is_confined().then(|| policy.clone()),
             helper.clone(),
             cwd.to_path_buf(),
+            Some(rename_guard(config.rules.clone())),
         )
         .into_iter()
         .for_each(|tool| tools.insert(tool));
@@ -855,6 +856,35 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
          {confinement}",
         cwd.display()
     )
+}
+
+/// Applies the approval rules that name paths to every file a rename
+/// would change. A rule that would deny or ask about changing a file stops
+/// the rename: the question a rule asks is about one file, and a rename
+/// has no way to put it for each of many.
+fn rename_guard(rules: Vec<hame_policy::Rule>) -> hame_ext::lsp::PathGuard {
+    Arc::new(move |absolute: &Path, relative: &str| {
+        let absolute = absolute.to_string_lossy();
+        let relative = relative.replace('\\', "/");
+        let rule = rules.iter().find(|rule| {
+            matches!(rule.tool.as_str(), "*" | "edit" | "write" | "rename_symbol")
+                && rule.pattern.as_deref().is_some_and(|pattern| {
+                    hame_policy::glob_match(pattern, &absolute)
+                        || hame_policy::glob_match(pattern, &relative)
+                })
+        });
+        match rule.map(|rule| rule.action) {
+            Some(RuleAction::Deny) => Err(format!(
+                "The rename would change {relative}, which a rule does not allow. Nothing \
+                 was changed."
+            )),
+            Some(RuleAction::Ask) => Err(format!(
+                "The rename would change {relative}, which needs the user's approval. Nothing \
+                 was changed; make the change there with an edit, which can be asked about."
+            )),
+            Some(RuleAction::Allow) | None => Ok(()),
+        }
+    })
 }
 
 /// hame's own tools beyond files, search and the shell. A `minimal` tool
@@ -1299,4 +1329,34 @@ pub async fn rewind(
         turn,
         restored,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rename_stops_at_a_file_a_rule_protects() {
+        let rule = |tool: &str, pattern: Option<&str>, action| hame_policy::Rule {
+            tool: tool.into(),
+            pattern: pattern.map(String::from),
+            action,
+        };
+        let guard = rename_guard(vec![
+            rule("write", Some("*/secrets/*"), RuleAction::Deny),
+            rule("edit", Some("vendor/*"), RuleAction::Ask),
+            // A rule with no path is about the call, which the approval
+            // layer already ruled on.
+            rule("rename_symbol", None, RuleAction::Ask),
+            rule("bash", Some("src/*"), RuleAction::Deny),
+        ]);
+        let check = |relative: &str| guard(&Path::new("/w").join(relative), relative);
+        assert!(check("src/a.rs").is_ok());
+        assert!(
+            check("app/secrets/k.rs")
+                .unwrap_err()
+                .contains("does not allow")
+        );
+        assert!(check("vendor/lib.rs").unwrap_err().contains("approval"));
+    }
 }
