@@ -69,12 +69,19 @@ fn reviewed_this_turn(records: &[Record]) -> bool {
         })
 }
 
+/// Where the reviewer is told to put its probes: a place the sandbox lets
+/// it write that is not the workspace.
+#[cfg(windows)]
+const PROBE_DIR: &str = "%TEMP%";
+#[cfg(not(windows))]
+const PROBE_DIR: &str = "/tmp";
+
 /// The reviewer's instructions.
 pub fn review_task(request: &str) -> String {
     format!(
         "Another agent was given the request below and says it has finished. Check its work \
          independently. Do not change any file in the working directory; write any probe \
-         scripts under a new directory in /tmp and run them from there.\n\n\
+         scripts under a new directory in {PROBE_DIR} and run them from there.\n\n\
          Read the request and every document it refers to. Then pick the requirements most \
          likely to have been missed or got wrong: rules that interact, cases a quick test \
          would not visit, exact output formats and orders, inputs that must be rejected, limits \
