@@ -174,6 +174,17 @@ Bắt được cả ba bản sai, và không có báo cáo nào sai sự thật:
 
 Lần chấm bản Go sai lộ ra hai lỗi của hame, đã sửa. Thứ nhất, lớp `stop_on_red` gửi người chấm quay lại vì lệnh `go test` của nó thất bại, trong khi thất bại đó chính là kết quả cần tìm; báo cáo cuối vì thế bị thay bằng lời giải thích về lệnh `cp`. Giờ các hook giữ lượt cho tới khi kiểm tra đạt (`gates_completion`) bị bỏ khỏi agent chấm. Thứ hai, lệnh được trích lại cho model bị cắt ở 200 ký tự đúng chỗ heredoc, và model chạy nguyên văn đoạn bị cắt; giờ đoạn trích dừng ở dòng đầu và ghi rõ là đã rút gọn.
 
+Đo tỷ lệ đạt (người dùng chọn mức "vừa phải"): `calendar-rules`, `claude-haiku-5-5`, 8 lần mỗi cấu hình, chạy song song.
+
+| Cấu hình | Đạt | Request mỗi lần | Token prompt mỗi lần (trung bình) | Token đầu ra mỗi lần | Thời gian mỗi lần |
+|---|---|---|---|---|---|
+| hame mặc định | 8/8 | 14–28 | 1,67 triệu | 117 nghìn | 472 giây |
+| bật người chấm | 7/7 lần hợp lệ | 28–35 | 1,91 triệu | 151 nghìn | 628 giây |
+
+Lần thứ tám của cấu hình bật người chấm hỏng sau 6 request vì kết nối tới nhà cung cấp đứt giữa lúc đang stream ("error decoding response body"), không do model; nó không được tính. Người chấm gửi model quay lại ở 2/8 lần, cả hai lần sau đó đều đạt. Gộp với các lần trước trên cùng tác vụ: mặc định 11/12, bật người chấm 9/9. Haiku chỉ trượt khoảng 1/12 ở tác vụ này, nên với số lần chạy này chưa thấy được khác biệt về độ chính xác. Cái giá thì đo được: thêm khoảng 14% token prompt, 29% token đầu ra và 33% thời gian.
+
+Lần hỏng vì mạng lộ ra một lỗi của hame: client của nhà cung cấp chỉ thử lại khi lỗi xảy ra trước khi stream bắt đầu, còn đứt giữa chừng thì cả lượt hỏng. Giờ phần đã nhận được ghi thành một lần thử thất bại (không vào ngữ cảnh của model) và cùng request được gửi lại, tối đa ba lần.
+
 Nên bật khi sai đắt hơn token: việc theo đặc tả dài, nhiều luật tương tác.
 
 Từ log của lần DeepSeek hỏng có hai bản sửa: các mảnh stream đến cùng lúc giờ được ghi gộp (log của lần đó có 114.000 bản ghi, 13 MB), và mô tả tool shell nói rõ lệnh đã chạy sẵn trong thư mục làm việc (model gắn `cd <đường dẫn tuyệt đối>` vào mọi lệnh).

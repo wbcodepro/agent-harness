@@ -17,8 +17,8 @@ use hame_kernel::BoxFuture;
 use hame_kernel::Chain;
 use hame_llm::{Llm, LlmError, Request, SinkError};
 use hame_session::{
-    Block, Delta, Event, History, Record, SessionError, SessionId, SessionWriter, StopReason,
-    ToolSpec, TurnEndReason, assemble, derive_history, plan_close,
+    AttemptReason, Block, Delta, Event, History, Record, SessionError, SessionId, SessionWriter,
+    StopReason, ToolSpec, TurnEndReason, assemble, derive_history, plan_close,
 };
 use hame_tools::{Effect, Tool, ToolContext, ToolOutput, ToolRunner, ToolSet};
 use serde_json::Value;
@@ -178,6 +178,11 @@ pub trait TurnHook: Send + Sync {
         false
     }
 }
+
+/// Times a response whose connection broke midway is asked for again.
+const STREAM_RETRIES: u32 = 3;
+/// Wait before the first of those, doubled for each next one.
+const STREAM_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Starts the message telling the model the turn is about to run out.
 pub const STEPS_LEFT_PREFIX: &str = "[hame limit]";
@@ -371,7 +376,9 @@ impl Agent {
             request.cache_key = Some(session.id().to_string());
 
             let mut deltas: Vec<Delta> = Vec::new();
-            let completion = {
+            let mut dropped = 0;
+            let completion = loop {
+                deltas.clear();
                 // Pieces that arrive close together are journalled as one
                 // record: a response streamed a token at a time would
                 // otherwise put a record per token in the log (a hundred
@@ -397,7 +404,24 @@ impl Agent {
                 if let Some((held, _)) = pending.take() {
                     session.append(Event::AssistantDelta { delta: held })?;
                 }
-                streamed?
+                match streamed {
+                    Ok(completion) => break completion,
+                    // The connection broke after the response had begun, which
+                    // the provider client cannot retry itself: what arrived is
+                    // set aside as a failed attempt, out of what the model
+                    // sees, and the same request is sent again.
+                    Err(LlmError::Transport(_)) if dropped < STREAM_RETRIES => {
+                        dropped += 1;
+                        if !deltas.is_empty() {
+                            session.append(Event::AssistantAttempt {
+                                content: assemble(&deltas),
+                                reason: AttemptReason::Failed,
+                            })?;
+                        }
+                        tokio::time::sleep(STREAM_RETRY_DELAY * 2u32.pow(dropped - 1)).await;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             };
 
             let content = assemble(&deltas);

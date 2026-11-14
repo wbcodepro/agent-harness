@@ -477,6 +477,13 @@ async fn a_failed_request_closes_the_turn_and_the_session_stays_usable() {
         .unwrap_err();
     assert!(matches!(error, AgentError::Llm(LlmError::Transport(_))));
 
+    // Asked again three times, each partial answer set aside.
+    let attempts = session
+        .records()
+        .iter()
+        .filter(|record| matches!(record.event, Event::AssistantAttempt { .. }))
+        .count();
+    assert_eq!(attempts, 4);
     let tail: Vec<Event> = session.records()[session.records().len() - 3..]
         .iter()
         .map(|record| record.event.clone())
@@ -507,6 +514,55 @@ async fn a_failed_request_closes_the_turn_and_the_session_stays_usable() {
     let history = session.history();
     let roles: Vec<Role> = history.messages.iter().map(|m| m.role).collect();
     assert_eq!(roles, [Role::User, Role::User, Role::Assistant]);
+}
+
+/// Breaks off its first response midway, then answers.
+struct DropsOnce(std::sync::atomic::AtomicBool);
+
+impl Llm for DropsOnce {
+    fn stream<'a>(
+        &'a self,
+        _request: &'a Request,
+        sink: &'a mut dyn DeltaSink,
+    ) -> BoxFuture<'a, Result<Completion, LlmError>> {
+        Box::pin(async move {
+            if !self.0.swap(true, Ordering::Relaxed) {
+                sink.delta(Delta::Text { text: "Hal".into() })
+                    .map_err(LlmError::Sink)?;
+                return Err(LlmError::Transport("error decoding response body".into()));
+            }
+            sink.delta(Delta::Text {
+                text: "Hello.".into(),
+            })
+            .map_err(LlmError::Sink)?;
+            Ok(Completion {
+                stop: StopReason::EndTurn,
+                usage: Usage::default(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_response_cut_off_midway_is_asked_for_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = new_session(&dir.path().join("sessions"));
+    agent(Arc::new(DropsOnce(Default::default())), dir.path())
+        .run_turn(&mut session, user("Hi"))
+        .await
+        .unwrap();
+    let history = session.history();
+    let last = history.messages.last().unwrap();
+    assert_eq!(last.role, Role::Assistant);
+    assert_eq!(last.content, vec![Block::text("Hello.")]);
+    assert!(
+        session
+            .records()
+            .iter()
+            .any(|record| matches!(&record.event,
+        Event::AssistantAttempt { content, reason: AttemptReason::Failed }
+            if content == &vec![Block::text("Hal")]))
+    );
 }
 
 #[tokio::test]
