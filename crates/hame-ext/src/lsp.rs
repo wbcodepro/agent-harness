@@ -108,13 +108,39 @@ fn decode_uri(uri: &str, windows: bool) -> Option<String> {
         return None;
     }
     if windows {
+        // Servers write the drive in lower case (`file:///c:/...`); paths
+        // here have it in upper case, as the system gives them, and are
+        // compared as written.
         let path = match path.as_bytes() {
-            [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => &path[1..],
-            _ => &path,
+            [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => {
+                format!("{}{}", (*drive as char).to_ascii_uppercase(), &path[2..])
+            }
+            _ => path,
         };
         return Some(path.replace('/', "\\"));
     }
     Some(path)
+}
+
+/// The key a file's diagnostics are kept under: its URI as this client
+/// writes it. Servers spell the same file differently (`file:///c:/a` for
+/// `file:///C%3A/a` on Windows), so their URIs are not compared as text.
+fn report_key(uri: &str) -> String {
+    uri_path(uri).map_or_else(|| uri.to_string(), |path| file_uri(&path))
+}
+
+/// A path as the tools show it: from the working directory, with `/`.
+fn shown_path(path: &Path, root: &Path) -> String {
+    let shown = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string();
+    if cfg!(windows) {
+        shown.replace('\\', "/")
+    } else {
+        shown
+    }
 }
 
 /// Where each line of `text` starts and ends, without its line ending.
@@ -411,7 +437,7 @@ impl LspClient {
                     (Some("textDocument/publishDiagnostics"), _) => {
                         if let Some(uri) = message["params"]["uri"].as_str() {
                             let mut reports = r_reports.lock().expect("lsp lock");
-                            let report = reports.entry(uri.to_string()).or_default();
+                            let report = reports.entry(report_key(uri)).or_default();
                             report.count += 1;
                             report.diagnostics = message["params"]["diagnostics"]
                                 .as_array()
@@ -510,7 +536,6 @@ impl LspClient {
             Err(_) => Err(format!("the language server did not answer {method}")),
         }
     }
-
     /// Whether the server announced a capability such as `renameProvider`.
     fn supports(&self, capability: &str) -> bool {
         !matches!(
@@ -588,11 +613,12 @@ impl LspClient {
         settle: Duration,
     ) -> Option<Vec<Value>> {
         let uri = file_uri(path);
+        let key = report_key(&uri);
         let before = self
             .reports
             .lock()
             .expect("lsp lock")
-            .get(&uri)
+            .get(&key)
             .map_or(0, |report| report.count);
         self.sync(path, text, true);
         self.notify(
@@ -604,7 +630,7 @@ impl LspClient {
             self.reports
                 .lock()
                 .expect("lsp lock")
-                .get(&uri)
+                .get(&key)
                 .filter(|report| report.count > before)
                 .cloned()
         };
@@ -639,7 +665,7 @@ impl LspClient {
 }
 
 fn render(path: &Path, root: &Path, diagnostics: &[Value]) -> String {
-    let shown = path.strip_prefix(root).unwrap_or(path).display();
+    let shown = shown_path(path, root);
     let mut lines: Vec<(u64, String)> = diagnostics
         .iter()
         .map(|diagnostic| {
@@ -727,7 +753,10 @@ impl Servers {
                 .collect(),
             policy,
             helper,
-            root,
+            // In the form other programs take: a Windows path written
+            // `\\?\C:\...` would reach the server as a URI it cannot read,
+            // and would not be a prefix of the paths it sends back.
+            root: hame_kernel::real_path(&root).unwrap_or(root),
             guard: None,
         }
     }
@@ -765,10 +794,7 @@ impl Servers {
     }
 
     fn shown(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root)
-            .unwrap_or(path)
-            .display()
-            .to_string()
+        shown_path(path, &self.root)
     }
 
     /// Finds the symbol a call names and gets the server ready to be asked
@@ -835,7 +861,7 @@ impl Servers {
                     path.display()
                 ));
             };
-            let shown = inside.display().to_string();
+            let shown = shown_path(&path, &root);
             if inside.components().any(|part| part.as_os_str() == ".git") {
                 return Err(format!("The rename would change {shown}."));
             }
@@ -939,7 +965,7 @@ impl Servers {
                     Some(text[start..end].trim())
                 });
                 let content: String = content.unwrap_or("").chars().take(MAX_LINE_CHARS).collect();
-                let shown = path.strip_prefix(&root).unwrap_or(path).display();
+                let shown = shown_path(path, &root);
                 format!("{shown}:{}: {content}", line + 1)
                     .trim_end()
                     .to_string()
@@ -1363,8 +1389,17 @@ mod text_tests {
         // As servers write it.
         assert_eq!(
             decode_uri("file:///c:/Users/me/a.rs", true).as_deref(),
-            Some(r"c:\Users\me\a.rs")
+            Some(r"C:\Users\me\a.rs")
         );
+        // Either spelling finds the same report.
+        if cfg!(windows) {
+            assert_eq!(
+                report_key("file:///c:/Users/me/a%20b.rs"),
+                file_uri(Path::new(r"C:\Users\me\a b.rs"))
+            );
+        } else {
+            assert_eq!(report_key("file:///a/b%2Ec"), "file:///a/b.c");
+        }
         assert_eq!(decode_uri("untitled:Untitled-1", false), None);
         assert_eq!(decode_uri("file:///a%2", false), None);
     }
@@ -1391,7 +1426,7 @@ mod text_tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1405,9 +1440,16 @@ from urllib.parse import quote, unquote
 docs = {}
 root = None
 def u16(s): return len(s.encode("utf-16-le")) // 2
+# URIs the way editors write them: file:///C%3A/a/b on Windows.
+def to_path(uri):
+    p = unquote(uri[7:])
+    if os.name == "nt" and re.match(r"/[A-Za-z]:", p): p = p[1:].replace("/", "\\")
+    return p
+def to_uri(path):
+    return "file:///" + quote(path.replace("\\", "/")) if os.name == "nt" else "file://" + quote(path)
 def text_of(uri):
     if uri in docs: return docs[uri]
-    with open(unquote(uri[7:]), encoding="utf-8", newline="") as f: return f.read()
+    with open(to_path(uri), encoding="utf-8", newline="") as f: return f.read()
 def word_at(uri, pos):
     line = text_of(uri).split("\n")[pos["line"]]
     for m in re.finditer(r"\w+", line):
@@ -1416,7 +1458,7 @@ def uses(word):
     found = []
     for name in sorted(os.listdir(root)) if word else []:
         if not name.endswith(".txt"): continue
-        uri = "file://" + quote(os.path.join(root, name))
+        uri = to_uri(os.path.join(root, name))
         for i, line in enumerate(text_of(uri).split("\n")):
             for m in re.finditer(r"\b%s\b" % re.escape(word), line):
                 found.append((uri, {"start": {"line": i, "character": u16(line[:m.start()])},
@@ -1427,7 +1469,7 @@ def rename(uri, pos, new):
     for u, r in uses(word_at(uri, pos)): edits.setdefault(u, []).append({"range": r, "newText": new})
     if new == "outside":
         first = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}
-        edits["file://" + quote(os.path.join(os.path.dirname(root), "outside.txt"))] = [{"range": first, "newText": new}]
+        edits[to_uri(os.path.join(os.path.dirname(root), "outside.txt"))] = [{"range": first, "newText": new}]
     if new == "moved":
         return {"documentChanges": [{"kind": "rename", "oldUri": uri, "newUri": uri + ".old"}]}
     if new.startswith("doc"):
@@ -1456,7 +1498,7 @@ while True:
     if m is None: break
     method = m.get("method")
     if method == "initialize":
-        root = unquote(m["params"]["rootUri"][7:])
+        root = to_path(m["params"]["rootUri"])
         can = {} if "bare" in sys.argv else {"referencesProvider": True, "renameProvider": True}
         send({"jsonrpc": "2.0", "id": 99, "method": "workspace/configuration", "params": {"items": [{}, {}]}})
         send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": can}})
@@ -1688,6 +1730,13 @@ while True:
 
     #[test]
     fn uris_escape_what_paths_may_contain() {
-        assert_eq!(file_uri(Path::new("/a b/ç.rs")), "file:///a%20b/%C3%A7.rs");
+        if cfg!(windows) {
+            assert_eq!(
+                file_uri(Path::new(r"C:\a b\ç.rs")),
+                "file:///C%3A/a%20b/%C3%A7.rs"
+            );
+        } else {
+            assert_eq!(file_uri(Path::new("/a b/ç.rs")), "file:///a%20b/%C3%A7.rs");
+        }
     }
 }
