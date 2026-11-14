@@ -119,6 +119,21 @@ Vì bộ `evals/harder` không phân biệt được độ chính xác, mười 
 
 Muốn đo được độ chính xác thì cần tác vụ khó hơn nữa hoặc model yếu hơn; cả hai đều chưa làm.
 
+### Bộ `evals/frontier`: hai tác vụ dài được hiệu chỉnh với model thật
+
+`spec-ledger-engine` (sổ cái nhiều tiền tệ theo một đặc tả dài, nhiều luật tương tác) và `diff-three-way` (merge ba chiều với một cách căn dòng chuẩn duy nhất và giới hạn tốc độ). Cả hai qua ba phép kiểm như bộ expert. Chạy thử với `deepseek-flash`: sổ cái 2/2; merge 1/2, lần hỏng dùng hết 50 request rồi dừng khi `merge3` còn ném lỗi trên chính các ví dụ của đặc tả. Lượt so sánh bật/tắt với DeepSeek không chạy được vì tài khoản hết tiền giữa chừng.
+
+So sánh trên `diff-three-way` với `claude-haiku-5-5`, ba lần mỗi cấu hình:
+
+| Cấu hình | Đạt | Request mỗi lần | Token prompt (tổng) | Token đầu ra (tổng) | Thời gian (tổng) |
+|---|---|---|---|---|---|
+| hame mặc định | 3/3 | 16, 20, 35 | 5.124.480 | 247.404 | 1.085 giây |
+| hame tắt các lớp hỗ trợ | 3/3 | 17, 26, 17 | 4.333.646 | 248.070 | 1.096 giây |
+
+Kết quả giống lượt expert: cả hai cấu hình đạt hết, chi phí nằm trong cùng một khoảng dao động (một lần chạy có thể tốn gấp ba lần khác của cùng cấu hình). Với các model tầm trung hiện nay, chưa đo được khác biệt về độ chính xác hay chi phí do các lớp này tạo ra trên tác vụ dài; muốn thấy được cần nhiều lần chạy hơn hẳn (dao động lớn) hoặc tác vụ khó hơn nữa.
+
+Từ log của lần DeepSeek hỏng có hai bản sửa: các mảnh stream đến cùng lúc giờ được ghi gộp (log của lần đó có 114.000 bản ghi, 13 MB), và mô tả tool shell nói rõ lệnh đã chạy sẵn trong thư mục làm việc (model gắn `cd <đường dẫn tuyệt đối>` vào mọi lệnh).
+
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.
 
 ## Bảng đầy đủ theo nhóm
