@@ -64,11 +64,13 @@ Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lư�
 
 Đã kiểm trong IntelliJ IDEA 2026.1 ngày 2026-11-14, cả năm việc đều đạt: câu trả lời hiện dần và lời gọi tool hiện thành mục riêng; tạo file; dừng giữa chừng rồi hỏi tiếp; mở lại hội thoại cũ; IDE hỏi xin phép trước khi chạy lệnh shell ở chế độ `danger-full-access`.
 
-**Zed:** thêm vào `settings.json` (theo tài liệu của Zed; cấu hình này chưa được thử trong Zed):
+**Zed:** thêm vào `~/.config/zed/settings.json`, rồi chọn `zcode` trong menu External Agents:
 
 ```json
-{ "agent_servers": { "zcode": { "command": "/đường/dẫn/tới/zcode", "args": ["acp"] } } }
+{ "agent_servers": { "zcode": { "type": "custom", "command": "/đường/dẫn/tới/zcode", "args": ["acp"] } } }
 ```
+
+Đã kiểm trong Zed 1.28.1 ngày 2026-11-14, cũng năm việc đó đều đạt (dừng giữa chừng được kiểm bằng phím Esc; nút Stop bấm bằng chuột chưa xác nhận được). Thiếu `"type": "custom"` thì Zed không nhận agent.
 
 Máy chủ cũng được kiểm thử tự động bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
 

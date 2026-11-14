@@ -13,7 +13,7 @@ cargo build --release -p zcode-cli        # tạo target/release/zcode
 
 ## 1. ACP trong một editor thật
 
-**Đã làm ngày 2026-11-14 trong IntelliJ IDEA 2026.1:** cả năm thao tác trong bảng dưới đều đạt. Cấu hình dùng là `~/.jetbrains/acp.json` với `{"command": "<đường dẫn zcode>", "args": ["acp"], "env": {}}`. Lượt đó nêu hai điểm, đều đã sửa: model dùng lệnh chỉ có ở GNU trên macOS (prompt hệ thống giờ nói rõ hệ điều hành), và model nói không có hộp thoại xin phép dù IDE đã hỏi (kết quả của lời gọi được người duyệt giờ ghi rõ điều đó). Zed thì chưa thử.
+**Đã làm ngày 2026-11-14 trong IntelliJ IDEA 2026.1:** cả năm thao tác trong bảng dưới đều đạt. Cấu hình dùng là `~/.jetbrains/acp.json` với `{"command": "<đường dẫn zcode>", "args": ["acp"], "env": {}}`. Lượt đó nêu hai điểm, đều đã sửa: model dùng lệnh chỉ có ở GNU trên macOS (prompt hệ thống giờ nói rõ hệ điều hành), và model nói không có hộp thoại xin phép dù IDE đã hỏi (kết quả của lời gọi được người duyệt giờ ghi rõ điều đó). Zed 1.28.1 cũng đã được thử cùng ngày và đạt cả năm thao tác; cấu hình cần `"type": "custom"` trong mục `agent_servers`. Lượt Zed nêu thêm một điểm, đã sửa: model gửi lại lệnh vừa bị người dùng từ chối (thông báo từ chối giờ nói rõ đừng thử lại).
 
 ### Zed
 

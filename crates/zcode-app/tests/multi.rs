@@ -423,9 +423,9 @@ async fn a_reviewing_model_approves_only_what_is_plainly_harmless() {
         tool_results(session.records()),
         [
             ("checked\n".to_string(), false),
-            ("Denied by the user.".to_string(), true),
+            (zcode_policy::DENIED_BY_USER.to_string(), true),
             // An answer that is not one of the two words approves nothing.
-            ("Denied by the user.".to_string(), true),
+            (zcode_policy::DENIED_BY_USER.to_string(), true),
         ]
     );
     let asked = human.0.lock().unwrap().clone();

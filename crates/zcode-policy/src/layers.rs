@@ -39,6 +39,10 @@ fn subject(request: &ToolRequest) -> &str {
     request.input[key].as_str().unwrap_or("")
 }
 
+/// What a call the user said no to comes back with.
+pub const DENIED_BY_USER: &str = "Denied by the user. Do not make this call again or try another \
+                                  way to do the same thing; ask the user what they want instead.";
+
 /// Asks the user whether a tool call may run.
 pub trait Prompter: Send + Sync {
     /// `request` is the call awaiting a decision and `question` a one-line
@@ -147,7 +151,9 @@ impl Layer<ToolRequest, ToolOutput> for ApprovalLayer {
                             }
                             output
                         }
-                        Some(false) => ToolOutput::error("Denied by the user."),
+                        // Said in full: told only that it was denied, a
+                        // model has been seen to send the same call again.
+                        Some(false) => ToolOutput::error(DENIED_BY_USER),
                         None => ToolOutput::error(
                             "Denied: this call needs the user's approval and nobody is at the \
                              terminal to give it. Do not retry; tell the user what you needed.",
@@ -261,10 +267,7 @@ mod tests {
                 .text
                 .contains("permission rules")
         );
-        assert_eq!(
-            ran(&chain, bash("git push")).await.text,
-            "Denied by the user."
-        );
+        assert_eq!(ran(&chain, bash("git push")).await.text, DENIED_BY_USER);
         assert_eq!(
             *prompter.asked.lock().unwrap(),
             ["Allow bash git push? [y/N] "]
@@ -282,7 +285,7 @@ mod tests {
         }
         assert_eq!(
             ran(&chain, bash("cd repo && git push -f")).await.text,
-            "Denied by the user."
+            DENIED_BY_USER
         );
         assert_eq!(
             ran(&chain, bash("echo 'rm -rf x'")).await,
