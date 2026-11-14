@@ -202,6 +202,19 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     );
     let config = load_config(home)?;
     let secrets = load_secrets(home, cwd)?;
+    // What stands in for each substituted secret inside the sandbox. The
+    // order follows the configuration's, name by name.
+    let mut substitutions = Vec::new();
+    for (name, hosts) in &config.secrets.substitute {
+        let secret = secrets
+            .get(name)
+            .ok_or_else(|| format!("[secrets] substitute names {name}, which is not set"))?;
+        substitutions.push(zcode_sandbox::Substitution {
+            placeholder: format!("zcode-secret-{name}-{}", SessionId::generate()),
+            secret: secret.to_string(),
+            hosts: hosts.clone(),
+        });
+    }
     let Models {
         main: llm,
         summary: summarizer,
@@ -279,9 +292,16 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             NetworkMode::Off => Network::Blocked,
             NetworkMode::Open => Network::Open,
             NetworkMode::Allowlist => {
-                let started = EgressProxy::start(Allowlist::new(config.network.allow.clone()))
-                    .await
-                    .map_err(|e| format!("cannot start the egress proxy: {e}"))?;
+                // A host a secret may go to has to be reachable.
+                let mut allowed = config.network.allow.clone();
+                allowed.extend(substitutions.iter().flat_map(|s| s.hosts.iter().cloned()));
+                let started = EgressProxy::start_with(
+                    Allowlist::new(allowed),
+                    substitutions.clone(),
+                    Vec::new(),
+                )
+                .await
+                .map_err(|e| format!("cannot start the egress proxy: {e}"))?;
                 let port = started.port();
                 proxy = Some(started);
                 Network::Proxy { port }
@@ -289,12 +309,30 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         };
     }
 
-    let granted: Vec<(String, String)> = config
+    // A secret that is substituted is never handed over itself, even if it
+    // is also on the grant list.
+    let mut granted: Vec<(String, String)> = config
         .secrets
         .grant
         .iter()
+        .filter(|name| !config.secrets.substitute.contains_key(*name))
         .filter_map(|name| Some((name.clone(), secrets.get(name)?.to_string())))
         .collect();
+    if let Some(pem) = proxy.as_ref().and_then(|proxy| proxy.authority_pem()) {
+        granted.extend(
+            substitutions
+                .iter()
+                .zip(config.secrets.substitute.keys())
+                .map(|(substitution, name)| (name.clone(), substitution.placeholder.clone())),
+        );
+        granted.extend(trust_authority(pem)?);
+    } else if !substitutions.is_empty() {
+        return Err(
+            "[secrets] substitute needs the network in allowlist mode: the proxy is what puts \
+             the secrets in"
+                .into(),
+        );
+    }
     let runner: Arc<dyn ToolRunner> = match &options.runner {
         Some(runner) => Arc::clone(runner),
         None => Arc::new(SandboxedRunner {
@@ -904,6 +942,48 @@ impl Prompter for Terminal {
             .unwrap_or(None)
         })
     }
+}
+
+/// Makes confined tools trust the proxy's certificate authority, so their
+/// HTTPS clients accept the connections it reads. Returns the variables to
+/// set for them.
+///
+/// Most clients take one file of trusted authorities in place of the
+/// system's, so the file written is the system's list with the proxy's
+/// authority added. Where no system list is found, only clients that take
+/// an additional authority (Node) are covered.
+fn trust_authority(pem: &str) -> Result<Vec<(String, String)>, String> {
+    let dir = std::env::temp_dir();
+    let own = dir.join(format!("zcode-ca-{}.pem", std::process::id()));
+    let problem = |e: std::io::Error| format!("cannot write the proxy's certificate: {e}");
+    std::fs::write(&own, pem).map_err(problem)?;
+    let mut variables = vec![(
+        "NODE_EXTRA_CA_CERTS".to_string(),
+        own.to_string_lossy().into_owned(),
+    )];
+    let system = [
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+    ]
+    .iter()
+    .find_map(|path| std::fs::read_to_string(path).ok());
+    if let Some(system) = system {
+        let bundle = dir.join(format!("zcode-ca-bundle-{}.pem", std::process::id()));
+        std::fs::write(&bundle, format!("{system}\n{pem}")).map_err(problem)?;
+        let bundle = bundle.to_string_lossy().into_owned();
+        for name in [
+            "SSL_CERT_FILE",
+            "CURL_CA_BUNDLE",
+            "REQUESTS_CA_BUNDLE",
+            "GIT_SSL_CAINFO",
+            "PIP_CERT",
+            "CARGO_HTTP_CAINFO",
+        ] {
+            variables.push((name.to_string(), bundle.clone()));
+        }
+    }
+    Ok(variables)
 }
 
 /// The address of the HTTP MCP server called `name`, from the

@@ -7,6 +7,7 @@
 //! tool starts inherit the confinement. If the platform cannot enforce the
 //! policy, the call is refused rather than run unconfined.
 
+mod intercept;
 mod policy;
 mod proxy;
 mod worker;
@@ -18,6 +19,7 @@ mod seatbelt;
 #[cfg(windows)]
 mod windows;
 
+pub use intercept::Substitution;
 pub use policy::{Mode, Network, SandboxError, SandboxPolicy, Wrapped, default_unreadable, wrap};
 pub use proxy::{Allowlist, Decision, EgressProxy};
 pub use worker::{SandboxedRunner, worker_main};

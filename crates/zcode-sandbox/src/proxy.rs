@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::intercept::{Authority, Substitution, applying, rewrite_head};
+
 /// Hosts the sandbox may reach. A pattern is a host name, or `*.suffix` for
 /// every subdomain of `suffix`; either may end in `:port`. Without a port,
 /// only 80 and 443 are allowed.
@@ -58,10 +60,40 @@ pub struct EgressProxy {
     port: u16,
     decisions: Arc<Mutex<Vec<Decision>>>,
     task: tokio::task::JoinHandle<()>,
+    /// The certificate tools have to trust, when connections are read.
+    authority_pem: Option<String>,
+}
+
+/// What the proxy does beyond allowing and refusing.
+struct Rewriting {
+    substitutions: Vec<Substitution>,
+    authority: Option<Authority>,
 }
 
 impl EgressProxy {
     pub async fn start(allowlist: Allowlist) -> std::io::Result<Self> {
+        Self::start_with(allowlist, Vec::new(), Vec::new()).await
+    }
+
+    /// Like [`start`](Self::start), and also puts secrets in place of
+    /// their placeholders on the way to the hosts named for them. Those
+    /// hosts' TLS connections are ended here; `extra_roots` are
+    /// authorities to trust for them besides the system's.
+    pub async fn start_with(
+        allowlist: Allowlist,
+        substitutions: Vec<Substitution>,
+        extra_roots: Vec<rustls::pki_types::CertificateDer<'static>>,
+    ) -> std::io::Result<Self> {
+        let authority = if substitutions.is_empty() {
+            None
+        } else {
+            Some(Authority::new(extra_roots).map_err(std::io::Error::other)?)
+        };
+        let authority_pem = authority.as_ref().map(Authority::pem);
+        let rewriting = Arc::new(Rewriting {
+            substitutions,
+            authority,
+        });
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let decisions = Arc::new(Mutex::new(Vec::new()));
@@ -71,8 +103,9 @@ impl EgressProxy {
             while let Ok((client, _)) = listener.accept().await {
                 let allowlist = Arc::clone(&allowlist);
                 let log = Arc::clone(&log);
+                let rewriting = Arc::clone(&rewriting);
                 tokio::spawn(async move {
-                    let _ = serve(client, &allowlist, &log).await;
+                    let _ = serve(client, &allowlist, &log, &rewriting).await;
                 });
             }
         });
@@ -80,7 +113,14 @@ impl EgressProxy {
             port,
             decisions,
             task,
+            authority_pem,
         })
+    }
+
+    /// The certificate of the authority that signs for intercepted hosts,
+    /// in PEM. `None` when nothing is intercepted.
+    pub fn authority_pem(&self) -> Option<&str> {
+        self.authority_pem.as_deref()
     }
 
     pub fn port(&self) -> u16 {
@@ -103,6 +143,7 @@ async fn serve(
     mut client: TcpStream,
     allowlist: &Allowlist,
     log: &Mutex<Vec<Decision>>,
+    rewriting: &Rewriting,
 ) -> std::io::Result<()> {
     // Read the request head.
     let mut buffer = Vec::new();
@@ -181,9 +222,26 @@ async fn serve(
             .await;
         }
     };
+    let substitutions = applying(&rewriting.substitutions, host, port);
+    if is_connect
+        && !substitutions.is_empty()
+        && let Some(authority) = &rewriting.authority
+    {
+        client
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await?;
+        return intercept(client, upstream, host, authority, &substitutions).await;
+    }
     if is_connect {
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await?;
+        upstream.write_all(&buffer[head_end..]).await?;
+    } else if !substitutions.is_empty() {
+        let rest: Vec<&str> = lines.collect();
+        let head = format!("{method} {path} {version}\r\n{}", rest.join("\r\n"));
+        upstream
+            .write_all(rewrite_head(&head, &substitutions).as_bytes())
             .await?;
         upstream.write_all(&buffer[head_end..]).await?;
     } else {
@@ -202,6 +260,51 @@ async fn serve(
         upstream.write_all(forwarded.as_bytes()).await?;
         upstream.write_all(&buffer[head_end..]).await?;
     }
+    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    Ok(())
+}
+
+/// Ends the tool's TLS connection here, answering as `host`, puts the
+/// secrets into the head of its request, and passes it on over a TLS
+/// connection of the proxy's own to the real host.
+async fn intercept(
+    client: TcpStream,
+    upstream: TcpStream,
+    host: &str,
+    authority: &Authority,
+    substitutions: &[&Substitution],
+) -> std::io::Result<()> {
+    let answering = authority
+        .answering_as(host)
+        .map_err(std::io::Error::other)?;
+    let mut client = tokio_rustls::TlsAcceptor::from(answering)
+        .accept(client)
+        .await?;
+    let name =
+        rustls::pki_types::ServerName::try_from(host.to_string()).map_err(std::io::Error::other)?;
+    let connector = tokio_rustls::TlsConnector::from(authority.upstream());
+    let mut upstream = connector.connect(name, upstream).await?;
+
+    let mut buffer = Vec::new();
+    let head_end = loop {
+        let mut chunk = [0u8; 4096];
+        let n = client.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+        if let Some(end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+            break end + 4;
+        }
+        if buffer.len() > 64 * 1024 {
+            return Ok(());
+        }
+    };
+    let head = String::from_utf8_lossy(&buffer[..head_end]);
+    upstream
+        .write_all(rewrite_head(&head, substitutions).as_bytes())
+        .await?;
+    upstream.write_all(&buffer[head_end..]).await?;
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
 }
@@ -328,6 +431,176 @@ mod tests {
                 ("localhost".to_string(), true),
                 ("10.0.0.1".to_string(), false),
             ]
+        );
+    }
+
+    /// An HTTPS server for `localhost` with a private authority. It
+    /// answers every request with the head it received. Returns its port
+    /// and its authority's certificate.
+    async fn tls_origin() -> (u16, rustls::pki_types::CertificateDer<'static>) {
+        use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair};
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let issuer = CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap();
+        let key = KeyPair::generate().unwrap();
+        let leaf = CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .signed_by(&key, &issuer)
+            .unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![leaf.der().clone()],
+            rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()),
+        )
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(socket).await else {
+                        return;
+                    };
+                    let mut seen = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match tls.read(&mut chunk).await {
+                            Ok(n) if n > 0 => seen.extend_from_slice(&chunk[..n]),
+                            _ => return,
+                        }
+                    }
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        seen.len()
+                    );
+                    let _ = tls.write_all(response.as_bytes()).await;
+                    let _ = tls.write_all(&seen).await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        (port, issuer.der().clone())
+    }
+
+    /// What a tool does: asks the proxy for a tunnel, speaks TLS through
+    /// it trusting only `trusted`, and sends one request. Returns the
+    /// response, or why TLS could not be set up.
+    async fn through_tunnel(
+        proxy_port: u16,
+        origin_port: u16,
+        trusted: rustls::pki_types::CertificateDer<'static>,
+        request: &str,
+    ) -> Result<String, String> {
+        let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+        stream
+            .write_all(format!("CONNECT localhost:{origin_port} HTTP/1.1\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut established = [0u8; 39];
+        stream.read_exact(&mut established).await.unwrap();
+        assert!(established.starts_with(b"HTTP/1.1 200"));
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(trusted).unwrap();
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let mut tls = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(name, stream)
+            .await
+            .map_err(|e| e.to_string())?;
+        tls.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        let _ = tls.read_to_end(&mut response).await;
+        Ok(String::from_utf8_lossy(&response).into_owned())
+    }
+
+    fn pem_to_der(pem: &str) -> rustls::pki_types::CertificateDer<'static> {
+        use base64::Engine;
+        let body: String = pem
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect();
+        base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap()
+            .into()
+    }
+
+    #[tokio::test]
+    async fn a_secret_reaches_its_host_without_ever_being_in_the_sandbox() {
+        let (origin_port, origin_root) = tls_origin().await;
+        let host = format!("localhost:{origin_port}");
+        let request =
+            "GET /repos HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer PLACEHOLDER-1\r\n\r\n";
+
+        let proxy = EgressProxy::start_with(
+            Allowlist::new([host.clone()]),
+            vec![Substitution {
+                placeholder: "PLACEHOLDER-1".into(),
+                secret: "ghp_the_real_token".into(),
+                hosts: vec![host.clone()],
+            }],
+            vec![origin_root.clone()],
+        )
+        .await
+        .unwrap();
+        let authority = pem_to_der(proxy.authority_pem().unwrap());
+
+        // The tool trusts the proxy's authority and sends the placeholder;
+        // the host receives the secret.
+        let response = through_tunnel(proxy.port(), origin_port, authority.clone(), request)
+            .await
+            .unwrap();
+        assert!(
+            response.contains("Authorization: Bearer ghp_the_real_token"),
+            "{response}"
+        );
+        assert!(!response.contains("PLACEHOLDER-1"), "{response}");
+        assert!(response.contains("Connection: close"), "{response}");
+
+        // A host with no secret of its own is tunnelled untouched: the
+        // tool sees the host's own certificate and its placeholder stays
+        // a placeholder.
+        let plain = EgressProxy::start_with(
+            Allowlist::new([host.clone()]),
+            vec![Substitution {
+                placeholder: "PLACEHOLDER-1".into(),
+                secret: "ghp_the_real_token".into(),
+                hosts: vec!["api.github.com".into()],
+            }],
+            vec![origin_root.clone()],
+        )
+        .await
+        .unwrap();
+        let untouched = through_tunnel(plain.port(), origin_port, origin_root.clone(), request)
+            .await
+            .unwrap();
+        assert!(untouched.contains("Bearer PLACEHOLDER-1"), "{untouched}");
+        assert!(
+            through_tunnel(plain.port(), origin_port, authority, request)
+                .await
+                .is_err(),
+            "the proxy's authority does not speak for hosts it does not intercept"
+        );
+        assert!(
+            EgressProxy::start(Allowlist::default())
+                .await
+                .unwrap()
+                .authority_pem()
+                .is_none()
         );
     }
 }

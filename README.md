@@ -85,6 +85,8 @@ Mặc định (`workspace-write`):
 - Luật quyền cho `bash` được so với từng lệnh trong dòng (các phần ngăn bởi `;`, `&&`, `||`, `|`, phần trong `$(...)` và backtick, lệnh sau `sudo`/`env`…): luật `deny`/`ask` có hiệu lực dù lệnh nằm ở đâu trong dòng, còn luật `allow` chỉ áp dụng khi mọi lệnh trong dòng đều được cho phép. Bộ tách lệnh không phải là một trình phân tích shell đầy đủ.
 - Với `[approval] reviewer = true`, một model thứ hai xem từng lời gọi cần xin phép (chỉ thấy tên tool, tham số và thư mục làm việc, không thấy hội thoại) và chỉ tự đồng ý khi lời gọi rõ ràng vô hại; mọi trường hợp khác, kể cả khi nó trả lời không rõ, vẫn được hỏi bạn. Mọi phán quyết được ghi vào `~/.zcode/approvals.jsonl`. Đây là một model, có thể phán sai: nó giảm số lần bị hỏi, không thay cho sandbox.
 
+- Với `[secrets] substitute`, secret không vào sandbox: biến môi trường của tool chứa một giá trị giả, và proxy mạng thay nó bằng secret thật trong phần đầu của request (dòng request và header, kể cả `Authorization: Basic`) gửi tới đúng các host bạn nêu. Với HTTPS, proxy phải đọc được request nên nó tự kết thúc kết nối TLS của tool cho riêng các host đó, bằng một chứng chỉ gốc sinh ra cho lần chạy này, rồi mở kết nối TLS đã xác thực của nó tới host thật; các host khác vẫn được chuyển tiếp nguyên vẹn. Tool được trỏ tới chứng chỉ gốc ấy qua `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` và `NODE_EXTRA_CA_CERTS`; chương trình không đọc các biến này sẽ từ chối kết nối tới host đó. Giới hạn: secret nằm trong thân request không được thay; chỉ HTTP/1.1; mỗi kết nối một request; một host bạn nêu mà lại gửi trả header thì secret sẽ quay về đầu ra (và bị che như mọi secret). Trên Windows chỉ Node nhận được chứng chỉ, vì chưa tìm được danh sách chứng chỉ gốc của hệ thống ở dạng file.
+
 `--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
 
 Giới hạn cần biết:
@@ -135,7 +137,9 @@ reviewer = false                # true: một model (summary_model) trả lời 
                                 # nó chỉ có thể đồng ý với lệnh rõ ràng vô hại, còn lại vẫn hỏi bạn
 
 [secrets]
-grant = ["GITHUB_TOKEN"]
+grant = ["GITHUB_TOKEN"]        # trao thẳng secret cho tool
+substitute = { NPM_TOKEN = ["registry.npmjs.org"] }   # tool chỉ nhận giá trị giả; proxy thay bằng secret thật
+                                # trong request tới các host này (cần [network] mode = "allowlist")
 
 [context]
 compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng

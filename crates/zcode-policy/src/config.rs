@@ -269,6 +269,12 @@ pub struct SecretsConfig {
     /// Names of secrets passed into the tool environment. Everything else
     /// the harness knows stays out of reach of tools.
     pub grant: Vec<String>,
+    /// Secrets tools may use without holding them: the name of a secret
+    /// and the hosts it may be sent to. Tools get a placeholder in the
+    /// variable of that name; the egress proxy puts the real value in its
+    /// place in requests to those hosts, and nowhere else. Needs the
+    /// network in `allowlist` mode.
+    pub substitute: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
