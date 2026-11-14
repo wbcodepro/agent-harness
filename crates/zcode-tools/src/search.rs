@@ -429,24 +429,25 @@ fn first_syntax_error(extension: &str, text: &str) -> Option<usize> {
 }
 
 /// Asks Python itself whether `text` is valid Python. The outer `None`
-/// means it could not be asked (no `python3`); the inner one that the
+/// means it could not be asked (no Python to run); the inner one that the
 /// text is fine. The bundled grammar is not used for Python because it
 /// accepts wrong indentation, which is the mistake that matters most.
 fn python_syntax_error(text: &str) -> Option<Option<(usize, String)>> {
     use std::io::Write as _;
     const CHECK: &str = "import ast,sys\ntry:\n ast.parse(sys.stdin.read())\nexcept SyntaxError as e:\n print(f'{e.lineno}:{e.msg}')";
-    let mut child = std::process::Command::new("python3")
-        .args(["-I", "-c", CHECK])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    // Windows has `python`; its `python3` is a stub that runs nothing.
+    let output = ["python3", "python"].iter().find_map(|program| {
+        let mut child = std::process::Command::new(program)
+            .args(["-I", "-c", CHECK])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+        let output = child.wait_with_output().ok()?;
+        output.status.success().then_some(output)
+    })?;
     let said = String::from_utf8_lossy(&output.stdout);
     let Some((line, message)) = said.trim().split_once(':') else {
         return Some(None);

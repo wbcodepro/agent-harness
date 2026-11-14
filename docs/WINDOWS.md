@@ -1,6 +1,8 @@
 # Kiểm chứng zcode trên máy Windows
 
-zcode được phát triển trên macOS. Phần Windows mới chỉ được chạy trên máy của GitHub Actions, chưa từng chạy trên một máy Windows có người dùng thật. File này là việc cần làm trên máy Windows, viết để giao thẳng cho Claude Code ở đó.
+zcode được phát triển trên macOS. Lượt kiểm chứng đầu tiên trên một máy Windows 11 thật đã làm ngày 2026-11-14; kết quả, các lỗi đã sửa và những gì chưa kiểm nằm ở `docs/WINDOWS-RESULTS.md`. File này là việc cần làm cho mỗi lượt kiểm, viết để giao thẳng cho Claude Code trên máy Windows.
+
+Lượt kế tiếp nên tập trung vào những gì chưa kiểm (cuối mục "Những phần chưa từng kiểm" của file kết quả) và những gì thêm sau lượt đầu: lệnh `/tên` từ `commands/*.md`, loại subagent từ `agents/*.md`, `zcode plugin install`, `zcode mcp login`, bản MCP không trạng thái `2026-07-28`, và cảnh báo lỗi cú pháp sau khi sửa file (với Python cần `python` trên PATH).
 
 ## Chuẩn bị
 
