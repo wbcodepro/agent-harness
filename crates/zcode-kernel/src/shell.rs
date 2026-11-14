@@ -29,6 +29,24 @@ pub fn sh_program() -> PathBuf {
     "sh".into()
 }
 
+/// The Python that runs programs here: `python3`, or `python` where that is
+/// its name. Windows has a `python3` that starts and runs nothing (it offers
+/// to open the Store), so being able to start one proves nothing: each is
+/// asked to run an empty program. Looked up once.
+pub fn python_program() -> Option<&'static str> {
+    static FOUND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        ["python3", "python"].into_iter().find(|program| {
+            std::process::Command::new(program)
+                .args(["-c", ""])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        })
+    })
+}
 /// The bash of Git for Windows (or another bash that works on Windows
 /// paths), if one is installed: the one `ZCODE_BASH` names, else the one
 /// found. Looked up once.

@@ -77,32 +77,27 @@ impl ScriptTool {
             OsString::from("-c"),
             OsString::from(RUNNER),
         ];
-        let mut started = None;
-        // Windows has `python`; elsewhere it is `python3`.
-        for program in ["python3", "python"] {
-            let (program, args) = match &self.policy {
-                Some(policy) => {
-                    let wrapped = wrap(policy, &self.helper, std::path::Path::new(program), &args)
-                        .map_err(|e| e.to_string())?;
-                    (wrapped.program, wrapped.args)
-                }
-                None => (program.into(), args.clone()),
-            };
-            let spawned = tokio::process::Command::new(program)
-                .args(args)
-                .current_dir(&ctx.cwd)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn();
-            if let Ok(child) = spawned {
-                started = Some(child);
-                break;
+        // Asked rather than assumed: Windows has a `python3` that starts and
+        // runs nothing, and under the sandbox wrapper every name "starts".
+        let python = zcode_kernel::python_program()
+            .ok_or("Scripts need Python, and neither python3 nor python runs here.")?;
+        let (program, args) = match &self.policy {
+            Some(policy) => {
+                let wrapped = wrap(policy, &self.helper, std::path::Path::new(python), &args)
+                    .map_err(|e| e.to_string())?;
+                (wrapped.program, wrapped.args)
             }
-        }
-        let mut child = started
-            .ok_or("Scripts need Python, and neither python3 nor python could be started.")?;
+            None => (python.into(), args),
+        };
+        let mut child = tokio::process::Command::new(program)
+            .args(args)
+            .current_dir(&ctx.cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("Cannot start Python for the script: {e}"))?;
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let mut lines = BufReader::new(child.stdout.take().expect("stdout is piped")).lines();
         let send = |value: Value| format!("{value}\n");
