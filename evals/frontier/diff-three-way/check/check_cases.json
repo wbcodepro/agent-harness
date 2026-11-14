@@ -1,0 +1,2637 @@
+{
+"cases": [
+{
+"name": "ex1",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nb\nc\nd\n",
+"text": "a\nX\nc\nd\n",
+"conflicts": 0
+},
+{
+"name": "ex2",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"text": "a\n<<<<<<< ours\nX\n=======\nY\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "ex3",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nX\nc\nd\n",
+"theirs": "a\nb\nY\nd\n",
+"text": "a\n<<<<<<< ours\nX\nc\n||||||| base\nb\nc\n=======\nb\nY\n>>>>>>> theirs\nd\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "ex3m",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nX\nc\nd\n",
+"theirs": "a\nb\nY\nd\n",
+"text": "a\n<<<<<<< ours\nX\nc\n=======\nb\nY\n>>>>>>> theirs\nd\n",
+"conflicts": 1
+},
+{
+"name": "ex4m",
+"base": "a\nb\n",
+"ours": "a\np\nq\nr\nb\n",
+"theirs": "a\np\nz\nr\nb\n",
+"text": "a\np\n<<<<<<< ours\nq\n=======\nz\n>>>>>>> theirs\nr\nb\n",
+"conflicts": 1
+},
+{
+"name": "ex4d",
+"base": "a\nb\n",
+"ours": "a\np\nq\nr\nb\n",
+"theirs": "a\np\nz\nr\nb\n",
+"text": "a\n<<<<<<< ours\np\nq\nr\n||||||| base\n=======\np\nz\nr\n>>>>>>> theirs\nb\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "ex5",
+"base": "a\nb\nc\n",
+"ours": "a\nc\n",
+"theirs": "a\nc\n",
+"text": "a\nc\n",
+"conflicts": 0
+},
+{
+"name": "ex6",
+"base": "a\nb",
+"ours": "a\nb\n",
+"theirs": "A\nb",
+"text": "A\nb\n",
+"conflicts": 0
+},
+{
+"name": "ex7",
+"base": "x\n",
+"ours": "x  y\n",
+"theirs": "x y \n",
+"text": "x  y\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ex8",
+"base": "if a:\n",
+"ours": "if a:\n",
+"theirs": "if  a:\n",
+"text": "if  a:\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "canon1",
+"base": "b\na\na\n",
+"ours": "a\n",
+"theirs": "b\na\na\nq\n",
+"text": "a\n<<<<<<< ours\n=======\na\nq\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon1b",
+"base": "b\na\na\n",
+"ours": "a\n",
+"theirs": "b\na\nZ\n",
+"text": "a\n<<<<<<< ours\n=======\nZ\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon1c",
+"base": "b\na\na\n",
+"ours": "a\n",
+"theirs": "b\nZ\na\n",
+"text": "<<<<<<< ours\n=======\nb\nZ\n>>>>>>> theirs\na\n",
+"conflicts": 1
+},
+{
+"name": "canon2",
+"base": "x\ny\n",
+"ours": "y\nx\n",
+"theirs": "x\ny\nw\n",
+"text": "y\n<<<<<<< ours\nx\n=======\nw\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon2b",
+"base": "x\ny\n",
+"ours": "y\nx\n",
+"theirs": "w\nx\ny\n",
+"text": "<<<<<<< ours\n=======\nw\nx\n>>>>>>> theirs\ny\nx\n",
+"conflicts": 1
+},
+{
+"name": "canon3",
+"base": "a\n",
+"ours": "a\na\n",
+"theirs": "a\nb\n",
+"text": "a\n<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon3b",
+"base": "a\n",
+"ours": "a\na\n",
+"theirs": "b\na\n",
+"text": "b\na\na\n",
+"conflicts": 0
+},
+{
+"name": "canon4",
+"base": "a\nb\na\nb\na\n",
+"ours": "b\na\nb\n",
+"theirs": "a\nb\na\nb\na\nc\n",
+"text": "b\na\nb\n<<<<<<< ours\n=======\na\nc\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon5",
+"base": "a\nb\na\nb\na\n",
+"ours": "a\nb\na\nb\na\n",
+"theirs": "b\na\n",
+"text": "b\na\n",
+"conflicts": 0
+},
+{
+"name": "canon6",
+"base": "p\nq\np\nq\np\nq\n",
+"ours": "q\np\nq\np\n",
+"theirs": "p\np\nq\nq\n",
+"text": "<<<<<<< ours\nq\n||||||| base\np\nq\n=======\np\n>>>>>>> theirs\np\nq\n<<<<<<< ours\np\n||||||| base\np\nq\n=======\nq\n>>>>>>> theirs\n",
+"conflicts": 2,
+"style": "diff3"
+},
+{
+"name": "canon7",
+"base": "k\nk\nk\nk\n",
+"ours": "k\nk\n",
+"theirs": "k\nk\nk\nk\nk\n",
+"text": "k\nk\n<<<<<<< ours\n=======\nk\nk\nk\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon8",
+"base": "k\nk\nk\nk\n",
+"ours": "k\nx\nk\n",
+"theirs": "k\nk\ny\nk\nk\n",
+"text": "k\n<<<<<<< ours\nx\n||||||| base\nk\nk\n=======\nk\ny\nk\n>>>>>>> theirs\nk\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "canon9",
+"base": "a\nb\nc\na\nb\nc\n",
+"ours": "c\na\nb\n",
+"theirs": "a\nb\nc\na\nb\nc\nz\n",
+"text": "c\na\nb\n<<<<<<< ours\n=======\nc\nz\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "canon10",
+"base": "a\nb\nc\na\nb\nc\n",
+"ours": "a\nb\nc\nz\na\nb\nc\n",
+"theirs": "b\nc\na\n",
+"text": "b\nc\nz\na\n",
+"conflicts": 0
+},
+{
+"name": "sep_cr",
+"base": "a\rb\nc\n",
+"ours": "a\rb\nc\nd\n",
+"theirs": "A\rb\nc\n",
+"text": "A\rb\nc\nd\n",
+"conflicts": 0
+},
+{
+"name": "sep_ff",
+"base": "a\fb\nc\n",
+"ours": "a\fb\nc\nd\n",
+"theirs": "x\nc\n",
+"text": "x\nc\nd\n",
+"conflicts": 0
+},
+{
+"name": "sep_ls",
+"base": "a\u2028b\nc\nd\n",
+"ours": "a\u2028b\nc\nD\n",
+"theirs": "a\u2028B\nc\nd\n",
+"text": "a\u2028B\nc\nD\n",
+"conflicts": 0
+},
+{
+"name": "sep_nel",
+"base": "a\u0085b\n\u001cq\n",
+"ours": "a\u0085b\nmid\n\u001cq\n",
+"theirs": "a\u0085b\n\u001cq\nend\n",
+"text": "a\u0085b\nmid\n\u001cq\nend\n",
+"conflicts": 0
+},
+{
+"name": "sep_crlf",
+"base": "a\r\nb\r\nc\r\n",
+"ours": "a\r\nB\r\nc\r\n",
+"theirs": "a\r\nb\r\nc\r\nd\r\n",
+"text": "a\r\nB\r\nc\r\nd\r\n",
+"conflicts": 0
+},
+{
+"name": "sep_crlf_mixed",
+"base": "a\r\nb\n",
+"ours": "a\nb\n",
+"theirs": "a\r\nb\nc\n",
+"text": "a\nb\nc\n",
+"conflicts": 0
+},
+{
+"name": "sep_crlf_conf",
+"base": "a\r\n",
+"ours": "b\r\n",
+"theirs": "c\r\n",
+"text": "<<<<<<< ours\nb\r\n=======\nc\r\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "empty_lines",
+"base": "a\n\n\nb\n",
+"ours": "a\n\nb\n",
+"theirs": "a\n\n\nb\n\n",
+"text": "a\n\nb\n\n",
+"conflicts": 0
+},
+{
+"name": "only_nl",
+"base": "\n",
+"ours": "\n\n",
+"theirs": "\n",
+"text": "\n\n",
+"conflicts": 0
+},
+{
+"name": "only_nl2",
+"base": "\n",
+"ours": "",
+"theirs": "\n",
+"text": "",
+"conflicts": 0
+},
+{
+"name": "only_nl3",
+"base": "\n\n",
+"ours": "\n",
+"theirs": "\n\n\n",
+"text": "\n<<<<<<< ours\n=======\n\n\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "all_empty",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0
+},
+{
+"name": "base_empty_same",
+"base": "",
+"ours": "a\n",
+"theirs": "a\n",
+"text": "a\n",
+"conflicts": 0
+},
+{
+"name": "base_empty_diff",
+"base": "",
+"ours": "a\n",
+"theirs": "b\n",
+"text": "<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "base_empty_diff3",
+"base": "",
+"ours": "a\n",
+"theirs": "b\n",
+"text": "<<<<<<< ours\na\n||||||| base\n=======\nb\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "ours_empty",
+"base": "a\nb\n",
+"ours": "",
+"theirs": "a\nb\n",
+"text": "",
+"conflicts": 0
+},
+{
+"name": "theirs_empty_conf",
+"base": "a\nb\n",
+"ours": "a\nB\n",
+"theirs": "",
+"text": "<<<<<<< ours\na\nB\n=======\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "theirs_empty_conf3",
+"base": "a\nb\n",
+"ours": "a\nB\n",
+"theirs": "",
+"text": "<<<<<<< ours\na\nB\n||||||| base\na\nb\n=======\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "del_vs_mod",
+"base": "a\nb\nc\n",
+"ours": "a\nc\n",
+"theirs": "a\nB\nc\n",
+"text": "a\n<<<<<<< ours\n=======\nB\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "mod_vs_del",
+"base": "a\nb\nc\n",
+"ours": "a\nB\nc\n",
+"theirs": "a\nc\n",
+"text": "a\n<<<<<<< ours\nB\n=======\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "fn1",
+"base": "a",
+"ours": "a",
+"theirs": "a",
+"text": "a",
+"conflicts": 0
+},
+{
+"name": "fn2",
+"base": "a",
+"ours": "a\n",
+"theirs": "a",
+"text": "a\n",
+"conflicts": 0
+},
+{
+"name": "fn3",
+"base": "a\n",
+"ours": "a\n",
+"theirs": "a",
+"text": "a",
+"conflicts": 0
+},
+{
+"name": "fn4",
+"base": "a\n",
+"ours": "a",
+"theirs": "a",
+"text": "a",
+"conflicts": 0
+},
+{
+"name": "fn5",
+"base": "a",
+"ours": "a\n",
+"theirs": "a\n",
+"text": "a\n",
+"conflicts": 0
+},
+{
+"name": "fn6",
+"base": "",
+"ours": "a",
+"theirs": "a\n",
+"text": "a",
+"conflicts": 0
+},
+{
+"name": "fn7",
+"base": "",
+"ours": "a\n",
+"theirs": "a",
+"text": "a",
+"conflicts": 0
+},
+{
+"name": "fn8",
+"base": "",
+"ours": "a",
+"theirs": "",
+"text": "a",
+"conflicts": 0
+},
+{
+"name": "fn9",
+"base": "x",
+"ours": "",
+"theirs": "x\ny",
+"text": "<<<<<<< ours\n=======\nx\ny\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "fn10",
+"base": "a\nb",
+"ours": "a\nB",
+"theirs": "a\nb\nc\n",
+"text": "a\n<<<<<<< ours\nB\n=======\nb\nc\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "fn11",
+"base": "a\nb",
+"ours": "a\nB",
+"theirs": "a\nC",
+"text": "a\n<<<<<<< ours\nB\n=======\nC\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "fn12",
+"base": "a\nb",
+"ours": "a\nB\nz",
+"theirs": "a\nC\nz",
+"text": "a\n<<<<<<< ours\nB\n=======\nC\n>>>>>>> theirs\nz",
+"conflicts": 1
+},
+{
+"name": "fn13",
+"base": "a\nb\n",
+"ours": "a\nB\nz",
+"theirs": "a\nC\nz\n",
+"text": "a\n<<<<<<< ours\nB\n=======\nC\n>>>>>>> theirs\nz",
+"conflicts": 1
+},
+{
+"name": "fn14",
+"base": "a\nb",
+"ours": "a\nB\nz",
+"theirs": "a\nC\nz",
+"text": "a\n<<<<<<< ours\nB\nz\n||||||| base\nb\n=======\nC\nz\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "fn15",
+"base": "a\nb",
+"ours": "a\nb",
+"theirs": "",
+"text": "",
+"conflicts": 0
+},
+{
+"name": "fn16",
+"base": "q\n",
+"ours": "q",
+"theirs": "q\nr\n",
+"text": "q\nr",
+"conflicts": 0
+},
+{
+"name": "fn17",
+"base": "q",
+"ours": "q\n",
+"theirs": "p\nq",
+"text": "p\nq\n",
+"conflicts": 0
+},
+{
+"name": "lab1",
+"base": "a\n",
+"ours": "b\n",
+"theirs": "c\n",
+"text": "<<<<<<<\nb\n=======\nc\n>>>>>>>\n",
+"conflicts": 1,
+"labels": [
+"",
+"",
+""
+]
+},
+{
+"name": "lab2",
+"base": "a\n",
+"ours": "b\n",
+"theirs": "c\n",
+"text": "<<<<<<< HEAD\nb\n||||||| \u00e4ncestor x\na\n=======\nc\n>>>>>>> feature/x y\n",
+"conflicts": 1,
+"labels": [
+"HEAD",
+"\u00e4ncestor x",
+"feature/x y"
+],
+"style": "diff3"
+},
+{
+"name": "lab3",
+"base": "a\n",
+"ours": "b\n",
+"theirs": "c\n",
+"text": "<<<<<<< o\nb\n|||||||\na\n=======\nc\n>>>>>>>  t\n",
+"conflicts": 1,
+"labels": [
+"o",
+"",
+" t"
+],
+"style": "diff3"
+},
+{
+"name": "lab4",
+"base": "a\n",
+"ours": "b\n",
+"theirs": "c\n",
+"text": "<<<<<<< o\nb\n=======\nc\n>>>>>>> t\n",
+"conflicts": 1,
+"labels": [
+"o",
+"unused",
+"t"
+]
+},
+{
+"name": "mk1",
+"base": "a\n=======\nb\n",
+"ours": "a\n=======\nB\n",
+"theirs": "A\n=======\nb\n",
+"text": "A\n=======\nB\n",
+"conflicts": 0
+},
+{
+"name": "mk2",
+"base": "<<<<<<< ours\n",
+"ours": ">>>>>>> theirs\n",
+"theirs": "=======\n",
+"text": "<<<<<<< ours\n>>>>>>> theirs\n=======\n=======\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "trim1",
+"base": "a\nm\nz\n",
+"ours": "a\np\nq\nr\ns\nz\n",
+"theirs": "a\np\nX\nr\ns\nz\n",
+"text": "a\np\n<<<<<<< ours\nq\n=======\nX\n>>>>>>> theirs\nr\ns\nz\n",
+"conflicts": 1
+},
+{
+"name": "trim2",
+"base": "a\nm\nz\n",
+"ours": "a\np\np\np\nz\n",
+"theirs": "a\np\np\nz\n",
+"text": "a\np\np\n<<<<<<< ours\np\n=======\n>>>>>>> theirs\nz\n",
+"conflicts": 1
+},
+{
+"name": "trim2d",
+"base": "a\nm\nz\n",
+"ours": "a\np\np\np\nz\n",
+"theirs": "a\np\np\nz\n",
+"text": "a\n<<<<<<< ours\np\np\np\n||||||| base\nm\n=======\np\np\n>>>>>>> theirs\nz\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "trim3",
+"base": "a\nm\nz\n",
+"ours": "a\np\nq\np\nz\n",
+"theirs": "a\np\nz\n",
+"text": "a\np\n<<<<<<< ours\nq\np\n=======\n>>>>>>> theirs\nz\n",
+"conflicts": 1
+},
+{
+"name": "trim4",
+"base": "m\n",
+"ours": "x\ny\nx\n",
+"theirs": "x\n",
+"text": "x\n<<<<<<< ours\ny\nx\n=======\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "trim5",
+"base": "m\n",
+"ours": "x\n",
+"theirs": "x\ny\nx\n",
+"text": "x\n<<<<<<< ours\n=======\ny\nx\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "trim6",
+"base": "m",
+"ours": "p\nq",
+"theirs": "p\nr\nq",
+"text": "p\n<<<<<<< ours\n=======\nr\n>>>>>>> theirs\nq",
+"conflicts": 1
+},
+{
+"name": "trim7",
+"base": "a\nb\nc\nd\ne\n",
+"ours": "a\nX\nc\nY\ne\n",
+"theirs": "a\nX\nc\nZ\ne\n",
+"text": "a\nX\nc\n<<<<<<< ours\nY\n=======\nZ\n>>>>>>> theirs\ne\n",
+"conflicts": 1
+},
+{
+"name": "trim8",
+"base": "a\nb\nc\nd\ne\n",
+"ours": "a\nX\nc\nY\ne\n",
+"theirs": "a\nW\nc\nY\ne\n",
+"text": "a\n<<<<<<< ours\nX\n=======\nW\n>>>>>>> theirs\nc\nY\ne\n",
+"conflicts": 1
+},
+{
+"name": "trim9",
+"base": "a\nb\nc\nd\ne\n",
+"ours": "a\nX\nd\ne\n",
+"theirs": "a\nb\nc\nY\ne\n",
+"text": "a\n<<<<<<< ours\nX\nd\n=======\nb\nc\nY\n>>>>>>> theirs\ne\n",
+"conflicts": 1
+},
+{
+"name": "adj1",
+"base": "a\nb\nc\nd\ne\nf\n",
+"ours": "a\nB\nc\nd\ne\nf\n",
+"theirs": "a\nb\nC\nd\ne\nf\n",
+"text": "a\n<<<<<<< ours\nB\nc\n=======\nb\nC\n>>>>>>> theirs\nd\ne\nf\n",
+"conflicts": 1
+},
+{
+"name": "adj2",
+"base": "a\nb\nc\nd\ne\nf\n",
+"ours": "a\nB\nc\nd\ne\nf\n",
+"theirs": "a\nb\nc\nD\ne\nf\n",
+"text": "a\nB\nc\nD\ne\nf\n",
+"conflicts": 0
+},
+{
+"name": "adj3",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nb\nn\nc\nd\n",
+"theirs": "a\nb\nC\nd\n",
+"text": "a\nb\n<<<<<<< ours\nn\nc\n=======\nC\n>>>>>>> theirs\nd\n",
+"conflicts": 1
+},
+{
+"name": "adj4",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nb\nn\nc\nd\n",
+"theirs": "a\nB\nc\nd\n",
+"text": "a\n<<<<<<< ours\nb\nn\n=======\nB\n>>>>>>> theirs\nc\nd\n",
+"conflicts": 1
+},
+{
+"name": "adj5",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nn\nb\nc\nd\n",
+"theirs": "a\nb\nc\nd\nn\n",
+"text": "a\nn\nb\nc\nd\nn\n",
+"conflicts": 0
+},
+{
+"name": "adj6",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nc\nd\n",
+"theirs": "a\nb\nn\nc\nd\n",
+"text": "a\n<<<<<<< ours\n=======\nb\nn\n>>>>>>> theirs\nc\nd\n",
+"conflicts": 1
+},
+{
+"name": "adj7",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nc\nd\n",
+"theirs": "a\nb\nc\nn\nd\n",
+"text": "a\nc\nn\nd\n",
+"conflicts": 0
+},
+{
+"name": "ident1",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nX\nY\nd\n",
+"theirs": "a\nX\nY\nd\n",
+"text": "a\nX\nY\nd\n",
+"conflicts": 0
+},
+{
+"name": "ident2",
+"base": "a\nb\nc\nd\n",
+"ours": "a\nX\nY\nd\nq\n",
+"theirs": "a\nX\nY\nd\n",
+"text": "a\nX\nY\nd\nq\n",
+"conflicts": 0
+},
+{
+"name": "dup1",
+"base": "a\na\na\n",
+"ours": "a\na\n",
+"theirs": "a\na\na\na\n",
+"text": "a\na\n<<<<<<< ours\n=======\na\na\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "dup2",
+"base": "f\n}\ng\n}\nh\n}\n",
+"ours": "f\n}\nh\n}\n",
+"theirs": "f\n}\ng\nx\n}\nh\n}\n",
+"text": "f\n}\n<<<<<<< ours\n=======\ng\nx\n}\n>>>>>>> theirs\nh\n}\n",
+"conflicts": 1
+},
+{
+"name": "dup3",
+"base": "f\n}\ng\n}\nh\n}\n",
+"ours": "f\n}\ng\n}\nn\n}\nh\n}\n",
+"theirs": "f\n}\nh\n}\n",
+"text": "f\n}\n<<<<<<< ours\ng\n}\nn\n}\n||||||| base\ng\n}\n=======\n>>>>>>> theirs\nh\n}\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "ws1",
+"base": "a b\nc\n",
+"ours": "a  b\nc\n",
+"theirs": "a b\nC\n",
+"text": "a  b\nC\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws2",
+"base": "a b\nc\n",
+"ours": "a  b\nc\n",
+"theirs": "a\tb \nc\n",
+"text": "a  b\nc\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws3",
+"base": "a b\nc\n",
+"ours": "a b\nc\n",
+"theirs": " a b\nc\n",
+"text": " a b\nc\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws4",
+"base": "ab\n",
+"ours": "a b\n",
+"theirs": "ab\n",
+"text": "a b\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws5",
+"base": "ab\n",
+"ours": "a b\n",
+"theirs": "a  b\n",
+"text": "a b\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws6",
+"base": "ab\n",
+"ours": "a b\n",
+"theirs": "a c\n",
+"text": "<<<<<<< ours\na b\n=======\na c\n>>>>>>> theirs\n",
+"conflicts": 1,
+"ignore_ws": true
+},
+{
+"name": "ws7",
+"base": "a\u00a0b\nq\n",
+"ours": "a\u00a0b\nq\n",
+"theirs": "a b\nq\n",
+"text": "a b\nq\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws8",
+"base": "a\u00a0b\n",
+"ours": "a\u00a0\u00a0b\n",
+"theirs": "a b\n",
+"text": "<<<<<<< ours\na\u00a0\u00a0b\n=======\na b\n>>>>>>> theirs\n",
+"conflicts": 1,
+"ignore_ws": true
+},
+{
+"name": "ws9",
+"base": "x\fy\nq\n",
+"ours": "x\f\fy\nq\n",
+"theirs": "x y\nq\n",
+"text": "<<<<<<< ours\nx\f\fy\n=======\nx y\n>>>>>>> theirs\nq\n",
+"conflicts": 1,
+"ignore_ws": true
+},
+{
+"name": "ws10",
+"base": "x\u3000y\n",
+"ours": "x\u3000y \n",
+"theirs": "\u3000x\u3000y\n",
+"text": "\u3000x\u3000y\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws11",
+"base": "a\r\nb\r\n",
+"ours": "a\nb\nc\n",
+"theirs": "a\r\nB\r\n",
+"text": "a\n<<<<<<< ours\nb\nc\n=======\nB\r\n>>>>>>> theirs\n",
+"conflicts": 1,
+"ignore_ws": true
+},
+{
+"name": "ws12",
+"base": "a\r\nb\r\n",
+"ours": "a\r\nb\r\n",
+"theirs": "a\nb\n",
+"text": "a\nb\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws13",
+"base": "  \n\t\nx\n",
+"ours": "\n\nx\n",
+"theirs": "  \n\t\nx\ny\n",
+"text": "\n\nx\ny\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws14",
+"base": "a\nb c\nd\n",
+"ours": "a\nb  c\nd\n",
+"theirs": "a\nX\nd\n",
+"text": "a\nX\nd\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws15",
+"base": "a\nb c\nd\n",
+"ours": "a\nX\nd\n",
+"theirs": "a\nb  c\nd\n",
+"text": "a\nX\nd\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws16",
+"base": "a\nb c\nd\n",
+"ours": "a\n b c\nd\n",
+"theirs": "a\nb c \nd\n",
+"text": "a\n b c\nd\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws17",
+"base": "m\n",
+"ours": "p q\nr\ns t\n",
+"theirs": "p  q\nX\ns  t\n",
+"text": "p q\n<<<<<<< ours\nr\n=======\nX\n>>>>>>> theirs\ns t\n",
+"conflicts": 1,
+"ignore_ws": true
+},
+{
+"name": "ws18",
+"base": "m\n",
+"ours": "p q\nr\ns t\n",
+"theirs": "p  q\nX\ns  t\n",
+"text": "<<<<<<< ours\np q\nr\ns t\n||||||| base\nm\n=======\np  q\nX\ns  t\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "ws19",
+"base": "a\u000bb\n",
+"ours": "a\u000b b\n",
+"theirs": "a\u000bb\n",
+"text": "a\u000b b\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws20",
+"base": "k = 1\n",
+"ours": "k  =  1",
+"theirs": "k = 1\n",
+"text": "k  =  1",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws21",
+"base": " a\n",
+"ours": "a \n",
+"theirs": "\ta\n",
+"text": "a \n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws22",
+"base": "a\nb\n",
+"ours": "a\n\nb\n",
+"theirs": "a\n \t\nb\n",
+"text": "a\n\nb\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "ws23",
+"base": "a b\n",
+"ours": "a  b\n",
+"theirs": "a b\n",
+"text": "a  b\n",
+"conflicts": 0,
+"ignore_ws": true
+},
+{
+"name": "nows1",
+"base": "a b\nc\n",
+"ours": "a  b\nc\n",
+"theirs": "a\tb\nc\n",
+"text": "<<<<<<< ours\na  b\n=======\na\tb\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "nows2",
+"base": "a b\nc\n",
+"ours": "a  b\nc\n",
+"theirs": "a b\nC\n",
+"text": "<<<<<<< ours\na  b\nc\n=======\na b\nC\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "gen000",
+"base": "b\na\nb\n",
+"ours": "b\nb\n",
+"theirs": "b\na\na\nb\n",
+"text": "b\n<<<<<<< ours\n=======\na\na\n>>>>>>> theirs\nb\n",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen001",
+"base": "f\nc",
+"ours": "f\nc",
+"theirs": "f\nc\n",
+"text": "f\nc\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen002",
+"base": "b\nc\n",
+"ours": " b\r\nc\n",
+"theirs": "b\nc\n",
+"text": " b\r\nc\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen003",
+"base": "a b\n",
+"ours": "",
+"theirs": "a b",
+"text": "",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen004",
+"base": "y\ny\n}\n}\n\nx\n}\nx\nx\nx\n\nx\ny\n}\nx\n}\ny\n\nx\ny\ny\n\nx\nx\n}\n\nx\ny\nx\ny\nx\ny\nx\ny\ny\n\n\n}\ny\n}\n\n}\n}\n\ny\n",
+"ours": "y\n\n\ny\n\n}\n}\ny\nx\nx\n\ny\nx\n\n}\ny\ny\ny\ny\ny\nx\n}\ny\ny\nx\nx\ny\ny\nx\ny\n}\ny\n\n\n\n}\ny\ny\n}\n}\nx\n\n}\n",
+"theirs": "y\ny\n\nx\nx\n}\n\nx\n}\nx\nx\nx\n\nx\ny\n}\nx\ny\n}\nx\ny\n\nx\nx\ny\ny\n\nx\n}\n\nx\ny\ny\n\nx\ny\nx\ny\ny\n\n\n}\ny\n\n\n}\n}\n\n\n",
+"text": "y\n\n\ny\n<<<<<<< ours\n=======\n\nx\nx\n}\n>>>>>>> theirs\n\n}\n}\ny\nx\nx\n\ny\nx\n<<<<<<< ours\n\n=======\ny\n>>>>>>> theirs\n}\nx\ny\n<<<<<<< ours\n=======\n\nx\nx\n>>>>>>> theirs\ny\ny\n<<<<<<< ours\ny\ny\n=======\n\n>>>>>>> theirs\nx\n}\ny\ny\n\nx\nx\ny\ny\nx\ny\n}\ny\n\n\n\n}\ny\n<<<<<<< ours\ny\n=======\n\n\n>>>>>>> theirs\n}\n}\nx\n\n<<<<<<< ours\n}\n=======\n\n>>>>>>> theirs\n",
+"conflicts": 6,
+"style": "merge"
+},
+{
+"name": "gen005",
+"base": "a b\nf g h\n\nc d\ne\nf g h\n\n\nf g h\ne\nf g h\nc d\nf g h\nc d\nf g h\nf g h\n\na b\na b\n\ne\nc d\nf g h\n\n\n\na b\na b\nf g h\nf g h",
+"ours": "a b\nf g h\nf g h\nc d\ne\n\n\nf g h\nc d\nf g h\nc d\nf g h\nc d\nf g h\nf g h\n\n\na b\n\ne\nc\td\nf g h\n\n\n\n a  b \na b\nf g h\n\tf  g  h\n",
+"theirs": "\na b\nf g h\nc d\n \n\n\tf\tg\th \n\n\nf g h\nc d\nf g h\nc d\nc d\n\nf g h\nc d\nf g h\nf g h\na b\n\ne\nc d\n\nf g h\ne\ne\na b\na b\nf g h\n\tf  g  h\r\n",
+"text": "\na b\nf g h\n<<<<<<< ours\nf g h\n||||||| base\n\n=======\n>>>>>>> theirs\nc d\n<<<<<<< ours\ne\n||||||| base\ne\nf g h\n=======\n \n\n\tf\tg\th \n>>>>>>> theirs\n\n\nf g h\nc d\nf g h\nc d\nc d\n\nf g h\nc d\nf g h\nf g h\n<<<<<<< ours\n\n\na b\n||||||| base\n\na b\na b\n=======\na b\n>>>>>>> theirs\n\ne\nc\td\n\nf g h\ne\ne\n a  b \na b\nf g h\n\tf  g  h\n",
+"conflicts": 3,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen006",
+"base": "a\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na b\n\ud83d\ude00\na b\nz\n\ud83d\ude00\n\u00e9\n",
+"ours": "a\u00a0b\n\u00e9\na\u00a0b\n\t\ud83d\ude00\nz\n\u00e9\n\ud83d\ude00\nz\na b\n\ud83d\ude00\n\u00e9\na b\nz\n\t\ud83d\ude00\n\u00e9\n",
+"theirs": "a\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\na b\n\ud83d\ude00\na b\nz\nz\n\u00e9",
+"text": "a\u00a0b\n\u00e9\na\u00a0b\n\t\ud83d\ude00\n<<<<<<< ours\nz\n\u00e9\n||||||| base\n\u00e9\n=======\n>>>>>>> theirs\n\ud83d\ude00\nz\na b\n\ud83d\ude00\n\u00e9\na b\nz\nz\n\u00e9",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen007",
+"base": "f g h\n\ne\n\ne\nf g h\nf g h\nc d\nf g h\ne\nc d\n\n",
+"ours": "f g h\na b\n\ne\n\ne\ne\nf g h\ne\nc d\ne\n\n\n",
+"theirs": "e\nf g h\ne\nc d\nf g h\nc d\ne\nf g h\nc d\n\n",
+"text": "<<<<<<< ours\nf g h\na b\n\n||||||| base\nf g h\n\n=======\n>>>>>>> theirs\ne\n<<<<<<< ours\n\ne\ne\n||||||| base\n\ne\nf g h\nf g h\nc d\n=======\nf g h\ne\nc d\n>>>>>>> theirs\nf g h\nc d\ne\nf g h\nc d\ne\n\n\n",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen008",
+"base": "a b\nz\n\u00e9\n",
+"ours": "a b\nz\n\u00e9\n",
+"theirs": "a\u00a0b\n\u00e9\n",
+"text": "a\u00a0b\n\u00e9\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen009",
+"base": "e\nb\nc",
+"ours": "e\nb\nc",
+"theirs": "h\ne\nb\nc\na\n",
+"text": "h\ne\nb\nc\na\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen010",
+"base": "c\nc\na\nb\na\n",
+"ours": "c\nb\n\ta \nb\na\n a\n",
+"theirs": " c\nc\na\nc\na\n",
+"text": "<<<<<<< ours\nc\nb\n\ta \nb\n=======\n c\nc\na\nc\n>>>>>>> theirs\na\n a\n",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": false
+},
+{
+"name": "gen011",
+"base": "",
+"ours": "b\n",
+"theirs": "",
+"text": "b\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": false
+},
+{
+"name": "gen012",
+"base": "b\nc\nb\na\na\nc\nc\na\nc\nc\nc\nb\na\nb\na\nb\na\nc\na\nc\n",
+"ours": "a\na\na\na\nc\nc\na\nc\nc\na\n b\r\nb\nb\na \nc\nc\nc\n\ta\nc\n",
+"theirs": "b\nc\n\ta \na\nc\nc\nc\na\nb\nc\nc\n b\na\nb\na\nb\nc\na\nc\n",
+"text": "<<<<<<< ours\n||||||| base\nb\nc\nb\n=======\nb\nc\n>>>>>>> theirs\n\ta \na\na\na\nc\nc\nc\na\nb\nc\na\n b\r\nb\n<<<<<<< ours\nb\na \n||||||| base\na\n=======\n>>>>>>> theirs\nc\nc\nc\n\ta\nc\n",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen013",
+"base": "",
+"ours": "",
+"theirs": "y\n",
+"text": "y\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen014",
+"base": "b\na\nc\nc\nc\n",
+"ours": "a\nb\nc\na\nc\nc\nc\nb\nc\na\na\n",
+"theirs": "b\nc\nc\n\tc\n",
+"text": "a\nb\n<<<<<<< ours\nc\na\n=======\n>>>>>>> theirs\nc\nc\n\tc\nb\nc\na\na\n",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen015",
+"base": "c d\ne\ne\nc d\nc d\n",
+"ours": "e\na b\ne\nc d",
+"theirs": "a b\ne\na b\nc d\nc d\n",
+"text": "<<<<<<< ours\ne\na b\n||||||| base\nc d\ne\n=======\na b\n>>>>>>> theirs\ne\na b\nc d",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "gen016",
+"base": "y\ny\n\n\n\n}\n}\ny\nx\n}\n}\nx\ny\ny\n}\n}\n\nx\n\n}\n\nx\n\ny\nx\n\n\n\n\ny",
+"ours": "y\ny\n\n\n}\n\ny\n } \n}\ny\nx\n}\n}\ny\n}\n}\n\nx\n\n}\n}\n\nx\n\ny\nx\n}\n\n\n\n}",
+"theirs": "x\ny\n\n\nx\n\n}\nx\ny\n}\ny\nx\ny\r\n}\n\nx\n\nx\n}\ny\nx\nx\ny\ny\nx\n}\n\n}\n\n",
+"text": "x\ny\n\n\n<<<<<<< ours\n}\n=======\nx\n>>>>>>> theirs\n\ny\n } \nx\ny\n}\ny\n<<<<<<< ours\n=======\nx\ny\r\n>>>>>>> theirs\n}\n\nx\n\nx\n}\n<<<<<<< ours\n}\n\n=======\ny\n>>>>>>> theirs\nx\nx\ny\ny\nx\n}\n<<<<<<< ours\n\n=======\n>>>>>>> theirs\n\n}\n\n<<<<<<< ours\n}\n=======\n>>>>>>> theirs\n",
+"conflicts": 5,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen017",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen018",
+"base": "a\nb\nb\na\nb\n",
+"ours": "a\nb\nb\na\nb\nb\n",
+"theirs": " a \nb\nb\na\nb\n",
+"text": " a \nb\nb\na\nb\nb\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen019",
+"base": "e\nb\nb\ne\nd\na\nh\nd\nh\na\nd\nc\nf\ng\nc\nd\nc\nc\na\nf\ng\nh\nc\nf\ng\nf\ng\na\nc\na\n",
+"ours": "e\nb\n\tb\ne\nd\na\nh\nd\nh\na\nd\nb\nf\ng\nc\nd\nc\nc\na\nf\ng\ng\nh\nc\nf\ng\nf\ng\na\nc\na\n",
+"theirs": "g\nb\nb\nb\nb\ne\nf\nd\nh\n\td\nd\nh\r\na\nh\nc\nf\nf\nb\nc\nd\nd\nf\nb\nh\nc\nf\r\ng\ng\nf\na\nc\na\n",
+"text": "g\nb\n\tb\nb\nb\ne\nf\nd\nh\n\td\nd\nh\r\na\n<<<<<<< ours\nd\nb\n||||||| base\nd\nc\n=======\nh\nc\n>>>>>>> theirs\nf\nf\nb\nc\nd\nd\nf\n<<<<<<< ours\ng\ng\n||||||| base\ng\n=======\nb\n>>>>>>> theirs\nh\nc\nf\r\ng\ng\nf\na\nc\na\n",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen020",
+"base": "c d\na b\nf g h\n",
+"ours": "c d\na b\nf g h\n",
+"theirs": "c d\na b\nf g h\n",
+"text": "c d\na b\nf g h\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen021",
+"base": "a\na\n",
+"ours": "a\n\ta\r",
+"theirs": "a\na",
+"text": "a\n\ta\r",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen022",
+"base": "\n",
+"ours": "\n",
+"theirs": "\n",
+"text": "\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen023",
+"base": "e\nh\ng\nb\nc\nc\nh\nb\nf\ne\nf\ng\nh\nb\nh\nb\ne\nf\nb\na\ng\nf\nc\nf\nh\nh\nd\nd\nc\nd\ng\nc\nd\na\nb\ng\ng\nf\ng\na\nf\nb\ne\ng\ng\n",
+"ours": "e\nh\ng\nb\nd\nc\nf\nb\nf\nb\nb\nh\ne\nb\nb\nb\nd\ne\na\nb\na\ng\ng\nf\nc\nf\ne\nh\nh\nd\nd\nc\nb\na\nc\ng\nf\nh\ng\na\nf\nb\nd\ne\ne\ng",
+"theirs": "a\ne\nf\nh\ng\nb\nc\nc\nh\nb\nf\nf\ng\nh\nb\nd\ne\nf\nb\na\ne\ng\nf\nc\nf\ng\nh\nh\nd\nd\nc\nd\ng\nc\nd\na\nb\ng\ng\nf\nd\na\nf\nb\ne\ng\ng\n",
+"text": "a\ne\nf\nh\ng\nb\nd\nc\nf\n<<<<<<< ours\nb\n=======\n>>>>>>> theirs\nf\nb\n<<<<<<< ours\nb\nh\ne\nb\nb\nb\n=======\n>>>>>>> theirs\nd\ne\na\nb\na\ne\ng\ng\nf\nc\nf\n<<<<<<< ours\ne\n=======\ng\n>>>>>>> theirs\nh\nh\nd\nd\nc\nb\na\nc\ng\nf\n<<<<<<< ours\nh\ng\n=======\nd\n>>>>>>> theirs\na\nf\nb\nd\ne\ne\ng",
+"conflicts": 4,
+"style": "merge"
+},
+{
+"name": "gen024",
+"base": "d\nh\n",
+"ours": "d\nh\n",
+"theirs": "d\nh\n",
+"text": "d\nh\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen025",
+"base": "e",
+"ours": "e\n",
+"theirs": "e\n",
+"text": "e\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen026",
+"base": "a b\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\n\ud83d\ude00\nz\n\ud83d\ude00\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\na\u00a0b\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\na b\nz\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na b\nz\na b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na\u00a0b\nz\na b\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\na b\n\u00e9\n\ud83d\ude00\na b\na\u00a0b\nz",
+"ours": "a b\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\n\ud83d\ude00\nz\n\ud83d\ude00\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\na\u00a0b\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\na b\na b\nz\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na b\nz\na b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na\u00a0b\nz\na b\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\na b\n\u00e9\n\ud83d\ude00\na b\na\u00a0b\nz",
+"theirs": "a b\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\nz\n\ud83d\ude00\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\na\u00a0b\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\na b\nz\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na b\nz\na b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na\u00a0b\nz\na b\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\na b\n\u00e9\n\ud83d\ude00\na b\na\u00a0b\nz\n",
+"text": "a b\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\nz\n\ud83d\ude00\n\u00e9\na\u00a0b\n\u00e9\n\ud83d\ude00\na\u00a0b\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\na b\na b\nz\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na b\nz\na b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\na\u00a0b\nz\na b\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\na b\n\u00e9\n\ud83d\ude00\na b\na\u00a0b\nz\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen027",
+"base": "b\nb\nb\na\na\nb\nb\nb\na\nb\na\nb\nb\na\nb\na\nb\nb\na\na\nb\nb\nb\nb\nb\nb\na\nb\na\na\n",
+"ours": "b\nb\nb\nb\nb\na\nb\na\nb\nb\na\na\nb\nb\nb\na\nb\nb\nb\na\na\nb\nb\nb\na\nb\nb\nb\nb\na\nb\na\nb\na\nb\n",
+"theirs": "a\nb\na\nb\nb\nb\na\na\nb\na\nb\nb\na\nb\na\nb\na\nb\nb\na\nb\na\na\na\nb\nb\nb\nb\nb\na\nb\na\nb",
+"text": "a\nb\na\nb\nb\n<<<<<<< ours\n||||||| base\na\na\n=======\nb\na\na\n>>>>>>> theirs\nb\na\nb\na\nb\na\nb\na\na\nb\n<<<<<<< ours\nb\nb\na\n||||||| base\na\n=======\n>>>>>>> theirs\nb\na\nb\nb\na\na\na\nb\nb\na\nb\nb\nb\nb\na\nb\na\n<<<<<<< ours\nb\na\nb\n||||||| base\na\n=======\nb\n>>>>>>> theirs\n",
+"conflicts": 3,
+"style": "diff3"
+},
+{
+"name": "gen028",
+"base": "a b\ne\n",
+"ours": "a b\ne",
+"theirs": "a b\na b\ne\n",
+"text": "a b\na b\ne",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen029",
+"base": "c\nc\na\na\na\nb\na\na\nb\nc\na\nb\na\nb\nb\nc\na\nc\na\nc\nc\nb\na\nb\na\na\nc\na\na\nb\n",
+"ours": "c\na\na\na\na\na\na\nb\na\na\na\nb\nb\nc\na\nc\na\nc\nc\nb\na\nb\na\na\nc\na\na\n",
+"theirs": "c\na\na\nc\na\nb\nb\nb\nc\na\nb\nc\nb\na\nc\na\nb\nb\nc\na\nc\na\na\nc\na\nb\nb\na\nc\na\na\nb\nb",
+"text": "c\na\na\nc\na\n<<<<<<< ours\na\na\n||||||| base\nb\na\na\nb\nc\n=======\nb\nb\nb\nc\n>>>>>>> theirs\na\nb\nc\nb\na\n<<<<<<< ours\na\na\n||||||| base\n=======\nc\na\n>>>>>>> theirs\nb\nb\nc\na\nc\na\na\nc\na\nb\nb\na\nc\na\na\n<<<<<<< ours\n||||||| base\nb\n=======\nb\nb\n>>>>>>> theirs\n",
+"conflicts": 3,
+"style": "diff3"
+},
+{
+"name": "gen030",
+"base": "\nc d\n\n",
+"ours": "a b\nc d\n",
+"theirs": "\nc d\ne\n\n",
+"text": "a b\nc d\n<<<<<<< ours\n=======\ne\n\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen031",
+"base": "f g h\nc d\nf g h\na b\n\n\na b\ne\ne\na b\ne\nc d\nf g h\ne\n\ne\n\n\na b\n\na b\nf g h\nc d\nc d\nc d\n\nf g h\nf g h\na b\nf g h\nf g h\nf g h\ne\ne\ne\nf g h\n\nc d\nf g h\n\nf g h\nf g h\nf g h\nf g h\nc d\n",
+"ours": "f g h\nc d\nf g h\na b\n\n\na b\ne\ne\na b\ne\nf g h\nc d\n\ne\n\n\na b\nf g h\n\na b\nf g h\nc d\n\nc d\nf g h\na b\nf g h\nf g h\nf g h\ne\ne\ne\nf g h\n\nc d\nf g h\n\nf g h\nf g h\nf g h\nf g h\nc d\n",
+"theirs": "f g h\nc d\nf g h\na b\n\n\na b\ne\ne\na b\ne\nc d\nf g h\ne\n\ne\n\n\na b\n\na b\nf g h\nc d\ne\nc d\nc d\n\nf g h\nf g h\na b\na b\nf g h\nf g h\ne\ne\ne\nf g h\n\nc d\nf g h\n\nf g h\nf g h\nf g h\nf g h\nc d\n",
+"text": "f g h\nc d\nf g h\na b\n\n\na b\ne\ne\na b\ne\nf g h\nc d\n\ne\n\n\na b\nf g h\n\na b\nf g h\nc d\n<<<<<<< ours\n=======\ne\nc d\nc d\n>>>>>>> theirs\n\nc d\nf g h\na b\na b\nf g h\nf g h\ne\ne\ne\nf g h\n\nc d\nf g h\n\nf g h\nf g h\nf g h\nf g h\nc d\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen032",
+"base": "b\nb\n",
+"ours": "b\nb\n",
+"theirs": "b\ne\nb\n",
+"text": "b\ne\nb\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen033",
+"base": "y\ny\ny",
+"ours": "}\ny\ny\ny\ny\n",
+"theirs": "y\ny\nx\ny\n",
+"text": "}\ny\ny\nx\ny\ny\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen034",
+"base": "z\n\u00e9\na\u00a0b\n",
+"ours": "z\n\u00e9\n",
+"theirs": "\u00e9\na\u00a0b\n",
+"text": "\u00e9\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen035",
+"base": "b\na\na\nb\na\nb\nb\na\na\na\nb\na\nb\na\na\nb\na\nb\na\nb\n",
+"ours": "b\na\na\nb\na\nb\nb\na\na\na\nb\na\nb\na\na\nb\na\nb\na\nb",
+"theirs": "b\na\na\nb\na\na\nb\na\na\na\nb\na\nb\na\na\nb\na\nb\na\nb\n",
+"text": "b\na\na\nb\na\na\nb\na\na\na\nb\na\nb\na\na\nb\na\nb\na\nb",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen036",
+"base": "h\nh\nc\ne\nc\nd\ne\nd\n",
+"ours": "d\nh\nh\n c \ne\nf\nc\nd\nb\nd",
+"theirs": "h\ng\na\nd\r\n",
+"text": "d\nh\n<<<<<<< ours\nh\n c \ne\nf\nc\nd\nb\n||||||| base\nh\nc\ne\nc\nd\ne\n=======\ng\na\n>>>>>>> theirs\nd\r",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen037",
+"base": "a\u00a0b\n",
+"ours": "a\u00a0b\n",
+"theirs": "a\u00a0b\n",
+"text": "a\u00a0b\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen038",
+"base": "b\na\nb\n",
+"ours": "b\na\nc\n",
+"theirs": "b\nb\nb",
+"text": "b\n<<<<<<< ours\na\nc\n||||||| base\na\nb\n=======\nb\nb\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "gen039",
+"base": "b\na\n",
+"ours": "b\na",
+"theirs": "b\na\na",
+"text": "b\na\na",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen040",
+"base": "c\ne\nc\na\nc\nb\na\ng\nb\nb\ne\ne\nf\ne\nc\ng\ne\nh\ne\nd",
+"ours": "c\ne\nc\na\nc\n\tb\r\n\ta \ng\nb\nb\ne\n e\r\ne\nc\ng\ne\nh\ne\nd",
+"theirs": "b\nc\nc\nd\ng\nc\nb\ne\ng\nd\nb\ne\n e\r\nf\nc\ng\ne\ne\nh\ne\n",
+"text": "b\nc\nc\nd\ng\nc\n<<<<<<< ours\n\tb\r\n\ta \n||||||| base\nb\na\n=======\nb\ne\n>>>>>>> theirs\ng\nd\nb\ne\n<<<<<<< ours\n e\r\ne\n||||||| base\ne\nf\ne\n=======\n e\r\nf\n>>>>>>> theirs\nc\ng\ne\ne\nh\ne\n",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen041",
+"base": "a\nc\nb\n",
+"ours": "a\nc\nb\n",
+"theirs": "a\nc\nb\n",
+"text": "a\nc\nb\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen042",
+"base": "b\nb\nb\nb\na\na\nb\na\na\nb\nb\nb\na\na\nb\nb\na\na\na\na\nb\na\na\na\na\nb\na\na\nb\na\na\na\na\nb\na\nb\nb\nb\na\na\na\na\nb\na\nb\nb\na\na\na\nb\nb\nb\nb\nb\nb\na\na\na\na\nb\n",
+"ours": "b\nb\nb\nb\na\na\nb\na\na\nb\nb\nb\na\na\nb\nb\nb\na\na\na\na\na\nb\na\na\na\na\nb\na\na\nb\na\nb\na\na\na\nb\na\na\nb\nb\nb\na\na\na\na\nb\na\nb\nb\na\na\na\nb\nb\nb\nb\nb\nb\nb\na\na\nb\na\na\n",
+"theirs": "a\nb\nb\nb\na\na\na\nb\na\nb\nb\nb\nb\nb\na\na\na\na\nb\nb\na\na\na\nb\nb\na\na\nb\na\na\nb\nb\nb\nb\na\nb\na\na\na\na\na\nb\na\na\na\na\nb\na\na\nb\na\na\na\nb\nb\nb\nb\nb\nb\na\na\nb\na\nb\n",
+"text": "a\nb\nb\nb\na\na\na\nb\na\nb\nb\nb\nb\nb\nb\na\na\na\na\na\nb\nb\na\na\na\nb\nb\na\nb\na\nb\na\na\nb\n<<<<<<< ours\na\na\n=======\n>>>>>>> theirs\nb\nb\nb\na\nb\na\na\na\na\na\nb\na\na\na\na\nb\na\na\nb\na\na\na\nb\nb\nb\nb\nb\nb\nb\na\na\nb\n<<<<<<< ours\na\n=======\n>>>>>>> theirs\na\n",
+"conflicts": 2,
+"style": "merge"
+},
+{
+"name": "gen043",
+"base": "g\ne\nb\na\ne\ng\nd\nb\nb\ng\na\ng",
+"ours": "g \ne\nb\na\ne\ng\nd\nb\nb\ng\na\ng\n",
+"theirs": "g\na\nd\nc\nb\ng\na\ng\n",
+"text": "g \na\nd\nc\nb\ng\na\ng\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen044",
+"base": "a\u00a0b\nz\n\ud83d\ude00\n",
+"ours": "z\na\u00a0b\r\na\u00a0b\nz\na b\n",
+"theirs": "\ud83d\ude00\nz\na\u00a0b\na b\na\u00a0b\n",
+"text": "<<<<<<< ours\nz\na\u00a0b\r\na\u00a0b\nz\na b\n||||||| base\na\u00a0b\nz\n\ud83d\ude00\n=======\n\ud83d\ude00\nz\na\u00a0b\na b\na\u00a0b\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen045",
+"base": "c d\nf g h\nf g h\nc d\nc d\ne\nf g h\nf g h\n\nc d\na b\n\ne\nf g h\nf g h\nc d\ne\nc d\ne\ne\na b\ne\ne\na b\na b\na b\n\nc d\na b\nc d\n",
+"ours": "c d\nf g h\nc d\nc d\nc d\nc d\ne\nf g h\nc d\nc d\na b\ne\n\ne\nf g h\nc d\n\ne\nc d\nf g h\nc d\ne\nf g h\n\ne\nc d\na b\n\na b\n\ne\nc d\na b\ne\n",
+"theirs": "c d\nf g h\nf g h\nc d\nc d\nc d\nc d\nf g h\nf g h\ne\nc d\na b\n\ne\na b\nf g h\nc d\ne\nc d\ne\ne\na b\ne\ne\na b\na b\nf g h\n\nf g h\nc d\na b\nc d",
+"text": "c d\nf g h\nc d\nc d\nc d\nc d\n<<<<<<< ours\ne\n=======\n>>>>>>> theirs\nf g h\n<<<<<<< ours\n=======\nf g h\ne\n>>>>>>> theirs\nc d\nc d\na b\ne\n\ne\n<<<<<<< ours\n=======\na b\n>>>>>>> theirs\nf g h\nc d\n\ne\nc d\nf g h\nc d\ne\nf g h\n\ne\nc d\na b\n<<<<<<< ours\n\na b\n=======\nf g h\n>>>>>>> theirs\n\n<<<<<<< ours\ne\n=======\nf g h\n>>>>>>> theirs\nc d\na b\ne",
+"conflicts": 5,
+"style": "merge"
+},
+{
+"name": "gen046",
+"base": "y\nx\n}\ny\nx\n\n}\nx\n}\n\n\ny",
+"ours": "}\nx\n}\n\ny\ny\nx\n}\n\n\ny\n\n",
+"theirs": "y\nx\n}\ny\nx\n\n}\nx\n}\n\n\ny\n",
+"text": "}\nx\n}\n\ny\ny\nx\n}\n\n\ny\n\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen047",
+"base": "x\n}\n",
+"ours": "x\n}\n",
+"theirs": "x\n } \n",
+"text": "x\n } \n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen048",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen049",
+"base": "a b\ne\ne\n\na b\nf g h\ne\nc d\nc d\nf g h\nc d\nf g h\nc d\ne\na b\n\nc d\nf g h\nc d\nf g h\n\na b\na b\n\na b\na b\nf g h\nf g h\n\n\ne\nf g h\nf g h\nf g h\ne\nf g h\ne\ne\ne\n\na b\nc d\nf g h\na b\nc d\n",
+"ours": "\te\na b\ne\na b\nf g h\ne\n\tc  d \nf g h\nc d\n\tf \r g \r h\r\nc d\ne\na b\n\ne\nf g h\nc d\nf g h\n\na b\na b\n\n a \r b\na b\n\tf  g  h \nc d\n f \r g \r h \n\ne\nf g h\nf g h\ne\nf g h\ne\ne\ne\n\na b\nc d\na b\nc d\n",
+"theirs": "a b\ne\ne \nf g h\ne\ne\ne\nc d\nc d\na b\nf g h\ne\nf g h\ne\ne\na b\n\nc d\nc d\nf g h\nf g h\n\ne\n\na b\na b\nf g h\nf g h\n\n\ne\nf g h\n\tf \r g \r h\r\ne\nf g h\ne\ne\nc d\n\ne\nc d\n\tf \r g \r h \na b\nc d\n",
+"text": "\te\na b\ne \n<<<<<<< ours\na b\n||||||| base\n\na b\n=======\n>>>>>>> theirs\nf g h\ne\ne\ne\n\tc  d \n<<<<<<< ours\n||||||| base\nc d\n=======\nc d\na b\n>>>>>>> theirs\nf g h\ne\n\tf \r g \r h\r\ne\ne\na b\n\n<<<<<<< ours\ne\nf g h\n||||||| base\nc d\nf g h\n=======\nc d\n>>>>>>> theirs\nc d\nf g h\nf g h\n\ne\n\n a \r b\na b\n\tf  g  h \nc d\n f \r g \r h \n\ne\nf g h\n\tf \r g \r h\r\ne\nf g h\ne\ne\nc d\n\ne\nc d\na b\nc d\n",
+"conflicts": 3,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen050",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen051",
+"base": "a\nb\nb\nb\nb\nb\nb\na\na\na\na\nb\na\nb\nb\na\na\nb\nb\nb\nb\nb\na\nb\na\nb\na\nb\na\nb\nb\na\na\na\nb\nb\na\nb\na\nb\na\nb\nb\nb\na\na\na\nb\nb\nb\nb\nb\na\na\na\nb\na\nb\na\nb\n",
+"ours": "a\nb\nb\nb\nb\nb\nb\na\na\na\na\na\nb\na\na\nb\nb\na\na\nb\nb\na\nb\nb\na\nb\nb\na\na\na\na\nb\nb\nb\na\na\na\na\nb\nb\na\nb\na\nb\na\nb\nb\na\na\nb\nb\nb\nb\nb\na\na\na\nb\na\nb\na\nb",
+"theirs": "a\na\nb\na\nb\na\nb\nb\na\na\na\na\nb\nb\nb\nb\na\na\na\nb\na\nb\nb\nb\nb\na\nb\nb\na\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\na\nb\nb\na\na\nb\nb\nb\nb\na\na\nb\na\nb\nb\nb\na\nb\nb\nb\na\nb\nb\nb\nb\na\nb\n",
+"text": "a\na\nb\na\nb\na\nb\nb\na\na\na\na\na\nb\n<<<<<<< ours\na\na\n=======\n>>>>>>> theirs\nb\nb\nb\na\na\na\nb\na\nb\na\nb\nb\na\nb\nb\na\n<<<<<<< ours\na\na\na\n=======\nb\n>>>>>>> theirs\nb\nb\n<<<<<<< ours\nb\na\na\na\na\n=======\n>>>>>>> theirs\nb\nb\nb\nb\nb\nb\n<<<<<<< ours\n=======\nb\nb\n>>>>>>> theirs\na\nb\nb\na\nb\nb\nb\nb\na\na\nb\na\nb\nb\nb\na\nb\nb\nb\na\nb\nb\nb\nb\na\nb",
+"conflicts": 4,
+"style": "merge"
+},
+{
+"name": "gen052",
+"base": "a\n",
+"ours": "a\n",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen053",
+"base": "c\ne\nb\nh\nc\nc\nd\nd\n",
+"ours": "c\ne\nb\nc\nd\nd\n",
+"theirs": "e\ne\nc\nb\nf\ne\nc\nf\nd\n",
+"text": "e\n<<<<<<< ours\nb\n=======\ne\n>>>>>>> theirs\nc\n<<<<<<< ours\nd\n=======\nb\nf\ne\nc\nf\n>>>>>>> theirs\nd\n",
+"conflicts": 2,
+"style": "merge"
+},
+{
+"name": "gen054",
+"base": "d\nf\ne\na\nh\n",
+"ours": "g\nf\n\te\r\na\nh\n",
+"theirs": "d\nf\na \nh\n",
+"text": "g\nf\na \nh\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen055",
+"base": "e\nc d\n\n\nf g h\nf g h\nf g h\na b\n\n\na b\ne\nf g h\n\na b\na b\na b\nc d\n\nc d\na b\na b\n\ne\nc d\nc d\nf g h\nf g h\nc d\nf g h\nf g h\na b\ne\nf g h\na b\n\na b\ne\nf g h\na b\nc d\nc d\n\ne\n\nf g h\ne\nc d\nf g h\nf g h\n\nf g h\n\ne\nf g h\na b\n\ne\na b\n\n",
+"ours": "e\n\nc d\n\n\nf g h\nf g h\na b\n\n\na b\ne\r\nf g h\n\n a \r b\r\na b\na b\nc d\n\nc d\na b\na b\n\ne\r\nc d\nc \r d\nf g h\nf g h\nc d\ne\nf g h\nf\tg\th\na b\n\te\nf g h\na b\n\ne\ne\nf g h\n\n a  b\r\nc d\nc d\n\ne\n\nf g h\ne\nc d\nf g h\nf g h\n\nf g h\n\ne\nf g h\na b\n\t \ne\na b\n\t \n",
+"theirs": "e\nc d\n\n\nf g h\nf g h\nf g h\na b\n\na b\ne\nf g h\n\na b\na b\na b\nc d\n\nc d\nc d\na b\ne\ne\nc d\nc d\nf g h\nf g h\nc d\nf g h\na b\ne\nf g h\na b\na b\n e\nf g h\n\tc \r d \n\n\ne\n\nf g h\ne\nc d\nf g h\nf g h\n\nf g h\n\nf g h\na b\n\ne\n\ta \r b\n\n",
+"text": "e\n\nc d\n\n\nf g h\nf g h\na b\n\na b\ne\r\nf g h\n\n a \r b\r\na b\na b\nc d\n\nc d\nc d\na b\ne\r\ne\nc d\nc \r d\nf g h\nf g h\nc d\ne\nf g h\na b\n\te\nf g h\na b\n<<<<<<< ours\n\n=======\na b\n>>>>>>> theirs\n e\ne\nf g h\n<<<<<<< ours\n\n a  b\r\n=======\n>>>>>>> theirs\n\tc \r d \n\n\ne\n\nf g h\ne\nc d\nf g h\nf g h\n\nf g h\n\nf g h\na b\n\t \ne\n\ta \r b\n\t \n",
+"conflicts": 2,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen056",
+"base": "b\nc\nc\nc\nb\n",
+"ours": "c\nb \nc\nc\nc\nc\nb\nc\n",
+"theirs": "b\nc\nc\n\tc\nb\n",
+"text": "c\nb \nc\n<<<<<<< ours\nc\nc\nc\n||||||| base\nc\n=======\n\tc\n>>>>>>> theirs\nb\nc\n",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen057",
+"base": "z\nz\na b\nz\n\u00e9\nz\nz\na\u00a0b\na b\nz\n\u00e9\na b\n\u00e9\n\ud83d\ude00\na b\na b\n\ud83d\ude00\na b\na b\na\u00a0b\n\u00e9\na b\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\nz\na\u00a0b\nz\n\ud83d\ude00\na b\na b\na\u00a0b\n\u00e9\n\ud83d\ude00\na\u00a0b\n\ud83d\ude00\n\u00e9\n\u00e9\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\n\u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\nz\nz\na\u00a0b\n\u00e9\n\u00e9\n\ud83d\ude00",
+"ours": "z\nz\na b\nz \n\u00e9\nz\nz\na\u00a0b\na b\n z\r\n\u00e9\na b\n \u00e9\n\ud83d\ude00\na b\na b\n\ud83d\ude00\na b\nz\n\ta\tb\r\na\u00a0b\na b\na b\n\t\ud83d\ude00 \n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\nz\nz\na\u00a0b\n\ud83d\ude00\na  b\r\na b\na\u00a0b\n\u00e9\n\ud83d\ude00\r\na\u00a0b\n\ud83d\ude00\n\u00e9\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n\u00e9\n\u00e9\n\ud83d\ude00\n\u00e9\n\u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\nz\nz\n\u00e9\n\u00e9\n\u00e9\n\ud83d\ude00 \n",
+"theirs": "z\na b\nz\n\u00e9\nz\nz\na\u00a0b\n\ta\tb\r\nz\n\u00e9\na b\na b\n\u00e9\na\u00a0b\n\ud83d\ude00\n a  b \na b\n\ud83d\ude00\na b\na b\na\u00a0b\n\u00e9\nz\n\ud83d\ude00\n\t\ud83d\ude00 \n\ud83d\ude00\n\ud83d\ude00\na b\na\u00a0b\n z\n\t\ud83d\ude00\na b\nz\na\u00a0b\n\ud83d\ude00\na\u00a0b\n\ud83d\ude00\n\u00e9\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\n\ud83d\ude00\n\ud83d\ude00\nz\nz\na\u00a0b\n\u00e9\n\u00e9\n\ud83d\ude00\n",
+"text": "z\na b\nz \n\u00e9\nz\nz\na\u00a0b\n\ta\tb\r\n z\r\n\u00e9\na b\na b\n \u00e9\na\u00a0b\n\ud83d\ude00\n a  b \na b\n\ud83d\ude00\na b\nz\n\ta\tb\r\na\u00a0b\n<<<<<<< ours\na b\na b\n=======\n\u00e9\nz\n>>>>>>> theirs\n\t\ud83d\ude00 \n\t\ud83d\ude00 \n\ud83d\ude00\n\ud83d\ude00\na b\n<<<<<<< ours\nz\n=======\na\u00a0b\n>>>>>>> theirs\n z\na\u00a0b\n\t\ud83d\ude00\na  b\r\nz\na\u00a0b\n\ud83d\ude00\r\na\u00a0b\n\ud83d\ude00\n\u00e9\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n\u00e9\n\u00e9\n\ud83d\ude00\n\u00e9\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\nz\nz\n\u00e9\n\u00e9\n\u00e9\n\ud83d\ude00 \n",
+"conflicts": 2,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen058",
+"base": "}\nx\n\nx\n\n}\ny\nx\nx\nx\n}\n\nx\nx\nx\ny\ny\n\n\n\n}\n\nx\n\nx\nx\ny\n}\nx\ny\n}\nx\ny\nx\nx\n}\n}\n\nx\n}\n\ny\ny\nx\n}\n",
+"ours": "}\nx\n\nx\n}\ny\nx\nx\nx\n}\n\nx\nx\ny\ny\n\n\n\n}\n\nx\n\nx\nx\ny\n}\nx\ny\nx\ny\nx\ny\n}\n}\n\nx\n}\n\ny\ny\nx\n}",
+"theirs": "\n}\nx\nx\n\nx\n\n\ny\ny\nx\n\nx\nx\nx\nx\nx\nx\ny\n\n\n}\n}\n\nx\n\n}\nx\ny\ny\n}\nx\nx\nx\n\ny\n\nx\n\ny\ny\ny\nx\n",
+"text": "\n}\nx\nx\n\nx\n<<<<<<< ours\n}\n||||||| base\n\n}\n=======\n\n\n>>>>>>> theirs\ny\ny\nx\n\nx\nx\nx\nx\n<<<<<<< ours\ny\n||||||| base\nx\ny\n=======\nx\nx\n>>>>>>> theirs\ny\n\n\n}\n}\n\nx\n\n}\nx\ny\n<<<<<<< ours\n||||||| base\n}\n=======\ny\n}\n>>>>>>> theirs\nx\nx\n<<<<<<< ours\ny\n}\n}\n||||||| base\nx\n}\n}\n=======\nx\n>>>>>>> theirs\n\ny\n\nx\n\ny\ny\ny\nx",
+"conflicts": 4,
+"style": "diff3"
+},
+{
+"name": "gen059",
+"base": "c\ne\n",
+"ours": "c\ne",
+"theirs": "e\nc\ne\n",
+"text": "e\nc\ne",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen060",
+"base": "b\na\n",
+"ours": "b\na\n",
+"theirs": "a\na\n",
+"text": "a\na\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen061",
+"base": "a\na\n",
+"ours": "a\na",
+"theirs": "a\na\n",
+"text": "a\na",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen062",
+"base": "c\nh\nb\n",
+"ours": "c\ng\nh\nb\n",
+"theirs": "c\nb",
+"text": "c\n<<<<<<< ours\ng\nh\n=======\n>>>>>>> theirs\nb",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen063",
+"base": "a\nc\nb\na\nc\nc\na\nb\n",
+"ours": "a \nc\na\nc\n a \nc\nc\nc",
+"theirs": "b\nc\nc\na\nb\nb\nb\n",
+"text": "<<<<<<< ours\na \nc\na\n=======\nb\n>>>>>>> theirs\nc\n a \nc\n<<<<<<< ours\nc\nc\n=======\na\nb\nb\nb\n>>>>>>> theirs\n",
+"conflicts": 2,
+"style": "merge",
+"ignore_ws": false
+},
+{
+"name": "gen064",
+"base": "a\u00a0b\nz\na\u00a0b\nz\na b\na\u00a0b\na\u00a0b\n\ud83d\ude00\n",
+"ours": "a\u00a0b\nz\na\u00a0b\nz\na b\na\u00a0b\na\u00a0b\n\ud83d\ude00\n",
+"theirs": "a\u00a0b\nz\n\ud83d\ude00\na b\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n",
+"text": "a\u00a0b\nz\n\ud83d\ude00\na b\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen065",
+"base": "e\nc d\nc d\nf g h\nc d\nc d\n\ne\ne\n\na b\ne\nf g h\n\n\ne\nc d\nc d\ne\na b\na b\nc d\n\nc d\nf g h\nf g h\ne\n\nf g h\nc d",
+"ours": "e\n\tc \r d \nf g h\nc d\nc d\n\ne\ne\n\na b\n e \nf g h\n\n\ne\n\tc \r d \nc d\ne\na b\na b\nc d\n\nc d\nf g h\ne\n f\tg\th\r\ne\n\nf g h\nc d\n",
+"theirs": "e\r\nc d\nc d\nf g h\nc d\na b\n\tc \r d\n\ne\ne\n\na b\ne\nf g h\n\n\t\nf g h\nc d\n\na b\ne\n\n\tc  d \n f  g  h \nf g h\n\nf  g  h \nc d\n",
+"text": "e\r\n\tc \r d \nf g h\nc d\na b\n\tc \r d\n\ne\ne\n\na b\n e \nf g h\n\n\t\nf g h\nc d\n\na b\ne\n\n\tc  d \n f  g  h \ne\n f\tg\th\r\n\nf  g  h \nc d\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen066",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen067",
+"base": "a\u00a0b\na\u00a0b\na b\n\ud83d\ude00\n\u00e9\n",
+"ours": "a\u00a0b\na\u00a0b\n\u00e9\nz\n\ud83d\ude00\n\u00e9\n",
+"theirs": "a\u00a0b\na\u00a0b\na\u00a0b\na b\n\u00e9\n\ud83d\ude00\n\u00e9\n",
+"text": "a\u00a0b\na\u00a0b\n<<<<<<< ours\n\u00e9\nz\n=======\na\u00a0b\na b\n\u00e9\n>>>>>>> theirs\n\ud83d\ude00\n\u00e9\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen068",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen069",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen070",
+"base": "b\ng\nc\nc\ne\nc\nb\nf\ne\na\nc\nc\nh\nf\nd\ng\nd\ng\nc\nd\ne\nf\na\ne\nd\nh\na\ng\nb\nd\nb\nd\na\ng\ne\ng\na\nd\nd\nc\nd\ne\nd\na\ng\nb\nc\na\nf\na\ne\ne\nf\nf\nc\nb\nf\ng\nb\ng\n",
+"ours": "b\ng\nc\nc\ne\ne\nc\ne\nb\nf\n e\r\na\nc\nc\nb\n f\nd\ng\nd\r\ng\na\nc\nb\nd\ne\na\ne\nd\nh\nd\ng\nb\nd\nb\nd\na\ng\ne\ng\na\nd\nd\nc\nd\ne\nd\ng\n b\r\na\n f\r\na\nb\ne \ne\nf\nc\nf\ng\nc\nb\n f\r\n g\r\nb\ng\n",
+"theirs": "b\ng\nc\nc\ne\nc\nb\n f \ne\na\na\nc\r\nh\nf\nd\ng\nd\ng\nc\n d\r\nb\nf\na\nh\ne\nh\na\nc\n b\r\n\tb\nd\na\na\ng\ne\na\nd\nd\nc\nd\ne\nd \na\ng\nd\nb\nc\r\na\nf\na\n e \ne\nb\nf\nf\nc\nb\n\tf\r\ng\nb\ng\nb\n",
+"text": "b\ng\nc\nc\ne\ne\nc\ne\nb\n f \n e\r\na\na\nc\r\nb\n f\nd\ng\nd\r\ng\na\nc\nb\n d\r\n<<<<<<< ours\ne\n=======\nb\nf\n>>>>>>> theirs\na\nh\ne\nh\n<<<<<<< ours\nd\ng\n=======\na\nc\n>>>>>>> theirs\n b\r\n\tb\nd\na\na\ng\ne\na\nd\nd\nc\nd\ne\nd \ng\nd\n b\r\na\n f\r\na\nb\ne \ne\nb\nf\nc\nf\ng\nc\nb\n f\r\n g\r\nb\ng\nb\n",
+"conflicts": 2,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen071",
+"base": "c\nh\nc\nb\nc\nc\nc\nb\ne\nf\nf\nf\nc\nh\na\nc\nb\ne\nh\na\nh\ne\ne\nf\na\nh\ne\nd\ne\nd\na\ng\ne\nc\nf\ng\nh\nh\na\ne\nd\ng\nc\ne\nb\n",
+"ours": "c\nh\nc\nb\nc\nc\na\nc\nf\n b \nd\n e\nf\r\nf\r\nc\nc\nh\na\nc\nb\ne\n h\r\nf\nh\ne\ne\nf\na\nh\ne\n d\ne\nd\na\ng\ne\nc\nf\ng\nh\nh\n a\r\ne\nd\nc\ng\nb",
+"theirs": "c\nh\nc\nb\nc\nc\nc\nb\nb\ne\nf\nf\n\tf \nc\nh\na\nc\nb\ne\nh\na\nh\ne \ne\n f \na\nh\r\ne\ne\nd\na\r\ng\r\n\te\nc\n f \ng\nh\nh\ng\ne\ng\n\tc\ne\nb\n",
+"text": "c\nh\nc\nb\nc\nc\na\nc\nf\n b \n<<<<<<< ours\nd\n||||||| base\n=======\nb\n>>>>>>> theirs\n e\nf\r\nf\r\nc\nc\nh\na\nc\nb\ne\n h\r\nf\nh\ne \ne\n f \na\nh\r\ne\ne\nd\na\r\ng\r\n\te\nc\n f \ng\nh\nh\ng\ne\n<<<<<<< ours\nd\n||||||| base\nd\ng\n=======\ng\n>>>>>>> theirs\n\tc\ng\nb",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen072",
+"base": "b\na\na\nb\nb\na\na\nb\na\na\na\nb\nb\na\nb\nb\na\nb\na\nb\na\na\na\na\nb\nb\na\nb\na\nb",
+"ours": "b\nb\na\n a\nb\nb\na\nb\na\nb\na\na\n a\nb\nb\na\nb\nb\nb\na\nb\na\na\na\na\nb\nb\na\nb\na\nb\n",
+"theirs": "b\na\nb\na\nb\nb\nb\nb\na\nb\na\nb\na\nb\nb\na\nb\na\na\nb\na\na\na\nb\nb \na\nb\na\na\nb\n",
+"text": "b\nb\na\nb\n a\nb\nb\n<<<<<<< ours\na\nb\na\n||||||| base\na\na\n=======\n>>>>>>> theirs\nb\nb\n a\nb\na\nb\na\nb\nb\nb\na\na\nb\na\na\na\nb\nb \na\nb\na\na\nb\n",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen073",
+"base": "}\nx\n}\ny\n\ny\ny\n\n\n\nx\ny\n",
+"ours": "}\nx\n\n}\r\ny\n\n y \n y \n\nx\n\n\nx\n\ty \n",
+"theirs": "y\n x\r\n}\n}\ny\ny\n\n\ny\nx\ny\n",
+"text": "y\n x\r\n\n}\r\n}\n y \n y \n\nx\n\ny\nx\n\ty \n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen074",
+"base": "y\nx",
+"ours": "y\ny\nx",
+"theirs": "\nx",
+"text": "<<<<<<< ours\ny\ny\n=======\n\n>>>>>>> theirs\nx",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen075",
+"base": "x\n}\n}\n\n\n",
+"ours": "x\n}\n}\n\n",
+"theirs": "x\n}\n\n\n",
+"text": "x\n}\n\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen076",
+"base": "a\u00a0b\na\u00a0b\na\u00a0b\na b\nz\n\u00e9\na\u00a0b\nz\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\na b\na b\n\ud83d\ude00\n\u00e9\nz\na b\nz\nz\nz\na\u00a0b\nz\n\ud83d\ude00\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\n\ud83d\ude00\nz\n",
+"ours": "a\u00a0b\na\u00a0b \na\u00a0b\na\u00a0b\na b\nz\n\u00e9\n\u00e9\nz\n\u00e9\na\u00a0b\na b\na b\na b\n\ud83d\ude00\n z\na b\nz\nz\nz\nz\nz\na\u00a0b\nz\n\ud83d\ude00\na\u00a0b\n \ud83d\ude00 \n\u00e9\n\ud83d\ude00\nz\n",
+"theirs": "a\u00a0b\na b\nz\nz\na b\na\u00a0b\nz\n\u00e9\n\u00e9\n\t\u00e9\r\n\tz\r\nz\nz\nz\n\ud83d\ude00\n\ud83d\ude00\nz\na b\na b\na\u00a0b\n\ud83d\ude00\n\u00e9\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\nz\na\u00a0b\n",
+"text": "a\u00a0b\n<<<<<<< ours\na\u00a0b \na\u00a0b\na\u00a0b\n||||||| base\na\u00a0b\na\u00a0b\n=======\n>>>>>>> theirs\na b\nz\n<<<<<<< ours\n\u00e9\n\u00e9\n||||||| base\n\u00e9\na\u00a0b\n=======\n>>>>>>> theirs\nz\na b\na\u00a0b\n<<<<<<< ours\na b\na b\na b\n\ud83d\ude00\n z\na b\n||||||| base\n\ud83d\ude00\nz\na b\na b\n\ud83d\ude00\n\u00e9\nz\na b\n=======\nz\n\u00e9\n\u00e9\n\t\u00e9\r\n>>>>>>> theirs\n\tz\r\nz\nz\n<<<<<<< ours\nz\nz\na\u00a0b\n||||||| base\na\u00a0b\n=======\n>>>>>>> theirs\nz\n\ud83d\ude00\n\ud83d\ude00\nz\na b\na b\na\u00a0b\n \ud83d\ude00 \n\u00e9\n\ud83d\ude00\n<<<<<<< ours\n||||||| base\n\ud83d\ude00\n=======\n\ud83d\ude00\n\ud83d\ude00\n>>>>>>> theirs\nz\na\u00a0b\n",
+"conflicts": 5,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen077",
+"base": "c d\n\nf g h\nc d\ne\na b\n\na b\n\na b\nc d\n\n\nc d\ne\nf g h\nc d\ne\na b\na b\n\nc d\nc d\n\nc d\na b\nf g h\na b\nc d\n\n",
+"ours": "c d\ne\nc d\na b\ne\n\n\na b\na b\n\nf g h\na b\n\nf g h\n\nc d\ne\nf g h\nf g h\ne\na b\nc d\na b\n\nc d\nf g h\nc d\nc d\n\nc d\nc d\nc d\n\ta\tb\nc d\nf  g  h\r\n\na b\n\tc  d \n",
+"theirs": "c d\ne\n\nf g h\nc d\nf g h\ne\na b\n\na b\ne\nc d\n\r\n\ne\n\nf g h\ne\na b\n\nc d\nc d\n\nc d\ne\nf g h\nf g h\nc d\n",
+"text": "c d\n<<<<<<< ours\n=======\ne\n\nf g h\nc d\nf g h\n>>>>>>> theirs\ne\nc d\na b\ne\n\n\na b\n<<<<<<< ours\na b\n\nf g h\na b\n=======\ne\nc d\n>>>>>>> theirs\n\r\nf g h\n\ne\n\nf g h\n<<<<<<< ours\nf g h\n=======\n>>>>>>> theirs\ne\na b\n<<<<<<< ours\nc d\na b\n=======\n>>>>>>> theirs\n\nc d\nf g h\nc d\nc d\n\nc d\n<<<<<<< ours\nc d\nc d\n\ta\tb\nc d\n=======\ne\n>>>>>>> theirs\nf  g  h\r\n<<<<<<< ours\n\na b\n=======\nf g h\n>>>>>>> theirs\n\tc  d \n",
+"conflicts": 6,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen078",
+"base": "z\nz\na\u00a0b\n\u00e9\n\u00e9\na b\n\ud83d\ude00\na\u00a0b\n\u00e9\n\u00e9\na\u00a0b\na\u00a0b\na b\na\u00a0b\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\na\u00a0b\na b",
+"ours": "z\nz\na\u00a0b\n\u00e9\n\u00e9\na b\n\ud83d\ude00\na\u00a0b\n\u00e9\n\u00e9\na\u00a0b\na\u00a0b\na b\na\u00a0b\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\na\u00a0b\na b\n",
+"theirs": "z\n\ud83d\ude00\nz\na\u00a0b\n\u00e9\n\u00e9\n\u00e9\n\ud83d\ude00\na\u00a0b\na b\n\u00e9\n\u00e9\na\u00a0b\na b\nz\n\u00e9\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\n\ud83d\ude00\n",
+"text": "z\n\ud83d\ude00\nz\na\u00a0b\n\u00e9\n\u00e9\n\u00e9\n\ud83d\ude00\na\u00a0b\na b\n\u00e9\n\u00e9\na\u00a0b\na b\nz\n\u00e9\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\n\ud83d\ude00\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen079",
+"base": "a\u00a0b\na b\nz\n\u00e9\n\u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\u00e9\nz\na b\na\u00a0b\n\u00e9\na\u00a0b\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\na\u00a0b\na\u00a0b\na b\na b\n\u00e9\nz\na b\nz\n\u00e9\na\u00a0b\nz\na b\n\ud83d\ude00\na b\n\ud83d\ude00\na\u00a0b\na\u00a0b\n\u00e9\n\u00e9\nz\nz\na\u00a0b\n\u00e9\na b\na\u00a0b\nz\n",
+"ours": "z\na b\na b\n\u00e9\n\u00e9\n\ud83d\ude00\na\u00a0b\nz\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\na b\n\tz \n\u00e9\na\u00a0b\n\ud83d\ude00\n\u00e9\n a\u00a0b \n\ud83d\ude00\na b\na\u00a0b\na\u00a0b\na b\n\u00e9\na b\n\ud83d\ude00\n z\r\n\u00e9\nz\nz\na b\na\u00a0b\nz\na b\na\u00a0b\n\u00e9\n\u00e9\r\nz\nz\n\u00e9\na\u00a0b\n\u00e9\n\ta  b\r\na\u00a0b\na b\n",
+"theirs": "a\u00a0b\na b\na b\n\u00e9\n \u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\u00e9\nz\na b\na\u00a0b\n\u00e9\na\u00a0b\nz\n\ud83d\ude00\n\ud83d\ude00\na\u00a0b\na b\na b\n\u00e9\nz\na b\nz\n\u00e9\na\u00a0b\nz\na\u00a0b\na b\n\ud83d\ude00\na b\n\ud83d\ude00\na\u00a0b\n\ta\u00a0b\r\n\u00e9\n\u00e9\nz \nz\na\u00a0b\n\u00e9\na b\na\u00a0b\nz",
+"text": "<<<<<<< ours\nz\na b\na b\n||||||| base\na\u00a0b\na b\nz\n=======\na\u00a0b\na b\na b\n>>>>>>> theirs\n\u00e9\n \u00e9\n\ud83d\ude00\na\u00a0b\nz\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\na b\n\tz \n\u00e9\na\u00a0b\n<<<<<<< ours\n\ud83d\ude00\n\u00e9\n a\u00a0b \n||||||| base\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\n\ud83d\ude00\n=======\nz\n\ud83d\ude00\n>>>>>>> theirs\n\ud83d\ude00\na b\na\u00a0b\na b\n\u00e9\na b\n\ud83d\ude00\n z\r\n\u00e9\nz\n<<<<<<< ours\nz\n||||||| base\na b\n\ud83d\ude00\n=======\na\u00a0b\na b\n\ud83d\ude00\n>>>>>>> theirs\na b\na\u00a0b\nz\na b\n\ta\u00a0b\r\n\u00e9\n\u00e9\r\nz \nz\n\u00e9\na\u00a0b\n\u00e9\n\ta  b\r\na\u00a0b\na b",
+"conflicts": 3,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen080",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen081",
+"base": "b\na\n",
+"ours": "b\nb",
+"theirs": "c\na\nb\na\n",
+"text": "c\na\nb\nb",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen082",
+"base": "a\nc\na\nc\nc\na\nc\nc\n",
+"ours": "a\nc\na\nc\nc\na\nc\nc",
+"theirs": "a\nc\nc\na\nc\nc\nc\na\nc\nc\nc\n",
+"text": "a\nc\nc\na\nc\nc\nc\na\nc\nc\nc",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen083",
+"base": "a\u00a0b\n\u00e9\na\u00a0b\n",
+"ours": "\u00e9\nz\na\u00a0b\n",
+"theirs": "a b\n",
+"text": "<<<<<<< ours\n\u00e9\nz\na\u00a0b\n=======\na b\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen084",
+"base": "z\n\u00e9\na\u00a0b\na b\n\u00e9\na\u00a0b\na b\nz\n\u00e9\n\ud83d\ude00\na\u00a0b\nz\n",
+"ours": "z\n\u00e9\na\u00a0b\nz\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\na b\n\ud83d\ude00\n a\u00a0b\r\na\u00a0b\n",
+"theirs": "z\n\u00e9\na\u00a0b\na b\n\u00e9\na\u00a0b\na b\nz\n \u00e9\n\ud83d\ude00\na\u00a0b\nz",
+"text": "z\n\u00e9\na\u00a0b\nz\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\na b\n<<<<<<< ours\n||||||| base\nz\n\u00e9\n=======\nz\n \u00e9\n>>>>>>> theirs\n\ud83d\ude00\n a\u00a0b\r\na\u00a0b",
+"conflicts": 1,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen085",
+"base": "x\n",
+"ours": "x\n",
+"theirs": "x\n",
+"text": "x\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen086",
+"base": "e\na\nb",
+"ours": "e\na\nb\n",
+"theirs": "a\n",
+"text": "a\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen087",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen088",
+"base": "c\nb\nb\na\nb\na\nb\nc\nb\na\na\nc\na\na\na\nc\nc\na\nb\nb\n",
+"ours": "c\nb\nb\na\nb\na\nb\nc\nb\na\na\nc\na\na\na\nc\nc\nc\na\na\nb\n",
+"theirs": "c\nb\nb\na\na\nb\nc\nb\na\na\nc\na\na\nc\nc\na\nb\nb\n",
+"text": "c\nb\nb\na\na\nb\nc\nb\na\na\nc\na\na\nc\nc\nc\na\na\nb\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen089",
+"base": "a b\n\ne\na b\n\n\na b\ne\n",
+"ours": "a b\na b\nc d\n\na b\n\n\na b\n\ne\n",
+"theirs": "a b\na b\ne\n\n\nf g h\na b",
+"text": "a b\n<<<<<<< ours\na b\nc d\n\n=======\n>>>>>>> theirs\na b\ne\n\n\nf g h\na b\n<<<<<<< ours\n\ne\n=======\n>>>>>>> theirs\n",
+"conflicts": 2,
+"style": "merge"
+},
+{
+"name": "gen090",
+"base": "d\na\nc\nh\nc\nf\na\na\nd\nd\nh\ne\nc\nc\nf\nc\nf\nd\nb\ng\nf\nb\nc\ng\nd\ne\nb\nf\na\ne\n",
+"ours": "a\nf\na\nc\nh\na\na\nd\nh\ne\n\tc \nc\nf\nc\nf\nb\nd\ng\nf\nb\nc\ng\nd\ne\nf \na",
+"theirs": "b\na\nc\nh\nc\nf\na\na\nd\nd\nh\nc\nc\nf\nd\n c\nf\nd\nb\ng\n\tf\ne\nb\nh\ng\r\nd\ne\nb\na\ne\n",
+"text": "<<<<<<< ours\n||||||| base\nd\n=======\nb\n>>>>>>> theirs\na\nf\na\nc\nh\na\na\nd\nh\n\tc \nc\nf\nd\n c\nf\nb\nd\ng\n\tf\ne\nb\nh\ng\r\nd\ne\n<<<<<<< ours\nf \n||||||| base\nb\nf\n=======\nb\n>>>>>>> theirs\na",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen091",
+"base": "b",
+"ours": "b\n",
+"theirs": "a\n",
+"text": "a\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen092",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen093",
+"base": "\na b\ne\n",
+"ours": "a b\na b\n\te\n",
+"theirs": "a b\n a \r b\nf g h\ne",
+"text": "a b\na b\n<<<<<<< ours\n=======\nf g h\n>>>>>>> theirs\n\te",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen094",
+"base": "\nx\n\ny\n}\n}\n}\n}\n\n\ny\n}\nx\ny\ny\n\n}\ny\n}\n",
+"ours": "\nx\n\ny\n}\n}\ny\n}\n}\n}\n\n\ny\n}\nx\ny\ny\n\ny\n}\ny\n}\n\n",
+"theirs": "\ny\nx\n\ny\n}\n}\ny\n}\nx\n\n\ny\n}\nx\ny\ny\n\n}\n\n}\n\n",
+"text": "\ny\nx\n\ny\n}\n}\n<<<<<<< ours\ny\n}\n||||||| base\n}\n=======\ny\n>>>>>>> theirs\n}\n<<<<<<< ours\n}\n||||||| base\n=======\nx\n>>>>>>> theirs\n\n\ny\n}\nx\ny\ny\n\ny\n}\n\n}\n\n",
+"conflicts": 2,
+"style": "diff3"
+},
+{
+"name": "gen095",
+"base": "b\nb\nb\nb\nb\nb\na\na\nb\na\na\na\nb\nb\nb\na\na\na\nb\nb\n",
+"ours": "b\nb\nb\nb\nb\na\na\nb\na\na\na\nb\nb\nb\na\na\na\nb\nb\n",
+"theirs": "b\nb\nb\nb\nb\nb\nb\nb\na\nb\na\na\na\na\nb\nb\nb\na\na\na\nb\nb\n",
+"text": "b\nb\nb\nb\nb\n<<<<<<< ours\na\n=======\nb\nb\nb\n>>>>>>> theirs\na\nb\na\na\na\na\nb\nb\nb\na\na\na\nb\nb\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen096",
+"base": "c d\nc d\n\na b\ne\ne\n\nc d\ne\n\nf g h\n\ne\na b\nf g h\n\n\nc d\na b\nc d\ne\nf g h\n\nf g h\nf g h\nc d\ne\na b\na b\nf g h\n\nf g h\na b\na b\nf g h\nc d\nf g h\nf g h\nf g h\ne\ne\nf g h\na b\na b\n\n",
+"ours": "c d\nc d\n\na b\na b\ne\ne\ne\n\nc d\ne\n \r\ne\nf g h\n\ne\na b\nf\tg\th\n\n\nc d\na b\nc d\ne\nf g h\na b\n\nf g h\nf g h\n c \r d\r\ne\na b\n a  b\r\nf g h\nf g h\na b\nf g h\na b\nf g h\nc d\nf g h\nf g h\nf g h\ne\ne\nf g h\na\tb\na b\n\n",
+"theirs": "e\nc d\nc d\n\na b\nc d\ne\nc d\ne\n  \nf g h\ne\ne\ne\nf g h\nc d\n\nc d\n\na b\nc d\nc d\ne\nf g h\n\na b\na b\nc d\na b\nc d\nf g h\ne\ne\nf g h\ne\n\ne\nc d\na b\na b\n",
+"text": "e\nc d\nc d\n\na b\n<<<<<<< ours\na b\ne\n||||||| base\ne\n=======\nc d\n>>>>>>> theirs\ne\n<<<<<<< ours\ne\n\n||||||| base\n\n=======\n>>>>>>> theirs\nc d\ne\n \r\ne\nf g h\ne\ne\ne\nf\tg\th\nc d\n\nc d\n\na b\nc d\n<<<<<<< ours\ne\nf g h\na b\n\nf g h\nf g h\n||||||| base\ne\nf g h\n\nf g h\nf g h\n=======\n>>>>>>> theirs\n c \r d\r\ne\nf g h\n<<<<<<< ours\nf g h\n||||||| base\n\nf g h\n=======\n\n>>>>>>> theirs\na b\nf g h\na b\nc d\na b\nc d\nf g h\ne\ne\nf g h\ne\n\ne\nc d\na\tb\na b\n",
+"conflicts": 4,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen097",
+"base": "c d\ne\na b\n\na b\na b\ne\ne\nf g h\ne\nf g h\ne\nf g h\nf g h\nf g h\na b\nf g h\nc d\nf g h\nf g h\na b\nc d\n\nc d\ne\nc d\na b\ne\nf g h\nc d\na b\nc d\nf g h\n\nc d\na b\nf g h\na b\n\ne\na b\ne\nf g h\nf g h\nc d",
+"ours": "c d\ne\n\na b\n\na b\ne\nf g h\ne\ne\nf g h\nf g h\nc d\na b\nf g h\na b\na b\nc d\n\n\na b\nc d\na b\ne\n\ne\na b\nc d\nf g h\n\nc d\na b\na b\ne\na b\ne\nf g h\nf g h\n",
+"theirs": "a b\nc d\ne\na b\n\na b\na b\ne\ne\nf g h\ne\nc d\ne\nf g h\nf g h\nf g h\na b\nf g h\nc d\nf g h\na b\nc d\n\nc d\ne\nc d\ne\ne\nf g h\nc d\na b\nc d\nf g h\na b\n\nc d\na b\na b\ne\nc d\n\ne\nf g h\nf g h\nc d\n",
+"text": "a b\nc d\ne\n\na b\n\na b\ne\nf g h\ne\n<<<<<<< ours\n||||||| base\nf g h\n=======\nc d\n>>>>>>> theirs\ne\nf g h\nf g h\nc d\n<<<<<<< ours\na b\nf g h\n||||||| base\nf g h\nf g h\n=======\nf g h\n>>>>>>> theirs\na b\na b\nc d\n\n\na b\nc d\ne\n<<<<<<< ours\n\ne\n||||||| base\nf g h\nc d\n=======\ne\nf g h\nc d\n>>>>>>> theirs\na b\nc d\nf g h\na b\n\nc d\na b\na b\ne\nc d\n\ne\nf g h\nf g h\n",
+"conflicts": 3,
+"style": "diff3"
+},
+{
+"name": "gen098",
+"base": "\n\n}\ny\ny\nx\ny\ny\n",
+"ours": "\n\n}\ny\ny\ny\nx\ny\ny\n",
+"theirs": "\n\n}\ny\ny\nx\ny\ny\n",
+"text": "\n\n}\ny\ny\ny\nx\ny\ny\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen099",
+"base": "a\nb\nc\na\na\nc\na\nb\nb\nc\nb\na\na\nc\nc\nb\nc\nb\nb\nb\nc\nc\nc\nb\nb\na\na\nc\nb\nb\n",
+"ours": "a\nc\nc\na\na\nc\na\nb\nb\nb\nc\nb\na\na\nc\nc\nb\nb\nc\nb\nb\nb\nc\nc\nc\nb\nb\na\nc\nb",
+"theirs": "c\nb\na\nc\nc\na\na\na\nc\nc\na\nc\na\nc\nb\nc\na\nb\na\nb\na\nb\nc\nb\nc\nc\nc\nc\nc\na\nb\na\nc\nb\nb\n",
+"text": "<<<<<<< ours\na\n||||||| base\na\nb\n=======\nc\nb\na\n>>>>>>> theirs\nc\nc\na\na\na\n<<<<<<< ours\nb\nb\nb\n||||||| base\nb\nb\n=======\n>>>>>>> theirs\nc\nc\na\nc\na\nc\nb\nb\nc\na\nb\na\nb\na\nb\nc\nb\nc\nc\nc\nc\nc\na\n<<<<<<< ours\n||||||| base\na\n=======\nb\na\n>>>>>>> theirs\nc\nb",
+"conflicts": 3,
+"style": "diff3"
+},
+{
+"name": "gen100",
+"base": "\n}\n}\n",
+"ours": "\n}\n }\r\n",
+"theirs": "}\n}\n}\n",
+"text": "}\n }\r\n}\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen101",
+"base": "\n",
+"ours": "\n",
+"theirs": "\n",
+"text": "\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen102",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen103",
+"base": "\n\n}\n}\n}\nx\nx\n\nx\n\n}\ny\ny\ny\ny\n\nx\n\nx\n}",
+"ours": "\n\n}\n}\n}\nx\nx\n\nx\n\n}\ny\ny\ny\ny\n\nx\nx",
+"theirs": "\n\n}\n}\ny\n}\nx\nx\n\n\nx\n}\n}\ny\ny\ny\ny\n\ny\n\n}",
+"text": "\n\n}\n}\ny\n}\nx\nx\n\n\nx\n}\n}\ny\ny\ny\ny\n\n<<<<<<< ours\nx\nx\n||||||| base\nx\n\nx\n}\n=======\ny\n\n}\n>>>>>>> theirs\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "gen104",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen105",
+"base": "a\nb\nb\na\nb\na\nb\na\nb\na\na\nb\n",
+"ours": "a\n a\nb\nb\na\na\nb\nb\na\na\na\nb\n",
+"theirs": "a\nb\n\ta\r\nb\na\nb\na\na\na\nb\nb\na\n",
+"text": "a\n a\nb\n\ta\r\na\nb\n<<<<<<< ours\nb\n=======\na\n>>>>>>> theirs\na\na\na\nb\nb\na\n",
+"conflicts": 1,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen106",
+"base": "a\na",
+"ours": "a",
+"theirs": "a\na\n",
+"text": "a\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen107",
+"base": "b\nb\na\nb\nb\nb\nb\nb\nb\na\na\nb\n",
+"ours": "b\na\nb\n a \nb\nb\nb\nb\nb\nb\n\tb\na\nb\n",
+"theirs": "\tb \nb\na\na\nb\nb\nb\nb\nb\na\na \n",
+"text": "\tb \na\nb\n a \na\nb\nb\nb\nb\nb\n\tb\na \n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen108",
+"base": "e\n\na b\na b\nc d\ne\nc d\nc d\nc d\nc d\ne\na b",
+"ours": "e\n\na b\na b\nc d\ne\nc d\nc d\nc d\nc d\ne\na b\n",
+"theirs": "e\n\na b\nc d\ne\nc d\nc d\nc d\nc d\ne\na b\n",
+"text": "e\n\na b\nc d\ne\nc d\nc d\nc d\nc d\ne\na b\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen109",
+"base": "\ud83d\ude00\n\ud83d\ude00\n\u00e9\n\u00e9\n\u00e9\n\u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\na b\n\u00e9\nz\nz\n\ud83d\ude00\n\u00e9\nz\n\u00e9\nz\nz\n\u00e9\nz\na\u00a0b\nz\na\u00a0b\na b\na\u00a0b\na b\n\ud83d\ude00\nz\na\u00a0b\n\u00e9\nz\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\na b\nz\nz\nz\nz\n\ud83d\ude00\na b\n\ud83d\ude00\n\ud83d\ude00\nz\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\n\ud83d\ude00\na\u00a0b\n\u00e9\na b\na\u00a0b\n",
+"ours": "\ud83d\ude00\nz\n\ud83d\ude00\n\u00e9\n\u00e9\n\u00e9\n\u00e9\na\u00a0b\n\ud83d\ude00\n\ud83d\ude00\na b\na b\n\u00e9\nz\nz\n \u00e9 \nz\nz\nz\n\u00e9\nz\na\u00a0b\na\u00a0b\nz\na\u00a0b\n a\tb\r\na b\n\u00e9\na b\nz\na\u00a0b\n\u00e9\nz\na b\n\ud83d\ude00\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n a  b \nz\nz\nz\n\ud83d\ude00\n a \r b\r\n\ud83d\ude00\n\ud83d\ude00\n z\r\n\u00e9\na\u00a0b\n\u00e9\na\u00a0b\n\ud83d\ude00\nz\n\ud83d\ude00\na\u00a0b\n\u00e9\na b\na\u00a0b\n",
+"theirs": "\ud83d\ude00\n\ud83d\ude00\n\u00e9\n\u00e9\n\u00e9\n\u00e9\n\ta\u00a0b\r\n\ud83d\ude00\n\ud83d\ude00\na b\n\u00e9\n z \n\ud83d\ude00\n \u00e9\nz\n\u00e9\nz\nz\n\u00e9\nz\na\u00a0b\nz\na\u00a0b\na b\na\u00a0b\na b\n\u00e9\n\ud83d\ude00\n\u00e9\nz\na\u00a0b\n\u00e9\r\nz\na b\n\ud83d\ude00\n\u00e9\nz\na\u00a0b \n\u00e9\na\u00a0b\n\ud83d\ude00\na b\nz\nz\nz\nz\n\ud83d\ude00\na b\n\ud83d\ude00\n\t\ud83d\ude00\r\n\tz \n\u00e9\na\u00a0b\n\u00e9\n\ta\u00a0b \n\ud83d\ude00\nz\n\ud83d\ude00\na\u00a0b\nz\n\u00e9\na b\na\u00a0b\n",
+"text": "\ud83d\ude00\nz\n\ud83d\ude00\n\u00e9\n\u00e9\n\u00e9\n\u00e9\n\ta\u00a0b\r\n\ud83d\ude00\n\ud83d\ude00\na b\na b\n\u00e9\n z \n<<<<<<< ours\nz\n=======\n\ud83d\ude00\n>>>>>>> theirs\n \u00e9 \nz\nz\nz\n\u00e9\nz\na\u00a0b\na\u00a0b\nz\na\u00a0b\n a\tb\r\na b\n\u00e9\n<<<<<<< ours\na b\n=======\n\ud83d\ude00\n\u00e9\n>>>>>>> theirs\nz\na\u00a0b\n\u00e9\r\nz\na b\n\ud83d\ude00\n\u00e9\nz\na\u00a0b \n\u00e9\na\u00a0b\n a  b \nz\nz\nz\n\ud83d\ude00\n a \r b\r\n\ud83d\ude00\n\t\ud83d\ude00\r\n z\r\n\u00e9\na\u00a0b\n\u00e9\n\ta\u00a0b \n\ud83d\ude00\nz\n\ud83d\ude00\na\u00a0b\nz\n\u00e9\na b\na\u00a0b\n",
+"conflicts": 2,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen110",
+"base": "c\na\na\na\nc\nb\nc\na\na\nb\nb\nb\na\nc\na\nc\na\na\na\nb\nb\nb\na\na\nc\nb\nc\nb\nb\nb\nc\na\na\nb\nc\nb\nc\nc\nc\nc\na\nc\na\na\nc\nc\nb\nc\nb\nb\nc\nb\na\na\na\na\nc\nc\na\nc\n",
+"ours": "c\na\na\na\nc\nb\nc\na\na\nb\nb\nb\na\nc\na\nc\na\na\na\nb\nb\nb\na\na\nb\nc\nb\nc\nc\nb\nb\nc\na\na\nb\nc\nb\nc\nc\nb\nc\na\nc\na\na\nc\nc\nb\nc\nb\nb\nc\nb\na\na\na\na\nc\nc\na\nc\n",
+"theirs": "b\nc\nc\na\na\na\nb\nc\na\nb\na\nb\nb\nb\na\nc\nb\nc\nc\na\na\na\nb\nc\nb\nb\nb\nb\nb\na\na\nb\nb\nc\nc\nb\nc\nb\na\nb\na\nc\nc\na\nb\nb\nb\nb\nc\nb\na\nb\na\na\nc\na\nc\nc\n",
+"text": "b\nc\nc\na\na\na\nb\nc\na\nb\na\nb\nb\nb\na\nc\nb\nc\nc\na\na\na\nb\n<<<<<<< ours\nb\nb\na\na\n=======\nc\n>>>>>>> theirs\nb\nb\nc\nc\nb\nb\nb\na\na\nb\nb\nc\nc\nb\n<<<<<<< ours\nc\na\n=======\n>>>>>>> theirs\nc\nb\na\nb\na\nc\nc\na\nb\nb\nb\nb\nc\nb\na\nb\na\na\nc\na\nc\nc\n",
+"conflicts": 2,
+"style": "merge"
+},
+{
+"name": "gen111",
+"base": "a\na\nb\nb\na\nb\na\na\nb\na\nb\nb\nb\na\nb\nb\nb\na\na\nb\nb\na\na\nb\na\nb\na\nb\nb\nb\na\nb\na\nb\nb\nb\na\nb\nb\na\nb\nb\nb\nb\na\n",
+"ours": "a \na\nb\nb\n a\r\nb\nb\na\na\nb\n a\nb\nb\na\nb\nb\nb\na\na\na\nb\na\na\nb\na\nb\na\nb\nb \na\nb\nb\na\nb\nb\n\ta\r\nb\nb\na\na\nb\nb\nb\na\n",
+"theirs": "a\n\ta\nb\na\na\nb\na\n\tb\na\nb\nb\nb\nb\nb\na\nb\nb\n b\r\nb\nb\na\na\na\nb\nb\na\nb\na\nb\nb\na\nb\nb\na\na\nb\nb\na\nb\na\nb\nb\nb\na\n",
+"text": "a \n\ta\nb\n a\r\n<<<<<<< ours\nb\nb\n||||||| base\nb\n=======\n>>>>>>> theirs\na\nb\na\n\tb\n a\nb\nb\n<<<<<<< ours\n||||||| base\nb\n=======\nb\nb\nb\n>>>>>>> theirs\na\nb\nb\n b\r\n<<<<<<< ours\na\na\na\n||||||| base\na\na\nb\n=======\nb\n>>>>>>> theirs\nb\na\na\na\nb\nb\n<<<<<<< ours\nb \n||||||| base\nb\nb\n=======\n>>>>>>> theirs\na\nb\nb\na\nb\na\nb\nb\n\ta\r\na\nb\nb\na\n<<<<<<< ours\na\n||||||| base\nb\n=======\nb\na\n>>>>>>> theirs\nb\nb\nb\na\n",
+"conflicts": 5,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen112",
+"base": "z\na b\na b\n\ud83d\ude00\na b\na\u00a0b\n\u00e9\na\u00a0b\n",
+"ours": "z\na b\n \ud83d\ude00\na b\na\u00a0b\n\u00e9\na\u00a0b",
+"theirs": "z\na b\na b\n\ud83d\ude00\na b\n a\u00a0b\n\u00e9\na\u00a0b\r",
+"text": "z\na b\n \ud83d\ude00\na b\n a\u00a0b\n\u00e9\na\u00a0b\r",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen113",
+"base": "\ny\n\n\n\n}\nx\n\n\ny\ny\n\n}\n}\ny\nx\n\n\nx\nx\nx\n}\ny\n}\ny\n\n\n\n}\nx\nx\nx\n\n\nx\nx\ny\n}\ny\nx\ny\ny\ny\n\nx\ny\ny\nx\n\n}\ny\ny\nx\n}\n\ny\n\n\ny\ny",
+"ours": "\ny\n\t\n\n}\nx\n\n\ny\n\n\n}\ny\ny\nx\n\n\nx\nx\n}\ny\n } \ny\n\n\n\n}\n}\nx\nx\nx\n\n\n x\r\ny \n}\ny\n}\ny\ny\ny\n\n\tx\ny\ny\nx\n\n }\ny\ny\ny\nx\n}\n\ny\n\n\ny\n\ty \n",
+"theirs": "\n\ty \n\n\n\n } \nx\n\n\ny\ny\n\n}\n}\ny\nx\n\n\nx\nx\nx\n}\ny\n}\ny\n\n\n\n } \n\nx\nx\n\t\n\nx\nx\nx\n}\n }\r\nx\ny\ny\ny\n\t\nx\ny\ny\nx\n\ny\ny\n x\r\n}\n\ny\n \n\ny\n}\n",
+"text": "\n\ty \n\t\n\n } \nx\n\n\ny\n\n\n}\ny\ny\nx\n\n\nx\nx\n}\ny\n } \ny\n\n\n\n } \n<<<<<<< ours\n}\nx\n=======\n\n>>>>>>> theirs\nx\nx\n\t\n\n x\r\n<<<<<<< ours\ny \n=======\nx\nx\n>>>>>>> theirs\n}\n<<<<<<< ours\ny\n}\n=======\n }\r\nx\n>>>>>>> theirs\ny\ny\ny\n\t\n\tx\ny\ny\nx\n\ny\ny\ny\n x\r\n}\n\ny\n \n\ny\n}\n",
+"conflicts": 3,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen114",
+"base": "h\na\nc\ne\nd\nf\ne\na\n",
+"ours": "h\nc\ng\nd\nd\nf\ne\n",
+"theirs": "h\na\nc\ne\nd\na\ne\na\n",
+"text": "h\nc\ng\nd\n<<<<<<< ours\nd\nf\n=======\na\n>>>>>>> theirs\ne\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen115",
+"base": "\n\ne\nc d\nf g h\nc d\nc d\ne\na b\ne\nc d\nc d\n",
+"ours": "e\n\n\ne\na b\nc d\nf g h\nc d\nc d\nf g h\ne\na b\ne\nc d\nc d\n",
+"theirs": "f g h\n\na b\nc d\nf g h\nc d\ne\na b\ne\nc d\nc d\n",
+"text": "<<<<<<< ours\ne\n\n||||||| base\n\n=======\nf g h\n>>>>>>> theirs\n\n<<<<<<< ours\ne\na b\n||||||| base\ne\n=======\na b\n>>>>>>> theirs\nc d\nf g h\nc d\n<<<<<<< ours\nc d\nf g h\n||||||| base\nc d\n=======\n>>>>>>> theirs\ne\na b\ne\nc d\nc d\n",
+"conflicts": 3,
+"style": "diff3"
+},
+{
+"name": "gen116",
+"base": "y\ny\nx\n}\nx\ny\n\n}\n\ny\n\n}\n",
+"ours": "y\ny\n}\nx\n}\nx\n\n}\n\ny\n\n}\n",
+"theirs": "y\ny\nx\n}\nx\n}\ny\n\n}\n\n\n}\n",
+"text": "y\ny\n}\nx\n}\nx\n<<<<<<< ours\n=======\n}\ny\n>>>>>>> theirs\n\n}\n\n\n}\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen117",
+"base": "b\nb\nb\nb\na\na\na\nb\nb\nb\na\nb\nb\nb\nb\na\nb\nb\na\nb\nb\nb\na\na\nb\nb\na\nb\na\na\na\na\nb\na\na\nb\na\nb\na\nb\nb\nb\nb\nb\na\n",
+"ours": "b\nb\nb\nb\na\na\nb\nb\nb\nb\na\na\nb\nb\nb\nb\nb\na\nb\nb\na\nb\nb\na\nb\nb\nb\na\nb\na\nb\na\na\nb\na\na\nb\na\na\na\nb\nb\nb\nb\nb\na\n",
+"theirs": "b\nb\nb\na\na\na\na\nb\nb\nb\nb\nb\nb\nb\na\nb\nb\na\nb\nb\nb\na\na\nb\nb\na\nb\nb\na\na\na\na\na\nb\na\na\na\nb\nb\nb\na\nb\na",
+"text": "b\nb\nb\na\na\n<<<<<<< ours\n||||||| base\na\n=======\na\na\n>>>>>>> theirs\nb\nb\nb\n<<<<<<< ours\nb\na\na\n||||||| base\na\n=======\n>>>>>>> theirs\nb\nb\nb\nb\nb\na\nb\nb\na\nb\nb\na\nb\nb\nb\n<<<<<<< ours\na\nb\n||||||| base\na\n=======\nb\n>>>>>>> theirs\na\nb\na\na\na\na\nb\na\na\n<<<<<<< ours\na\nb\n||||||| base\nb\n=======\na\n>>>>>>> theirs\nb\nb\nb\na\nb\na",
+"conflicts": 4,
+"style": "diff3"
+},
+{
+"name": "gen118",
+"base": "x\ny\ny\nx\n}\n",
+"ours": "x\ny\ny\nx\n}",
+"theirs": "x\ny\ny\nx\n}\n",
+"text": "x\ny\ny\nx\n}",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen119",
+"base": "a\nb\na\nb\nb\nb\nb\nb\nb\na\nb\na\nb\nb\na\na\na\na\na\na\na\na\nb\na\nb\na\nb\na\nb\nb\nb\nb\nb\nb\na\na\nb\na\nb\na\nb\nb\nb\nb\nb\n",
+"ours": "a\nb\na\nb\nb\nb\nb\na\nb\na\nb\nb\nb\na\na\na\na\na\na\na\na\na\na\na\nb\na\nb\nb\na\nb\nb\nb\nb\nb\nb\na\na\nb\na\nb\nb\nb\nb\nb\nb\nb",
+"theirs": "a\nb\na\nb\nb\nb\nb\nb\nb\na\nb\na\nb\nb\na\na\na\na\na\na\na\na\nb\na\na\nb\na\nb\na\nb\nb\nb\nb\na\nb\nb\na\na\nb\na\nb\na\nb\nb\nb\nb\nb\n",
+"text": "a\nb\na\nb\nb\nb\nb\na\nb\na\nb\nb\nb\na\na\na\na\na\na\na\na\na\n<<<<<<< ours\na\na\n||||||| base\n=======\na\n>>>>>>> theirs\nb\na\nb\nb\na\nb\nb\nb\nb\na\nb\nb\na\na\nb\na\nb\nb\nb\nb\nb\nb\nb",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "gen120",
+"base": "y\n",
+"ours": "y\n",
+"theirs": "}\n",
+"text": "}\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen121",
+"base": "a\n",
+"ours": "a",
+"theirs": "a\n",
+"text": "a",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": false
+},
+{
+"name": "gen122",
+"base": "f g h\n\nc d\nc d\ne\nc d\ne\na b\ne\nf g h\nf g h\n",
+"ours": "f g h\ne\n\nc d\nf g h\nc d\na b\ne\nc d\ne\na b\ne\nc d\nf g h\nf g h\n",
+"theirs": "f g h\n\nc d\nc d\ne\nc d\ne\na b\ne\nf g h\nf g h\n\n",
+"text": "f g h\ne\n\nc d\nf g h\nc d\na b\ne\nc d\ne\na b\ne\nc d\nf g h\nf g h\n\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen123",
+"base": "b\na\n",
+"ours": "\tb \na\n",
+"theirs": "b\na\n",
+"text": "\tb \na\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen124",
+"base": "c d\n\nc d\nf g h\nf g h\n\nf g h\ne\nc d\ne\na b\nc d\nf g h\ne\nc d\ne\ne\n\ne\n\nc d\nf g h\na b\nf g h\nc d\n\na b\na b\nf g h\nf g h\n\na b\ne\ne\nf g h\ne\n\na b\nf g h\nc d\nf g h\ne\nc d\n\nc d",
+"ours": "c d\n\nf g h\nc d\nf g h\ne\n f \r g \r h\nc d\n\nf g h\nf g h\nc d\ne\na b\nc d\n\ne\ne\nc d\n\ne\n\n\na b\ne\nf g h\nf g h\nf g h\nf g h\na b\nc d\n\na b\nf g h\na b\nf g h\ne\na b\nf \r g \r h\nc d\ne\nc d\n\n",
+"theirs": "\nc d\na b\nf g h\n\nf g h\ne\nc d\n\te \nf g h\na b\nc d\n f\tg\th\ne\nc d\ne\na b\ne\n\n\nc d\nf g h\na b\nf g h\nc d\n\na b\na b\nf g h\n\tf \r g \r h \n\na b\ne\ne\nf \r g \r h\r\ne\n\na b\n\tf\tg\th\nc d\nf g h\n\te \nc d\n\nc d\nc d\n",
+"text": "\nf g h\nc d\n<<<<<<< ours\nf g h\ne\n||||||| base\nf g h\n=======\na b\n>>>>>>> theirs\n f \r g \r h\nc d\n\nf g h\nf g h\nc d\n\te \nf g h\na b\nc d\n\ne\na b\ne\nc d\n\n\n\na b\ne\nf g h\nf g h\nf g h\nf g h\na b\nc d\n\na b\nf g h\na b\nf \r g \r h\r\ne\na b\nf \r g \r h\nc d\n\te \nc d\n\n<<<<<<< ours\n||||||| base\nc d\n=======\nc d\nc d\n>>>>>>> theirs\n",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen125",
+"base": "a\na\nc\nc\nb\nb\na\nc\n",
+"ours": "a\na\nc\nc\nb\nb\na\nc\n",
+"theirs": "a\na\na\na\nb\nb\nc\na\nc",
+"text": "a\na\na\na\nb\nb\nc\na\nc",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen126",
+"base": "\n}\n\nx\nx\ny\n}\n}\n\n\n}\nx\ny\n}\nx\nx\ny\ny\n}\ny\n}\ny\ny\n}\ny\ny\n}\ny\nx\n\n\ny\nx\n\ny\n}\nx\ny\n}\n\ny\nx\n\n}\n\nx\n}\n}\n\n\nx\nx\n}\n}\n\n\ny\n}\n\n\n",
+"ours": "\n}\n\nx\n\ny\n}\n}\n\n\n}\nx\ny\n}\nx\nx\ny\ny\n}\ny\n}\ny\ny\n}\ny\ny\n}\ny\nx\n\n\ny\nx\n\ny\n}\nx\ny\n}\n\ny\nx\n\n}\n\nx\n}\n}\n\n\nx\nx\n}\n}\n\n\ny\n}\n\n\n",
+"theirs": "\n}\n\n\nx\nx\ny\n}\n}\n}\n\n\n\n\n}\ny\nx\n}\n}\nx\ny\ny\n}\n\n}\nx\n\n\ny\n}\nx\n\n\n}\n}\n}\nx\n\ny\nx\nx\n}\n\nx\n}\n}\n\n\nx\nx\n}\nx\n\ny\n\nx\ny\n\n}\n",
+"text": "\n}\n\n\nx\n\ny\n}\n}\n}\n\n\n\n\n}\ny\nx\n}\n}\nx\ny\ny\n}\n\n}\nx\n\n\ny\n}\nx\n\n\n}\n}\n}\nx\n\ny\nx\nx\n}\n\nx\n}\n}\n\n\nx\nx\n}\nx\n\ny\n\nx\ny\n\n}\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen127",
+"base": "b\n",
+"ours": "b\n",
+"theirs": "b\n",
+"text": "b\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen128",
+"base": "a b\n\n\na b\na b\nc d\na b\ne\n",
+"ours": "a b\nc d\n\na b\na b\nc d\na b\na b\n",
+"theirs": "a b\n\n\n\ne\na b\ne\n",
+"text": "a b\nc d\n\n\ne\na b\na b\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen129",
+"base": "d\nc\ng\ne\nc\ne\nb\nh\ne\nf\ne\nh\ng\nh\nd\nc\nh\nc\nd\ng\ne\nf\nh\nc\nf\nf\nd\nf\nf\ng\nd\nd\nh\nc\nf\ne\ne\nd\na\nh\nc\ne\ng\nh\nd\n",
+"ours": "b\nd\nh\nc\ne\nf\nc\ne\nc\nb\nh\ne\ne\nb\ng\nd\nc\ne\nh\nc\nf\nd\nh\nf\ne\nh\ng\nc\nf\nf\nh\nc\nd\nd\nh\nc\ne\ne\ne\ne\nd\nh\nc\nd\ng\nd\n",
+"theirs": "d\nc\ng\ne\nc\ne\ne\nh\ne\ng\nf\nh\ne\nh\ng\nh\ng\nd\nc\nh\nc\nd\ng\ne\nf\nh\nc\nf\nf\nd\nf\nf\ng\nd\nh\nc\nf\ne\ne\ne\nh\nc\nc\ne\ng\nh\nd\ng\nb\n",
+"text": "b\nd\nh\nc\ne\nf\nc\ne\n<<<<<<< ours\nc\nb\n=======\ne\n>>>>>>> theirs\nh\ne\n<<<<<<< ours\n=======\ng\nf\nh\n>>>>>>> theirs\ne\nb\ng\n<<<<<<< ours\n=======\nh\ng\n>>>>>>> theirs\nd\nc\ne\nh\nc\nf\nd\nh\nf\ne\nh\ng\nc\nf\nf\nh\nc\nd\nh\nc\ne\ne\ne\n<<<<<<< ours\ne\nd\n=======\n>>>>>>> theirs\nh\nc\n<<<<<<< ours\nd\n=======\nc\ne\n>>>>>>> theirs\ng\nd\ng\nb\n",
+"conflicts": 5,
+"style": "merge"
+},
+{
+"name": "gen130",
+"base": "a\u00a0b\nz\n\u00e9\n\u00e9\n\u00e9\n\ud83d\ude00\n\ud83d\ude00\nz\n",
+"ours": "z\nz\nz\na b\na b\n\ud83d\ude00\n\ud83d\ude00\n",
+"theirs": "a\u00a0b\nz\n\u00e9\n\u00e9\n\u00e9\n\ud83d\ude00\n\ud83d\ude00\nz\n",
+"text": "z\nz\nz\na b\na b\n\ud83d\ude00\n\ud83d\ude00\n",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen131",
+"base": "\u00e9\n\u00e9\nz\na\u00a0b\na\u00a0b\nz\nz\na\u00a0b",
+"ours": "\u00e9\n\u00e9\nz\na\u00a0b\na\u00a0b\nz\na\u00a0b",
+"theirs": "\u00e9\n\u00e9\nz\na\u00a0b\na\u00a0b\na b\nz\nz\n\u00e9\na\u00a0b\n",
+"text": "\u00e9\n\u00e9\nz\na\u00a0b\na\u00a0b\na b\nz\n<<<<<<< ours\n=======\nz\n\u00e9\n>>>>>>> theirs\na\u00a0b\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen132",
+"base": "f g h\nf g h\nf g h\nc d\nf g h\ne\n\n\nf g h\ne\na b\ne\n\nc d\ne\ne\n\n\nc d\nf g h\n\na b\n\ne\na b\nf g h\n\ne\na b\ne\n",
+"ours": "f g h\nf g h\nf g h\nf g h\nc d\nf g h\nf g h\ne\n\nc d\n\nf g h\ne\na b\nc d\ne\n\ne\nc d\ne\n\nc d\nc d\nf g h\ne\na b\nf g h\ne\n\ne\nf g h\ne\n",
+"theirs": "f g h\nf g h\nf g h\nc d\nf g h\ne\n\nf g h\ne\na b\nf g h\n\nc d\na b\ne\n\n\nc d\nc d\nf g h\n\n\na b\n\ne\na b\nf g h\n\ne\na b\ne\n",
+"text": "f g h\nf g h\nf g h\nf g h\nc d\nf g h\nf g h\ne\n\n<<<<<<< ours\nc d\n\n||||||| base\n\n=======\n>>>>>>> theirs\nf g h\ne\na b\n<<<<<<< ours\nc d\ne\n||||||| base\ne\n=======\nf g h\n>>>>>>> theirs\n\n<<<<<<< ours\ne\nc d\n||||||| base\nc d\ne\n=======\nc d\na b\n>>>>>>> theirs\ne\n\nc d\nc d\nf g h\n<<<<<<< ours\n||||||| base\n\na b\n\n=======\n\n\na b\n\n>>>>>>> theirs\ne\na b\nf g h\ne\n\ne\nf g h\ne\n",
+"conflicts": 4,
+"style": "diff3"
+},
+{
+"name": "gen133",
+"base": "\n",
+"ours": "\n\n",
+"theirs": "\n",
+"text": "\n\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen134",
+"base": "b\nc\na\nb\nb\na\nb\na\nb\nb\nb\nc\nc\na\na\nc\na\nc\nb\na\na\na\nc\nb\nc\na\nc\na\nc\nb\nc\na\nb\na\nb\na\na\nc\nc\na\nc\nb\nc\na\nb\n",
+"ours": "b\nc\na\nb\nb\na\nb\na\nb\nb\nb\nc\nc\na\na\nc\na\nc\nb\na\na\na\nc\nb\nc\na\nc\na\nc\nb\nc\na\nb\na\nb\na\na\nc\nc\na\nb\nb\nc\na\nb\n",
+"theirs": "b\nc\na\nb\nb\na\nb\na\nb\nb\nb\nb\nc\nc\na\na\nc\na\nc\nb\na\na\na\nc\nb\nc\na\nc\na\nc\nb\nc\na\nb\na\na\na\nc\nc\na\nc\nb\na\nb\n",
+"text": "b\nc\na\nb\nb\na\nb\na\nb\nb\nb\nb\nc\nc\na\na\nc\na\nc\nb\na\na\na\nc\nb\nc\na\nc\na\nc\nb\nc\na\nb\na\na\na\nc\nc\na\nb\n<<<<<<< ours\nb\nc\n=======\n>>>>>>> theirs\na\nb\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen135",
+"base": "a\na\na\na\nb\nb\nb\nb\nb\na\nb\nb\na\na\na\nb\nb\na\na\na\na\na\na\na\nb\na\na\nb\na\na\na\na\nb\nb\na\nb\nb\na\na\na\na\na\nb\nb\na\n",
+"ours": "a\na\na\na\na\nb\nb\nb\nb\nb\na\nb\na\na\nb\na\na\nb\nb\na\na\nb\na\na\na\na\nb\nb\na\na\na\na\na\na\na\nb\nb\nb\nb\na\na\nb\na\na\nb\nb\n",
+"theirs": "a\nb\na\na\na\nb\na\na\nb\nb\na\nb\nb\na\na\nb\na\nb\nb\na\na\na\na\nb\na\na\nb\nb\na\na\nb\nb\na\nb\nb\nb\na\na\na\na\nb\nb\na\n",
+"text": "a\nb\na\na\na\na\nb\na\na\nb\nb\na\nb\na\na\nb\na\na\nb\nb\na\na\nb\na\nb\nb\na\na\n<<<<<<< ours\na\na\n=======\nb\nb\n>>>>>>> theirs\na\na\na\nb\nb\nb\nb\nb\na\nb\na\na\nb\nb\n",
+"conflicts": 1,
+"style": "merge"
+},
+{
+"name": "gen136",
+"base": "a\nb\nb\na\na\nb\na\nb\nb\na\nb\nb\na\nb\nb\nb\nb\na\nb\na\na\nb\na\na\na\na\nb\nb\nb\nb\nb\na\nb\nb\nb\nb\nb\nb\na\na\na\nb\na\nb\nb\na\na\na\nb\nb\nb\na\na\na\na\nb\nb\na\na\na\n",
+"ours": "a\nb\nb\na\na\nb\na\na\nb\nb\na\nb\nb\na\nb\nb\nb\nb\na\nb\na\na\nb\na\na\na\na\nb\nb\nb\nb\nb\na\na\nb\nb\nb\nb\na\nb\nb\nb\na\na\nb\na\nb\na\nb\nb\na\na\na\na\nb\nb\nb\na\na\na\na\nb\nb\na\na\na\n",
+"theirs": "b\nb\na\na\nb\nb\na\nb\na\na\nb\na\nb\nb\nb\nb\na\nb\nb\na\nb\nb\na\nb\na\nb\nb\nb\nb\na\nb\nb\na\nb\nb\na\nb\na\nb\na\na\na\nb\nb\na\na\nb\na\nb\na\nb\nb\nb\na\na\na\na\nb\na\nb\nb\na\nb\n",
+"text": "b\nb\na\na\nb\n<<<<<<< ours\na\na\n||||||| base\na\n=======\n>>>>>>> theirs\nb\na\nb\na\na\nb\na\nb\nb\nb\nb\na\nb\nb\na\nb\nb\na\nb\na\nb\nb\nb\nb\na\na\nb\nb\na\nb\na\nb\na\nb\nb\na\nb\na\nb\na\na\nb\nb\na\na\nb\na\na\nb\na\nb\nb\nb\na\na\na\na\nb\na\nb\nb\na\nb\n",
+"conflicts": 1,
+"style": "diff3"
+},
+{
+"name": "gen137",
+"base": "b\na\na\nc\nb\nc\na\nc\nb\na\nc\nb\nc\nc\nc\na\na\nb\nc\nb\nc\nb\nc\nb\nc\nc\nb\na\na\na\n",
+"ours": "a\na\nc\nb\nc\na\nc\nb\na\na\nb\r\nc\nc\nc\na\na\nc\nb\nc\r\nb\nc\n\tb \nc\n\tb\nc\nc\nb\n\ta \na\na",
+"theirs": "b\na\na\nc\nb\nc\na\nc\nb\na\nb\nc\r\nc\na\nc\n\ta \nc\nc\nb\nc\nb\nc\nb\nc\nc\nb\r\na\na\na",
+"text": "a\na\nc\nb\nc\na\nc\nb\na\n<<<<<<< ours\na\n||||||| base\nc\n=======\n>>>>>>> theirs\nb\r\nc\r\nc\na\nc\n\ta \n<<<<<<< ours\nc\nb\n||||||| base\nb\n=======\n>>>>>>> theirs\nc\r\nc\nb\nc\n\tb \nc\n\tb\nc\nc\nb\r\n\ta \na\na",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen138",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge"
+},
+{
+"name": "gen139",
+"base": "e\nc\nd\nf\nd\ng\nc\nf\nc\ne\ne\nb\na\nc\nh\ne\nc\na\nd\ne",
+"ours": "d\nc\nb\nd\nd\nh\ng\n\tc\na\nh\n\tc\na\ne\ng\nc\nb\nc\n h\nb\nc\nh\na\nd\ng\ne\r",
+"theirs": "e \nc\nd\nd\ng\nc\nf\nc\ne\nb\ne\nb\nh\nc\nd\nh\ne\nc\na\nd\ne",
+"text": "d\nc\nb\nd\nd\nh\ng\n\tc\na\nh\n\tc\n<<<<<<< ours\na\n||||||| base\ne\n=======\ne\nb\n>>>>>>> theirs\ne\ng\nc\nb\n<<<<<<< ours\n||||||| base\na\n=======\nh\n>>>>>>> theirs\nc\nd\n h\nb\nc\nh\na\nd\ng\ne\r",
+"conflicts": 2,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen140",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen141",
+"base": "d\nb\nd\ne\ne\nd\ng\nc\nb\nf\nh\nd\nb\nf\nd\na\nf\ng\nb\ng\nc\nb\nd\ne\nc\nf\nf\na\nh\ne\n",
+"ours": "d\nb\nd\ne\ne\ne\ng\nc\nb\na\nf\nh\nd\nb\nf\nd\na\nf\ng\nb\ng\nc\nb\nd\ne\nc\nf\nf\na\nh\ne\n",
+"theirs": "d\ng\nb\na\ng\ne\ne\nd\na\nb\nd\nf\nh\nd\nh\nb\nf\ng\na\nf\ng\ng\ne\nd\nf\nf\nf\na\nc\n",
+"text": "d\ng\nb\na\ng\ne\ne\n<<<<<<< ours\ne\ng\nc\n=======\nd\na\n>>>>>>> theirs\nb\n<<<<<<< ours\na\n=======\nd\n>>>>>>> theirs\nf\nh\nd\nh\nb\nf\ng\na\nf\ng\ng\ne\nd\nf\nf\nf\na\nc\n",
+"conflicts": 2,
+"style": "merge"
+},
+{
+"name": "gen142",
+"base": "",
+"ours": "",
+"theirs": "}\n",
+"text": "}\n",
+"conflicts": 0,
+"style": "merge",
+"ignore_ws": true
+},
+{
+"name": "gen143",
+"base": "a\nb\na\n",
+"ours": "a\nb\na",
+"theirs": "a\nb\na\n",
+"text": "a\nb\na",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen144",
+"base": "",
+"ours": "",
+"theirs": "",
+"text": "",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen145",
+"base": "e\n",
+"ours": "e\n",
+"theirs": "a\n",
+"text": "a\n",
+"conflicts": 0,
+"style": "diff3"
+},
+{
+"name": "gen146",
+"base": "\u00e9\n\u00e9\n",
+"ours": "\u00e9\na b\n",
+"theirs": "\u00e9\n\u00e9\n",
+"text": "\u00e9\na b\n",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": false
+},
+{
+"name": "gen147",
+"base": "x\n",
+"ours": "x\n",
+"theirs": "x",
+"text": "x",
+"conflicts": 0,
+"style": "diff3",
+"ignore_ws": true
+},
+{
+"name": "gen148",
+"base": "x\nx\n}\nx\nx\n\ny\ny\nx\n}\ny\n}\n}\n}\n\nx\n}\n\ny\ny\ny\n\nx\nx\ny\n\ny\n\ny\n}\n\nx\ny\n}\n}\n\n}\ny\n}\ny\ny\nx\ny\n}\ny\n\nx\nx\ny\n}\n}\n}\ny\n\n}\nx\ny\nx\nx\nx\n",
+"ours": "x\nx\ny\n}\nx\nx\n\ny\n}\nx\ny\n}\nx\n}\ny\ny\n}\nx\ny\ny\n}\n\ny\n\ny\nx\ny\nx\n\n\ny\ny\ny\n\n}\ny\n}\n}\n}\n\n}\n\ny\ny\n}\nx\n\nx\nx\ny\n}\n}\nx\ny\n}\n\nx\nx\ny\nx\nx\n",
+"theirs": "x\nx\n}\nx\nx\nx\n\ny\ny\nx\n}\ny\n}\n}\n}\n\nx\n}\n\ny\ny\ny\n\nx\nx\ny\n\ny\n\ny\n}\n\nx\ny\n}\n}\n\n}\ny\n}\ny\ny\nx\n}\ny\n\nx\nx\nx\ny\ny\n}\n}\ny\nx\n}\nx\ny\nx\nx\nx\n",
+"text": "x\nx\ny\n}\nx\nx\nx\n\ny\n}\nx\ny\n}\nx\n}\ny\ny\n}\nx\ny\ny\n}\n\ny\n\ny\nx\ny\nx\n\n\ny\ny\ny\n\n}\ny\n}\n}\n}\n\n}\n\ny\n<<<<<<< ours\ny\n=======\nx\n>>>>>>> theirs\n}\nx\n\nx\nx\nx\ny\ny\n}\nx\ny\n<<<<<<< ours\n=======\nx\n>>>>>>> theirs\n}\n\nx\nx\ny\nx\nx\n",
+"conflicts": 2,
+"style": "merge"
+},
+{
+"name": "gen149",
+"base": "c",
+"ours": "c\nc\n",
+"theirs": "a\nc\n",
+"text": "a\nc\nc\n",
+"conflicts": 0,
+"style": "diff3"
+}
+],
+"cli": [
+{
+"name": "clean",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nb\nc\nd\n",
+"opts": [],
+"opts_last": false,
+"text": "a\nX\nc\nd\n",
+"conflicts": 0
+},
+{
+"name": "conflict",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"opts": [],
+"opts_last": false,
+"text": "a\n<<<<<<< ours\nX\n=======\nY\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "order",
+"base": "base\n",
+"ours": "ours\n",
+"theirs": "base\n",
+"opts": [],
+"opts_last": false,
+"text": "ours\n",
+"conflicts": 0
+},
+{
+"name": "diff3",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"opts": [
+"--diff3"
+],
+"opts_last": false,
+"text": "a\n<<<<<<< ours\nX\n||||||| base\nb\n=======\nY\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "diff3-last",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"opts": [
+"--diff3"
+],
+"opts_last": true,
+"text": "a\n<<<<<<< ours\nX\n||||||| base\nb\n=======\nY\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "labels1",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"opts": [
+"-L",
+"mine"
+],
+"opts_last": false,
+"text": "a\n<<<<<<< mine\nX\n=======\nY\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "labels2",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"opts": [
+"--diff3",
+"-L",
+"mine",
+"-L",
+"old one"
+],
+"opts_last": false,
+"text": "a\n<<<<<<< mine\nX\n||||||| old one\nb\n=======\nY\n>>>>>>> theirs\nc\n",
+"conflicts": 1
+},
+{
+"name": "labels3",
+"base": "a\nb\nc\n",
+"ours": "a\nX\nc\n",
+"theirs": "a\nY\nc\n",
+"opts": [
+"-L",
+"A",
+"-L",
+"B",
+"-L",
+"C",
+"--diff3"
+],
+"opts_last": true,
+"text": "a\n<<<<<<< A\nX\n||||||| B\nb\n=======\nY\n>>>>>>> C\nc\n",
+"conflicts": 1
+},
+{
+"name": "crlf",
+"base": "a\r\nb\r\nc\r\n",
+"ours": "a\r\nX\r\nc\r\n",
+"theirs": "a\r\nb\r\nc\r\nd\r\n",
+"opts": [],
+"opts_last": false,
+"text": "a\r\nX\r\nc\r\nd\r\n",
+"conflicts": 0
+},
+{
+"name": "crlf-conflict",
+"base": "a\r\nb\r\n",
+"ours": "a\r\nX\r\n",
+"theirs": "a\r\nY\r\n",
+"opts": [],
+"opts_last": false,
+"text": "a\r\n<<<<<<< ours\nX\r\n=======\nY\r\n>>>>>>> theirs\n",
+"conflicts": 1
+},
+{
+"name": "lone-cr",
+"base": "a\rb\nc\n",
+"ours": "a\rb\nc\nd\n",
+"theirs": "A\rb\nc\n",
+"opts": [],
+"opts_last": false,
+"text": "A\rb\nc\nd\n",
+"conflicts": 0
+},
+{
+"name": "no-final-newline",
+"base": "a\nb",
+"ours": "a\nB",
+"theirs": "a\nb",
+"opts": [],
+"opts_last": false,
+"text": "a\nB",
+"conflicts": 0
+},
+{
+"name": "no-final-newline2",
+"base": "a\nb\n",
+"ours": "a\nb",
+"theirs": "A\nb\n",
+"opts": [],
+"opts_last": false,
+"text": "A\nb",
+"conflicts": 0
+},
+{
+"name": "unicode",
+"base": "\u00e9\n\ud83d\ude00\nz\n",
+"ours": "\u00e9\n\ud83d\ude00 x\nz\n",
+"theirs": "\u00e8\n\ud83d\ude00\nz\n",
+"opts": [],
+"opts_last": false,
+"text": "<<<<<<< ours\n\u00e9\n\ud83d\ude00 x\n=======\n\u00e8\n\ud83d\ude00\n>>>>>>> theirs\nz\n",
+"conflicts": 1
+},
+{
+"name": "unicode-label",
+"base": "a\n",
+"ours": "b\n",
+"theirs": "c\n",
+"opts": [
+"-L",
+"\u00fcber",
+"-L",
+"b",
+"-L",
+"\u4e2d"
+],
+"opts_last": false,
+"text": "<<<<<<< \u00fcber\nb\n=======\nc\n>>>>>>> \u4e2d\n",
+"conflicts": 1
+},
+{
+"name": "ignore-ws",
+"base": "a b\nc\n",
+"ours": "a  b\nc\n",
+"theirs": "a\tb \nC\n",
+"opts": [
+"--ignore-ws"
+],
+"opts_last": false,
+"text": "a  b\nC\n",
+"conflicts": 0
+},
+{
+"name": "ignore-ws-crlf",
+"base": "a\r\nb\r\n",
+"ours": "a\r\nb\r\n",
+"theirs": "a\nb\nc\n",
+"opts": [
+"--ignore-ws"
+],
+"opts_last": true,
+"text": "a\nb\nc\n",
+"conflicts": 0
+},
+{
+"name": "empty",
+"base": "",
+"ours": "",
+"theirs": "",
+"opts": [],
+"opts_last": false,
+"text": "",
+"conflicts": 0
+},
+{
+"name": "ls",
+"base": "a\u2028b\nc\n",
+"ours": "a\u2028b\nc\nd\n",
+"theirs": "x\nc\n",
+"opts": [],
+"opts_last": false,
+"text": "x\nc\nd\n",
+"conflicts": 0
+}
+],
+"big": [
+{
+"sha": "f0328b3994d00fff264f7528798c81a1734391caaa63837c6698c43514597d63",
+"conflicts": 6
+},
+{
+"sha": "3c9c3cf6ae578d911c575c54a7dcb9757ba4286745263de05222052a4bf3095c",
+"conflicts": 5
+}
+],
+"scrambled": [
+{
+"sha": "e601593d3fa4dec0052d52a46a1fd3c03708012a5df0814412bc658e0d623430",
+"conflicts": 53
+},
+{
+"sha": "901acc04d526f706df1328d89eb203be02f2ba9da02fa208116bd755bcfa62fa",
+"conflicts": 51
+}
+]
+}
