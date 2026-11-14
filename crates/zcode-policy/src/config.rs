@@ -98,6 +98,10 @@ pub struct ModelConfig {
     pub temperature: Option<f32>,
     /// Most tool calls run from one model response.
     pub max_tool_calls: usize,
+    /// Let `edit`, `write` and `apply_patch` take a `then_run` command that
+    /// runs right after the change, so a change and its check cost one
+    /// request instead of two.
+    pub fuse_actions: bool,
     /// How many tools the model is offered.
     pub tools: ToolProfile,
     /// How the model changes files.
@@ -155,6 +159,7 @@ impl Default for ModelConfig {
             summary_model: None,
             temperature: None,
             max_tool_calls: 32,
+            fuse_actions: true,
             tools: ToolProfile::Full,
             edit_format: EditFormat::SearchReplace,
             escalate_to: None,
@@ -302,6 +307,9 @@ pub struct ContextConfig {
     pub compact_at_tokens: u64,
     /// Tool outputs longer than this are saved to a file and previewed.
     pub spill_at_bytes: usize,
+    /// Leave the lines of passing tests and build progress out of command
+    /// output shown to the model; the whole output is saved to a file.
+    pub condense_output: bool,
     /// With more MCP and plugin tools than this, none of them is declared
     /// to the model: it finds them with `tool_search` and runs them with
     /// `tool_call`, so they cost no prompt tokens until used.
@@ -322,6 +330,7 @@ impl Default for ContextConfig {
         Self {
             compact_at_tokens: 100_000,
             spill_at_bytes: 16_000,
+            condense_output: true,
             defer_tools_over: 20,
             scripts: true,
             clear_tool_results: false,

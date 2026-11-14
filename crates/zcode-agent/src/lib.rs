@@ -19,7 +19,7 @@ use zcode_kernel::Chain;
 use zcode_llm::{Llm, LlmError, Request, SinkError};
 use zcode_session::{
     Block, Delta, Event, History, Record, SessionError, SessionId, SessionWriter, StopReason,
-    TurnEndReason, assemble, derive_history, plan_close,
+    ToolSpec, TurnEndReason, assemble, derive_history, plan_close,
 };
 use zcode_tools::{Effect, Tool, ToolContext, ToolOutput, ToolRunner, ToolSet};
 
@@ -175,6 +175,11 @@ pub trait TurnHook: Send + Sync {
 /// Starts the message telling the model the turn is about to run out.
 pub const STEPS_LEFT_PREFIX: &str = "[zcode limit]";
 const STEPS_LEFT_WARNING: u64 = 3;
+/// The argument that asks for a command to be run after a change.
+pub const THEN_RUN: &str = "then_run";
+const SHELL_TOOL: &str = "bash";
+/// The tools that take [`THEN_RUN`].
+const FUSED_TOOLS: [&str; 3] = ["edit", "write", "apply_patch"];
 /// How often in one turn a response cut off by the output limit is asked
 /// to carry on before the turn ends as it stands.
 const MAX_CONTINUATIONS: u32 = 2;
@@ -182,6 +187,8 @@ const MAX_CONTINUATIONS: u32 = 2;
 pub struct Agent {
     pub llm: Arc<dyn Llm>,
     pub tools: ToolSet,
+    /// Let a file change carry the command that checks it.
+    pub fuse_actions: bool,
     /// Shared, so a tool that makes calls of its own can send them through
     /// the same layers.
     pub pipeline: Arc<ToolPipeline>,
@@ -244,7 +251,7 @@ impl Agent {
                 text: self.system.clone(),
             })?;
         }
-        let specs = self.tools.specs();
+        let specs = self.specs();
         if history.tools != specs {
             session.append(Event::ToolsDeclared { tools: specs })?;
         }
@@ -468,7 +475,77 @@ impl Agent {
         Some((self.tools.get(name)?, name.to_string(), input.clone()))
     }
 
-    async fn execute(&self, call_id: String, name: String, input: Value) -> ToolOutput {
+    /// The tools as declared to the model. The tools that change files
+    /// gain a `then_run` argument when there is a shell to run it.
+    fn specs(&self) -> Vec<ToolSpec> {
+        let mut specs = self.tools.specs();
+        if self.fuse_actions && self.tools.get(SHELL_TOOL).is_some() {
+            for spec in &mut specs {
+                if !FUSED_TOOLS.contains(&spec.name.as_str()) {
+                    continue;
+                }
+                if let Some(properties) = spec.input_schema["properties"].as_object_mut() {
+                    properties.insert(
+                        THEN_RUN.into(),
+                        serde_json::json!({
+                            "type": "string",
+                            "description": "Optional. A shell command to run right after the \
+                                            change is made, such as the test that covers it. \
+                                            Its output comes back with this result, which \
+                                            saves a separate call."
+                        }),
+                    );
+                }
+            }
+        }
+        specs
+    }
+
+    /// Runs a call, and for a change that names a follow-up command, that
+    /// command too: an edit is nearly always followed by the check for it,
+    /// and doing both in one call saves a request to the model.
+    async fn execute(&self, call_id: String, name: String, mut input: Value) -> ToolOutput {
+        let then_run = match input.as_object_mut() {
+            Some(fields) if self.fuse_actions && FUSED_TOOLS.contains(&name.as_str()) => {
+                match fields.remove(THEN_RUN) {
+                    Some(Value::String(command)) if !command.trim().is_empty() => Some(command),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let mut output = self.execute_one(call_id.clone(), name, input).await;
+        let Some(command) = then_run else {
+            return output;
+        };
+        if output.is_error {
+            output.text.push_str(&format!(
+                "\n[{THEN_RUN}] Not run, because the change was not made: `{command}`"
+            ));
+            return output;
+        }
+        // The command goes through the same layers as any shell call, so
+        // rules, approval and the sandbox apply to it as they would.
+        let ran = self
+            .execute_one(
+                format!("{call_id}-then"),
+                SHELL_TOOL.into(),
+                serde_json::json!({ "command": command }),
+            )
+            .await;
+        output
+            .text
+            .push_str(&format!("\n\n[{THEN_RUN}] $ {command}\n{}", ran.text));
+        if ran.is_error {
+            output
+                .text
+                .push_str("\n[The change above was made; the command after it failed.]");
+            output.is_error = true;
+        }
+        output
+    }
+
+    async fn execute_one(&self, call_id: String, name: String, input: Value) -> ToolOutput {
         let Some((tool, name, input)) = self.resolve(&name, &input) else {
             return ToolOutput::error(if name == deferred::CALL_TOOL {
                 format!(

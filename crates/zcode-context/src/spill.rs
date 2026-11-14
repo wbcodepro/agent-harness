@@ -15,6 +15,8 @@ pub struct SpillLayer {
     pub threshold: usize,
     /// Bytes of the output kept inline, split between its start and end.
     pub preview: usize,
+    /// Leave passing tests and build progress out of command output.
+    pub condense: bool,
 }
 
 /// The largest index `<= at` that is a character boundary of `text`.
@@ -57,8 +59,20 @@ impl Layer<ToolRequest, ToolOutput> for SpillLayer {
             // data, not a preview; what the script prints is spilled when
             // the script's own call comes back through here.
             let for_script = request.call_id.starts_with("script-");
+            let from_shell = request.name == "bash";
             let mut output = next.run(request).await;
-            if for_script || output.text.len() <= self.threshold {
+            if for_script {
+                return output;
+            }
+            // Passing tests and build progress are left out of a command's
+            // output before it is ever logged, so they are not paid for
+            // again on each later request. The whole output goes to disk.
+            let condensed = if self.condense && from_shell {
+                crate::condense::condense(&output.text)
+            } else {
+                None
+            };
+            if condensed.is_none() && output.text.len() <= self.threshold {
                 return output;
             }
 
@@ -70,6 +84,28 @@ impl Layer<ToolRequest, ToolOutput> for SpillLayer {
             let path = self.dir.join(format!("{stamp}-{name}.txt"));
             let saved = std::fs::create_dir_all(&self.dir)
                 .and_then(|()| std::fs::write(&path, &output.text));
+            if let Some((shown, dropped)) = condensed {
+                let whole = output.text.len();
+                output.text = shown;
+                if output.text.len() <= self.threshold {
+                    if !output.text.ends_with('\n') {
+                        output.text.push('\n');
+                    }
+                    output.text.push_str(&match saved {
+                        Ok(()) => format!(
+                            "[{dropped} lines of passing tests or build progress were left \
+                             out; every other line is as printed. The full output \
+                             ({whole} bytes) is saved at {}.]",
+                            path.display()
+                        ),
+                        Err(e) => format!(
+                            "[{dropped} lines of passing tests or build progress were left \
+                             out; the full output could not be saved ({e}).]"
+                        ),
+                    });
+                    return output;
+                }
+            }
             let text = &output.text;
             let head = floor_boundary(text, self.preview / 2);
             let tail = ceil_boundary(text, text.len() - self.preview / 2);
@@ -112,6 +148,7 @@ mod tests {
             dir: dir.path().join("spill"),
             threshold: 100,
             preview: 40,
+            condense: true,
         });
         let request = |call_id: &str| ToolRequest {
             call_id: call_id.into(),
@@ -149,5 +186,50 @@ mod tests {
         assert!(path.to_string_lossy().ends_with("-___c_2.txt"));
         assert!(spilled.text.contains(&path.display().to_string()));
         assert_eq!(std::fs::read_to_string(path).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn passing_tests_are_left_out_of_a_command_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let chain = Chain::new();
+        chain.push(SpillLayer {
+            dir: dir.path().join("spill"),
+            threshold: 10_000,
+            preview: 400,
+            condense: true,
+        });
+        let mut log: String = (0..120).map(|n| format!("test t{n} ... ok\n")).collect();
+        log.push_str("test broken ... FAILED\ntest result: FAILED. 120 passed; 1 failed\n");
+        let run = |name: &str, log: String| {
+            let request = ToolRequest {
+                call_id: "c1".into(),
+                name: name.into(),
+                input: serde_json::json!({}),
+                effect: Effect::Execute,
+            };
+            chain.run(request, move |_| {
+                let log = log.clone();
+                async move { ToolOutput::error(log) }
+            })
+        };
+
+        let shown = run("bash", log.clone()).await;
+        assert!(shown.is_error);
+        assert!(shown.text.contains("test broken ... FAILED"));
+        assert!(!shown.text.contains("test t7 ... ok"));
+        assert!(shown.text.len() < log.len() / 2);
+        let saved = std::fs::read_dir(dir.path().join("spill"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), log);
+        assert!(shown.text.contains(&saved.display().to_string()));
+
+        // A file that happens to look like a test log is not a command's
+        // output: it is shown as it is.
+        let read = run("read", log.clone()).await;
+        assert_eq!(read.text, log);
     }
 }

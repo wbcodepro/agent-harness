@@ -384,6 +384,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             .unwrap_or_else(|| home.join("spill")),
         threshold: config.context.spill_at_bytes,
         preview: config.context.spill_at_bytes / 4,
+        condense: config.context.condense_output,
     });
     pipeline.push(zcode_verify::RepeatGuard::default());
     if config.sandbox.protect_git {
@@ -529,7 +530,15 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
 
     let mut tools = ToolSet::builtin();
-    let mut system = system_prompt(cwd, &policy) + &load_instructions(home, cwd);
+    let mut system = system_prompt(cwd, &policy);
+    if config.model.fuse_actions {
+        system.push_str(
+            "\nWhen you change a file and know the command that checks the change (a test, a \
+             build, running the script), pass it as `then_run` in the same call instead of \
+             running it in a separate one.",
+        );
+    }
+    system.push_str(&load_instructions(home, cwd));
 
     // Extensions. One that fails to load is reported and left out; the
     // rest of the agent still works.
@@ -744,6 +753,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         max_steps: options.max_steps,
         max_tokens: None,
         max_tool_calls: config.model.max_tool_calls,
+        fuse_actions: config.model.fuse_actions,
         deferred,
     };
     Ok(Runtime {

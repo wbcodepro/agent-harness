@@ -106,6 +106,10 @@ impl TurnHook for RedCheck {
                         name,
                         input,
                     } if name == "bash" => Some((call_id.as_str(), input["command"].as_str()?)),
+                    // A change that carried its own check ran it.
+                    Event::ToolCall { call_id, input, .. } => {
+                        Some((call_id.as_str(), input["then_run"].as_str()?))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -114,9 +118,10 @@ impl TurnHook for RedCheck {
             let last_change = turn.iter().rposition(|record| {
                 matches!(&record.event, Event::ToolCall { name, input, .. } if changes_source(name, input))
             });
-            let last_run = turn.iter().rposition(
-                |record| matches!(&record.event, Event::ToolCall { name, .. } if name == "bash"),
-            );
+            let last_run = turn.iter().rposition(|record| {
+                matches!(&record.event, Event::ToolCall { name, input, .. }
+                    if name == "bash" || input["then_run"].is_string())
+            });
             let unchecked =
                 last_change.is_some_and(|change| last_run.is_none_or(|run| run < change));
             let already_said = user_messages

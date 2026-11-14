@@ -4,7 +4,9 @@
 //! `task.toml` (the prompt and a shell command that decides pass or fail)
 //! and an optional `files/` tree copied into a fresh workspace. An optional
 //! `check/` tree is copied over the workspace before the check runs, so an
-//! agent cannot pass by editing the tests. Every task runs through the real
+//! agent cannot pass by editing the tests, and the suite directory is hidden
+//! from the agent's tools by the sandbox, so it cannot read them either.
+//! Every task runs through the real
 //! `zcode run`, so what is measured is the product; `--command` runs another
 //! agent on the same tasks for comparison.
 
@@ -139,8 +141,13 @@ async fn run_task(
     );
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    // The agent must not be able to read how it will be graded: the
+    // suite, with every task's `check/` tree, is put out of its tools'
+    // sight. (Where the sandbox confines only writes, this does nothing;
+    // an agent run by `--command` is outside the sandbox altogether.)
+    let config = with_suite_unreadable(config, dir);
     if !config.is_empty() {
-        std::fs::write(home.join("config.toml"), config).map_err(|e| e.to_string())?;
+        std::fs::write(home.join("config.toml"), &config).map_err(|e| e.to_string())?;
     }
     if dir.join("files").is_dir() {
         copy_tree(&dir.join("files"), &work).map_err(|e| e.to_string())?;
@@ -308,6 +315,29 @@ fn with_accepted_partial_sandbox(home: &Path, config: &str) -> String {
         _ => config.to_string(),
     }
 }
+/// `config` with the suite that holds the task at `dir` added to what the
+/// sandbox hides from tools.
+fn with_suite_unreadable(config: &str, dir: &Path) -> String {
+    let Ok(mut table) = config.parse::<toml::Table>() else {
+        return config.to_string();
+    };
+    let suite = dir.parent().unwrap_or(dir);
+    let suite = suite.canonicalize().unwrap_or_else(|_| suite.to_path_buf());
+    let sandbox = table
+        .entry("sandbox")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(sandbox) = sandbox.as_table_mut() else {
+        return config.to_string();
+    };
+    let hidden = sandbox
+        .entry("unreadable")
+        .or_insert_with(|| toml::Value::Array(Vec::new()));
+    if let Some(hidden) = hidden.as_array_mut() {
+        hidden.push(toml::Value::String(suite.to_string_lossy().into_owned()));
+    }
+    toml::to_string(&table).unwrap_or_else(|_| config.to_string())
+}
+
 /// Runs every task once with `config` as the agent's configuration file.
 async fn run_suite(
     home: &Path,
@@ -660,5 +690,28 @@ mod tests {
         // A configuration that decides for itself keeps its decision.
         let own = "[sandbox]\nallow_partial = false\n";
         assert_eq!(with_accepted_partial_sandbox(dir.path(), own), own);
+    }
+
+    #[test]
+    fn the_suite_is_hidden_from_the_agent_whatever_the_config_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = dir.path().join("suite").join("one");
+        std::fs::create_dir_all(&task).unwrap();
+        let suite = task.parent().unwrap().canonicalize().unwrap();
+        let hidden = |config: &str| -> Vec<String> {
+            let table: toml::Table = with_suite_unreadable(config, &task).parse().unwrap();
+            table["sandbox"]["unreadable"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|path| path.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(hidden(""), vec![suite.to_string_lossy().to_string()]);
+        let kept = hidden("[model]\nname = \"m\"\n[sandbox]\nunreadable = [\"/x\"]\n");
+        assert_eq!(
+            kept,
+            vec!["/x".to_string(), suite.to_string_lossy().to_string()]
+        );
     }
 }

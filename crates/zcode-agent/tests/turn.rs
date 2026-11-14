@@ -68,6 +68,7 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
         max_steps: 8,
         max_tokens: None,
         max_tool_calls: 32,
+        fuse_actions: true,
         deferred: ToolSet::new(),
     }
 }
@@ -650,6 +651,55 @@ async fn a_hook_can_keep_the_turn_going_when_the_model_tries_to_stop() {
     // A turn that changes nothing is not held back.
     agent.run_turn(&mut session, user("Hi")).await.unwrap();
     assert_eq!(kinds(&session).iter().filter(|k| **k == "user").count(), 3);
+}
+
+#[tokio::test]
+async fn a_change_can_carry_the_command_that_checks_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            tool_call(
+                "c1",
+                "write",
+                json!({"path": "a.txt", "content": "hello\n", "then_run": "cat a.txt; exit 3"}),
+            ),
+            tool_call(
+                "c2",
+                "edit",
+                json!({"path": "a.txt", "old_string": "nope", "new_string": "x", "then_run": "echo ran"}),
+            ),
+            ScriptedResponse::text("Done."),
+        ],
+    }));
+    let agent = agent(llm, dir.path());
+    let mut session = new_session(&dir.path().join("sessions"));
+    agent.run_turn(&mut session, user("Write")).await.unwrap();
+
+    let results: Vec<(String, bool)> = session
+        .records()
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ToolResult {
+                content, is_error, ..
+            } => match content.first() {
+                Some(Block::Text { text }) => Some((text.clone(), *is_error)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    // One result for the change and its command together.
+    assert_eq!(results.len(), 2);
+    let (text, failed) = &results[0];
+    assert!(text.contains("[then_run] $ cat a.txt; exit 3") && text.contains("hello"));
+    assert!(text.contains("exit code 3") && *failed);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "hello\n"
+    );
+    // A change that was not made does not run its command.
+    let (text, failed) = &results[1];
+    assert!(*failed && text.contains("Not run") && !text.contains("\nran"));
 }
 
 /// Speaks once, whether or not anything changed.

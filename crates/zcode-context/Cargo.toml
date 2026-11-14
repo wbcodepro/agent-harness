@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+regex.workspace = true
 zcode-agent.workspace = true
 zcode-kernel.workspace = true
 zcode-llm.workspace = true

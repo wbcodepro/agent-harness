@@ -7,6 +7,7 @@
 //! - [`load_instructions`] reads the project's and user's `AGENTS.md`.
 
 mod compact;
+mod condense;
 mod instructions;
 mod spill;
 
