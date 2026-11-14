@@ -544,7 +544,15 @@ pub struct ProbeArgs {
     /// directory, one subdirectory per setting.
     #[arg(long)]
     keep: Option<PathBuf>,
+    /// Choose the setting on every task. Without this, every third task
+    /// is held back: settings are compared on the rest, and the winner is
+    /// then run once on the held-back tasks, which it was not chosen on.
+    #[arg(long)]
+    no_holdout: bool,
 }
+
+/// Fewer tasks than this are not split: too few would be left to choose on.
+const MIN_TASKS_TO_HOLD_OUT: usize = 6;
 
 /// One way of setting a model up, and how the suite went with it.
 struct Trial {
@@ -577,7 +585,16 @@ fn best(trials: &[Trial]) -> &Trial {
 /// This runs a suite once per setting and prints the configuration that
 /// solved the most, at the lowest cost.
 pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
-    let tasks = tasks_in(&args.suite, args.filter.as_deref())?;
+    let all = tasks_in(&args.suite, args.filter.as_deref())?;
+    // A setting chosen on a set of tasks looks better on that set than it
+    // is. Every third task (by name order) is kept out of the choosing.
+    let hold_out = !args.no_holdout && all.len() >= MIN_TASKS_TO_HOLD_OUT;
+    let (held_back, tasks): (Vec<_>, Vec<_>) = all
+        .into_iter()
+        .enumerate()
+        .partition(|(index, _)| hold_out && index % 3 == 2);
+    let held_back: Vec<_> = held_back.into_iter().map(|(_, task)| task).collect();
+    let tasks: Vec<_> = tasks.into_iter().map(|(_, task)| task).collect();
     let eval = EvalArgs {
         suite: args.suite.clone(),
         provider: args.provider.clone(),
@@ -643,6 +660,24 @@ pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
         println!(
             "\nEvery setting solved the same number of tasks; the choice above only saves \
              tokens. A harder suite would tell them apart."
+        );
+    }
+    if !held_back.is_empty() {
+        eprintln!(
+            "== the chosen setting on the {} tasks held back",
+            held_back.len()
+        );
+        let config = format!(
+            "[model]\nedit_format = \"{}\"\ntools = \"{}\"\n",
+            winner.edit_format, winner.tools
+        );
+        let kept = args.keep.as_ref().map(|keep| keep.join("held-back"));
+        let outcomes = run_suite(home, &eval, &held_back, &config, kept.as_deref()).await?;
+        println!(
+            "\nOn the {} tasks it was not chosen on, this setting solved {}. That is the \
+             number to expect; the table above is from the tasks it was chosen on.",
+            held_back.len(),
+            outcomes.iter().filter(|o| o.passed).count()
         );
     }
     Ok(ExitCode::SUCCESS)
