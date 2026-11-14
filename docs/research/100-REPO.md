@@ -136,6 +136,7 @@ Thêm hai tác vụ, cũng hiệu chỉnh với `claude-haiku-5-5` (tối đa ba
 
 - `calendar-rules`: thư viện lịch làm việc theo 41 luật (cuối tuần của bốn vùng, ngày lễ dời khi trùng, ngày bắc cầu, bảng giờ có thời điểm chuyển, lịch lặp có ngoại lệ). Bộ kiểm có 2.151 ca; lối tắt trượt 27 ca. Vòng ba: Haiku 1/2.
 - `go-wal-recovery`: write-ahead log bằng Go theo 41 luật (phân loại file khi mở lại, batch nguyên khối, chuỗi checksum giữa các segment, compaction theo đúng thứ tự bước, khóa log sau lỗi file system). Bộ kiểm chạy trên file system trong bộ nhớ, cho hỏng từng lời gọi và cho sập sau mỗi thay đổi; lời giải tham chiếu đạt 30/30 lần, 31/32 bản đột biến bị bắt. Cả ba vòng Haiku đều 2/2, nên tác vụ này không phân biệt được Haiku.
+- `rust-incremental-index`: văn bản sửa được với chuyển đổi giữa byte, dòng/cột và UTF-16 theo 34 luật (CR LF bị nối hoặc tách khi sửa, cột hiển thị với tab, anchor có bias), kèm giới hạn O(log n) và một tải 8 MiB, một triệu anchor, 100.000 lần sửa phải xong trong 20 giây. Bộ kiểm gồm ca theo luật, so sánh ngẫu nhiên với một mô hình đơn giản của đặc tả, và tải đo thời gian; lời giải đúng nhưng tuyến tính trượt. Cả ba vòng Haiku đều 2/2: cả hai lần đều dựng treap với tóm tắt tab ghép được và tự viết mô hình của đặc tả để so sánh.
 
 So sánh trên `calendar-rules` với `claude-haiku-5-5`, bốn lần mỗi cấu hình:
 
