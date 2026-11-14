@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 use zcode_session::{Block, Delta, Message, Role, StopReason, Usage};
 
@@ -12,6 +14,14 @@ pub struct ChatCompletions {
     model: String,
     temperature: Option<f32>,
     retry: Retry,
+    /// Whether the server is OpenAI's own, which takes fields that other
+    /// servers speaking this format may reject.
+    openai: bool,
+}
+
+/// Whether `base_url` points at OpenAI itself rather than a compatible server.
+fn is_openai(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url).is_ok_and(|url| url.host_str() == Some("api.openai.com"))
 }
 
 impl ChatCompletions {
@@ -25,6 +35,7 @@ impl ChatCompletions {
             model: model.into(),
             temperature: None,
             retry: Retry::default(),
+            openai: is_openai(base_url),
         }
     }
 
@@ -81,7 +92,7 @@ impl Llm for ChatCompletions {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let mut body = build_body(&self.model, request);
+            let mut body = build_body(&self.model, request, self.openai);
             if let Some(temperature) = self.temperature {
                 body["temperature"] = json!(temperature);
             }
@@ -117,7 +128,8 @@ impl Llm for ChatCompletions {
     }
 }
 
-fn build_body(model: &str, request: &Request) -> Value {
+/// `cache_key` says whether the server takes `prompt_cache_key`.
+fn build_body(model: &str, request: &Request, cache_key: bool) -> Value {
     let mut messages = Vec::new();
     if let Some(system) = &request.system {
         messages.push(json!({ "role": "system", "content": system }));
@@ -150,6 +162,9 @@ fn build_body(model: &str, request: &Request) -> Value {
     }
     if let Some(max_tokens) = request.max_tokens {
         body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(key) = request.cache_key.as_ref().filter(|_| cache_key) {
+        body["prompt_cache_key"] = json!(key);
     }
     body
 }
@@ -241,16 +256,29 @@ impl SseLines {
 /// Folds chat-completion chunks into deltas and a final [`Completion`].
 #[derive(Default)]
 struct Decoder {
-    open_tool: Option<u64>,
+    /// The call whose arguments go to the sink as they arrive. Deltas carry
+    /// no index, so only one call can stream this way: the first, and only
+    /// when it is index 0, which keeps the calls in index order.
+    live_tool: Option<u64>,
+    /// Every other call, held until the response ends, because the format
+    /// lets a provider interleave the arguments of parallel calls.
+    held_tools: BTreeMap<u64, HeldTool>,
     saw_tool: bool,
     stop: Option<StopReason>,
     usage: Usage,
+}
+
+struct HeldTool {
+    id: String,
+    name: String,
+    arguments: String,
 }
 
 impl Decoder {
     /// Handles one `data:` payload. Returns true at the end-of-stream marker.
     fn feed(&mut self, data: &str, sink: &mut dyn DeltaSink) -> Result<bool, LlmError> {
         if data == "[DONE]" {
+            self.release_held(sink)?;
             return Ok(true);
         }
         let chunk: Value = serde_json::from_str(data)
@@ -278,30 +306,39 @@ impl Decoder {
         }
         for call in delta["tool_calls"].as_array().into_iter().flatten() {
             let index = call["index"].as_u64().unwrap_or(0);
-            if self.open_tool != Some(index) {
+            let arguments = call
+                .pointer("/function/arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if self.live_tool != Some(index) && !self.held_tools.contains_key(&index) {
                 let name = call
                     .pointer("/function/name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| {
-                        LlmError::Protocol(format!(
-                            "tool call {index} continued after another one started"
-                        ))
+                        LlmError::Protocol(format!("tool call {index} continued before it started"))
                     })?;
                 let id = call["id"]
                     .as_str()
                     .map_or_else(|| format!("call_{index}"), str::to_string);
-                emit(Delta::ToolUseStart {
-                    id,
-                    name: name.into(),
-                })?;
-                self.open_tool = Some(index);
+                if index == 0 && !self.saw_tool {
+                    emit(Delta::ToolUseStart {
+                        id,
+                        name: name.into(),
+                    })?;
+                    self.live_tool = Some(index);
+                } else {
+                    let held = HeldTool {
+                        id,
+                        name: name.into(),
+                        arguments: String::new(),
+                    };
+                    self.held_tools.insert(index, held);
+                }
                 self.saw_tool = true;
             }
-            if let Some(arguments) = call
-                .pointer("/function/arguments")
-                .and_then(Value::as_str)
-                .filter(|a| !a.is_empty())
-            {
+            if let Some(held) = self.held_tools.get_mut(&index) {
+                held.arguments.push_str(arguments);
+            } else if !arguments.is_empty() {
                 emit(Delta::ToolInput {
                     json: arguments.into(),
                 })?;
@@ -320,8 +357,27 @@ impl Decoder {
                     )));
                 }
             });
+            self.release_held(sink)?;
         }
         Ok(false)
+    }
+
+    /// Sends the held calls, complete and in index order. Nothing more can
+    /// be added to them once the response has ended.
+    fn release_held(&mut self, sink: &mut dyn DeltaSink) -> Result<(), LlmError> {
+        let mut emit = |delta: Delta| sink.delta(delta).map_err(LlmError::Sink);
+        for held in std::mem::take(&mut self.held_tools).into_values() {
+            emit(Delta::ToolUseStart {
+                id: held.id,
+                name: held.name,
+            })?;
+            if !held.arguments.is_empty() {
+                emit(Delta::ToolInput {
+                    json: held.arguments,
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn finish(self) -> Result<Completion, LlmError> {
@@ -524,6 +580,96 @@ mod tests {
                 ],
             })
         );
+    }
+
+    #[tokio::test]
+    async fn interleaved_tool_calls_come_out_whole_and_in_index_order() {
+        let tool = |index: u64, id: Option<&str>, name: Option<&str>, arguments: &str| json!({"index": index, "id": id, "function": {"name": name, "arguments": arguments}});
+        let chunk = |calls: Vec<Value>| json!({"choices": [{"delta": {"tool_calls": calls}}]});
+        let body = sse(&[
+            // Index 2 starts before index 1, and one chunk carries two calls.
+            chunk(vec![tool(0, Some("c0"), Some("read"), "{\"path\":")]),
+            chunk(vec![tool(2, Some("c2"), Some("list"), "")]),
+            chunk(vec![tool(1, Some("c1"), Some("read"), "{\"pa")]),
+            chunk(vec![
+                tool(0, None, None, "\"a.rs\"}"),
+                tool(1, None, None, "th\":\"b"),
+            ]),
+            chunk(vec![tool(2, None, None, "{}")]),
+            chunk(vec![tool(1, None, None, ".rs\"}")]),
+            json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+        ]);
+        let (base_url, _) = serve(vec![(200, body)]).await;
+        let (deltas, result) = collect(&adapter(&base_url), &request()).await;
+
+        assert_eq!(result.unwrap().stop, StopReason::ToolUse);
+        let call = |id: &str, name: &str, input: Value| Block::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input,
+        };
+        assert_eq!(
+            assemble(&deltas),
+            vec![
+                call("c0", "read", json!({"path": "a.rs"})),
+                call("c1", "read", json!({"path": "b.rs"})),
+                call("c2", "list", json!({})),
+            ]
+        );
+        // The first call still streams as it arrives.
+        assert_eq!(
+            deltas[..2],
+            [
+                Delta::ToolUseStart {
+                    id: "c0".into(),
+                    name: "read".into(),
+                },
+                Delta::ToolInput {
+                    json: "{\"path\":".into(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_that_never_started_is_a_protocol_error() {
+        let body = sse(&[json!({"choices": [{"delta": {"tool_calls": [{
+            "index": 1, "function": {"arguments": "{}"}
+        }]}}]})]);
+        let (base_url, _) = serve(vec![(200, body)]).await;
+        let (_, result) = collect(&adapter(&base_url), &request()).await;
+        assert!(matches!(result, Err(LlmError::Protocol(_))));
+    }
+
+    #[test]
+    fn the_cache_key_is_sent_only_to_openai_itself() {
+        let mut request = request();
+        assert!(
+            build_body("m", &request, true)
+                .get("prompt_cache_key")
+                .is_none()
+        );
+        request.cache_key = Some("s-1".into());
+        assert_eq!(build_body("m", &request, true)["prompt_cache_key"], "s-1");
+        assert!(
+            build_body("m", &request, false)
+                .get("prompt_cache_key")
+                .is_none()
+        );
+
+        assert!(is_openai("https://api.openai.com/v1"));
+        assert!(is_openai("https://api.openai.com/v1/"));
+        for other in [
+            "https://api.deepseek.com",
+            "http://localhost:11434/v1",
+            "https://api.openai.com.example.net/v1",
+            "https://gateway.example/api.openai.com/v1",
+            "not a url",
+        ] {
+            assert!(!is_openai(other), "{other}");
+        }
+        assert!(ChatCompletions::new("https://api.openai.com/v1", "k", "m").openai);
+        assert!(!ChatCompletions::new("https://api.deepseek.com", "k", "m").openai);
     }
 
     #[tokio::test]

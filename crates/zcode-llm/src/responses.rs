@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde_json::{Value, json};
 use zcode_session::{Block, Delta, Message, Role, StopReason, Usage};
 
@@ -20,6 +22,9 @@ pub struct Responses {
     model: String,
     effort: Option<String>,
     retry: Retry,
+    /// Set once the API refuses replayed reasoning. It would refuse the
+    /// same items on every later step, so they are no longer sent.
+    reasoning_rejected: AtomicBool,
 }
 
 impl Responses {
@@ -32,6 +37,7 @@ impl Responses {
             model: model.into(),
             effort: None,
             retry: Retry::default(),
+            reasoning_rejected: AtomicBool::new(false),
         }
     }
 
@@ -209,12 +215,15 @@ impl Llm for Responses {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let body = build_body(&self.model, self.effort.as_deref(), request, true);
+            let with_reasoning = !self.reasoning_rejected.load(Ordering::Relaxed);
+            let body = build_body(&self.model, self.effort.as_deref(), request, with_reasoning);
             let has_reasoning = body.to_string().contains("\"type\":\"reasoning\"");
             let mut response = match self.open(&body).await {
                 // Reasoning from an earlier step is no longer accepted:
-                // send the conversation once more without any.
+                // send the conversation once more without any, and leave
+                // it out from now on.
                 Err(e) if has_reasoning && rejects_reasoning(&e) => {
+                    self.reasoning_rejected.store(true, Ordering::Relaxed);
                     let body = build_body(&self.model, self.effort.as_deref(), request, false);
                     self.open(&body).await?
                 }
@@ -546,14 +555,23 @@ mod tests {
             json!({"type": "response.output_text.delta", "delta": "ok"}),
             json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "max_output_tokens"}, "usage": {}}}),
         ]);
-        let (base_url, bodies) = serve(vec![(400, rejection), (200, done)]).await;
-        let (_, result) = collect(&adapter(&base_url), &request(history)).await;
+        let (base_url, bodies) =
+            serve(vec![(400, rejection), (200, done.clone()), (200, done)]).await;
+        let model = adapter(&base_url);
+        let (_, result) = collect(&model, &request(history.clone())).await;
+        assert_eq!(result.unwrap().stop, StopReason::MaxTokens);
+        // The next step does not offer the reasoning again.
+        let (_, result) = collect(&model, &request(history)).await;
         assert_eq!(result.unwrap().stop, StopReason::MaxTokens);
         {
             let bodies = bodies.lock().unwrap();
             let reasoning =
                 |body: &Value| body.to_string().matches("\"type\":\"reasoning\"").count();
-            assert_eq!((reasoning(&bodies[0]), reasoning(&bodies[1])), (1, 0));
+            assert_eq!(bodies.len(), 3);
+            assert_eq!(
+                [&bodies[0], &bodies[1], &bodies[2]].map(reasoning),
+                [1, 0, 0]
+            );
             assert!(!bodies[0].to_string().contains("anthropic-signature"));
         }
 

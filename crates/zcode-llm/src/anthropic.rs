@@ -21,6 +21,9 @@ pub struct Anthropic {
     retry: Retry,
     /// Request features this model turned out not to accept.
     unsupported: Unsupported,
+    /// Set once the API refuses replayed thinking. It would refuse the
+    /// same blocks on every later step, so they are no longer sent.
+    thinking_rejected: AtomicBool,
 }
 
 /// Parts of a request that newer models take and older ones reject. Each
@@ -80,6 +83,7 @@ impl Anthropic {
             fallbacks: true,
             retry: Retry::default(),
             unsupported: Unsupported::default(),
+            thinking_rejected: AtomicBool::new(false),
         }
     }
 
@@ -173,9 +177,9 @@ impl Llm for Anthropic {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let mut with_thinking = true;
             let mut response = loop {
                 let off = |flag: &AtomicBool| flag.load(Ordering::Relaxed);
+                let with_thinking = !off(&self.thinking_rejected);
                 let body = build_body(
                     &self.model,
                     self.effort
@@ -190,9 +194,12 @@ impl Llm for Anthropic {
                 match self.open_with_retry(&body).await {
                     Ok(response) => break response,
                     // The history carries reasoning this conversation can
-                    // no longer vouch for. Send it once more without any;
-                    // the model answers this step without that reasoning.
-                    Err(e) if with_thinking && rejects_thinking(&e) => with_thinking = false,
+                    // no longer vouch for. Send it once more without any,
+                    // and leave it out for the rest of the session; the
+                    // model answers without that reasoning.
+                    Err(e) if with_thinking && rejects_thinking(&e) => {
+                        self.thinking_rejected.store(true, Ordering::Relaxed);
+                    }
                     // An older model refused part of the request: leave
                     // that part out, now and for the rest of the session.
                     Err(e) if self.unsupported.learn(&e) => {}
@@ -770,18 +777,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_thinking_is_retried_once_without_it() {
+    async fn rejected_thinking_is_retried_without_it_and_not_sent_again() {
         let rejection = json!({"type": "error", "error": {"type": "invalid_request_error",
             "message": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation."}})
         .to_string();
-        let (base_url, bodies) = serve(vec![(400, rejection), (200, answer())]).await;
-        let (_, result) = collect(&adapter(&base_url), &request()).await;
+        let (base_url, bodies) =
+            serve(vec![(400, rejection), (200, answer()), (200, answer())]).await;
+        let model = adapter(&base_url);
+        let (_, result) = collect(&model, &request()).await;
+        assert_eq!(result.unwrap().stop, StopReason::ToolUse);
+        // The next step does not offer the thinking again.
+        let (_, result) = collect(&model, &request()).await;
         assert_eq!(result.unwrap().stop, StopReason::ToolUse);
 
         let bodies = bodies.lock().unwrap();
-        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies.len(), 3);
         let has_thinking = |body: &Value| body.to_string().contains("\"type\":\"thinking\"");
-        assert!(has_thinking(&bodies[0]) && !has_thinking(&bodies[1]));
+        assert!(bodies.iter().map(has_thinking).eq([true, false, false]));
     }
 
     #[tokio::test]
