@@ -175,6 +175,61 @@ pub trait TurnHook: Send + Sync {
 /// Starts the message telling the model the turn is about to run out.
 pub const STEPS_LEFT_PREFIX: &str = "[hame limit]";
 const STEPS_LEFT_WARNING: u64 = 3;
+/// Results shorter than this are cheaper to repeat than to point at.
+const MIN_DEDUPE_BYTES: usize = 2000;
+
+/// A pointer to an earlier result with exactly this text, when that result
+/// is still in what the model is shown. A file read twice, or a test run
+/// that prints the same thing again, then costs a line instead of the whole
+/// output a second time, on this request and every later one.
+fn same_as_shown(records: &[Record], text: &str) -> Option<String> {
+    if text.len() < MIN_DEDUPE_BYTES {
+        return None;
+    }
+    // Results from before the last summary or clearing are no longer
+    // shown, so there would be nothing to point at.
+    let shown_from = records
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::Compaction { up_to_seq, .. } | Event::Masked { up_to_seq } => Some(*up_to_seq),
+            _ => None,
+        })
+        .max()
+        .map_or(0, |cut| cut + 1);
+    let shown = || records.iter().filter(|record| record.seq >= shown_from);
+    let earlier = shown().find_map(|record| match &record.event {
+        Event::ToolResult {
+            call_id, content, ..
+        } if matches!(content.as_slice(), [Block::Text { text: was }] if was == text) => {
+            Some(call_id)
+        }
+        _ => None,
+    })?;
+    let (name, input) = shown().find_map(|record| match &record.event {
+        Event::ToolCall {
+            call_id,
+            name,
+            input,
+        } if call_id == earlier => Some((name, input)),
+        _ => None,
+    })?;
+    let mut input = input.to_string();
+    if input.len() > 160 {
+        let mut end = 160;
+        while !input.is_char_boundary(end) {
+            end -= 1;
+        }
+        input.truncate(end);
+        input.push('…');
+    }
+    Some(format!(
+        "[Unchanged: the output is identical, byte for byte, to the result of the earlier \
+         `{name}` call with {input}, which is still shown above ({} bytes). It is not repeated \
+         here.]",
+        text.len()
+    ))
+}
+
 /// The argument that asks for a command to be run after a change.
 pub const THEN_RUN: &str = "then_run";
 const SHELL_TOOL: &str = "bash";
@@ -189,6 +244,8 @@ pub struct Agent {
     pub tools: ToolSet,
     /// Let a file change carry the command that checks it.
     pub fuse_actions: bool,
+    /// Point at an earlier identical result instead of repeating it.
+    pub dedupe_results: bool,
     /// Shared, so a tool that makes calls of its own can send them through
     /// the same layers.
     pub pipeline: Arc<ToolPipeline>,
@@ -370,9 +427,14 @@ impl Agent {
                     )
                     .await;
                     for (id, output) in ids.into_iter().zip(outputs) {
+                        let text = if self.dedupe_results {
+                            same_as_shown(session.records(), &output.text).unwrap_or(output.text)
+                        } else {
+                            output.text
+                        };
                         session.append(Event::ToolResult {
                             call_id: id,
-                            content: vec![Block::text(output.text)],
+                            content: vec![Block::text(text)],
                             is_error: output.is_error,
                         })?;
                     }

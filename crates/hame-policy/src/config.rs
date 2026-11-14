@@ -317,6 +317,9 @@ pub struct ContextConfig {
     /// Leave the lines of passing tests and build progress out of command
     /// output shown to the model; the whole output is saved to a file.
     pub condense_output: bool,
+    /// When a tool result is identical to an earlier one that is still in
+    /// context, show a pointer to that one instead of the output again.
+    pub dedupe_results: bool,
     /// With more MCP and plugin tools than this, none of them is declared
     /// to the model: it finds them with `tool_search` and runs them with
     /// `tool_call`, so they cost no prompt tokens until used.
@@ -338,6 +341,7 @@ impl Default for ContextConfig {
             compact_at_tokens: 100_000,
             spill_at_bytes: 16_000,
             condense_output: true,
+            dedupe_results: true,
             defer_tools_over: 20,
             scripts: true,
             clear_tool_results: false,

@@ -69,6 +69,7 @@ fn agent(llm: Arc<dyn Llm>, workspace: &Path) -> Agent {
         max_tokens: None,
         max_tool_calls: 32,
         fuse_actions: true,
+        dedupe_results: true,
         deferred: ToolSet::new(),
     }
 }
@@ -700,6 +701,44 @@ async fn a_change_can_carry_the_command_that_checks_it() {
     // A change that was not made does not run its command.
     let (text, failed) = &results[1];
     assert!(*failed && text.contains("Not run") && !text.contains("\nran"));
+}
+
+#[tokio::test]
+async fn an_identical_long_result_is_pointed_at_not_repeated() {
+    let dir = tempfile::tempdir().unwrap();
+    let body: String = (0..300).map(|n| format!("line number {n}\n")).collect();
+    fs::write(dir.path().join("big.txt"), &body).unwrap();
+    fs::write(dir.path().join("small.txt"), "tiny\n").unwrap();
+    let read = |id: &str, path: &str| tool_call(id, "read", json!({ "path": path }));
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            read("c1", "big.txt"),
+            read("c2", "big.txt"),
+            read("c3", "small.txt"),
+            read("c4", "small.txt"),
+            ScriptedResponse::text("Done."),
+        ],
+    }));
+    let agent = agent(llm, dir.path());
+    let mut session = new_session(&dir.path().join("sessions"));
+    agent.run_turn(&mut session, user("Read")).await.unwrap();
+
+    let results: Vec<String> = session
+        .records()
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ToolResult { content, .. } => match content.first() {
+                Some(Block::Text { text }) => Some(text.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(results[0].contains("line number 299"));
+    assert!(results[1].starts_with("[Unchanged:") && results[1].contains("`read`"));
+    assert!(results[1].len() < 400);
+    // Short results are simply repeated.
+    assert_eq!(results[2], results[3]);
 }
 
 /// Speaks once, whether or not anything changed.

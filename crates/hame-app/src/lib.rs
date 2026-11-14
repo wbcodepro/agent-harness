@@ -768,6 +768,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         max_tokens: None,
         max_tool_calls: config.model.max_tool_calls,
         fuse_actions: config.model.fuse_actions,
+        dedupe_results: config.context.dedupe_results,
         deferred,
     };
     Ok(Runtime {
