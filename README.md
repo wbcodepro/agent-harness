@@ -54,13 +54,23 @@ Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lư�
 
 ### Trong editor (ACP)
 
-`zcode acp` nói Agent Client Protocol qua stdin/stdout. Với Zed, thêm vào `settings.json` (theo tài liệu của Zed; cấu hình này chưa được thử trong Zed):
+`zcode acp` nói Agent Client Protocol qua stdin/stdout.
+
+**IntelliJ IDEA** (AI Assistant): tạo `~/.jetbrains/acp.json` khai báo agent, rồi khởi động lại IDE và chọn `zcode (local ACP)` trong AI Chat:
+
+```json
+{ "command": "/đường/dẫn/tới/zcode", "args": ["acp"], "env": {} }
+```
+
+Đã kiểm trong IntelliJ IDEA 2026.1 ngày 2026-11-14, cả năm việc đều đạt: câu trả lời hiện dần và lời gọi tool hiện thành mục riêng; tạo file; dừng giữa chừng rồi hỏi tiếp; mở lại hội thoại cũ; IDE hỏi xin phép trước khi chạy lệnh shell ở chế độ `danger-full-access`.
+
+**Zed:** thêm vào `settings.json` (theo tài liệu của Zed; cấu hình này chưa được thử trong Zed):
 
 ```json
 { "agent_servers": { "zcode": { "command": "/đường/dẫn/tới/zcode", "args": ["acp"] } } }
 ```
 
-Máy chủ được kiểm thử bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
+Máy chủ cũng được kiểm thử tự động bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
 
 ## Tool có sẵn
 

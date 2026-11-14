@@ -119,4 +119,10 @@ impl Prompter for Reviewer {
             }
         })
     }
+
+    // An approval may be the model's own, so none is reported as the
+    // user's.
+    fn is_person(&self) -> bool {
+        false
+    }
 }

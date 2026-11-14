@@ -13,7 +13,7 @@ cargo build --release -p zcode-cli        # tạo target/release/zcode
 
 ## 1. ACP trong một editor thật
 
-`zcode acp` đã được kiểm bằng runtime client chính thức của giao thức, nhưng chưa từng chạy trong một editor. Chọn một trong hai.
+**Đã làm ngày 2026-11-14 trong IntelliJ IDEA 2026.1:** cả năm thao tác trong bảng dưới đều đạt. Cấu hình dùng là `~/.jetbrains/acp.json` với `{"command": "<đường dẫn zcode>", "args": ["acp"], "env": {}}`. Lượt đó nêu hai điểm, đều đã sửa: model dùng lệnh chỉ có ở GNU trên macOS (prompt hệ thống giờ nói rõ hệ điều hành), và model nói không có hộp thoại xin phép dù IDE đã hỏi (kết quả của lời gọi được người duyệt giờ ghi rõ điều đó). Zed thì chưa thử.
 
 ### Zed
 

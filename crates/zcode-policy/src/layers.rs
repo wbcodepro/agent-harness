@@ -45,6 +45,12 @@ pub trait Prompter: Send + Sync {
     /// rendering of it. `None` means nobody can be asked.
     fn ask<'a>(&'a self, request: &'a ToolRequest, question: String)
     -> BoxFuture<'a, Option<bool>>;
+
+    /// Whether a yes from this prompter is a person's answer. False for
+    /// one that answers by rule or by model.
+    fn is_person(&self) -> bool {
+        true
+    }
 }
 
 /// Decides whether each tool call runs: the first matching rule, else the
@@ -129,7 +135,18 @@ impl Layer<ToolRequest, ToolOutput> for ApprovalLayer {
                     }
                     let question = format!("Allow {} {}? [y/N] ", request.name, shown);
                     match self.prompter.ask(&request, question).await {
-                        Some(true) => next.run(request).await,
+                        // The model cannot see the question being put to
+                        // the user; without being told, it has been seen to
+                        // report that nobody was asked.
+                        Some(true) => {
+                            let mut output = next.run(request).await;
+                            if self.prompter.is_person() {
+                                output.text.push_str(
+                                    "\n[The user was asked about this call and approved it.]",
+                                );
+                            }
+                            output
+                        }
                         Some(false) => ToolOutput::error("Denied by the user."),
                         None => ToolOutput::error(
                             "Denied: this call needs the user's approval and nobody is at the \
@@ -323,6 +340,35 @@ mod tests {
         ] {
             assert!(ran(&chain, bash(refused)).await.is_error, "{refused}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_call_a_person_approved_says_so_in_its_result() {
+        let chain = Chain::new();
+        chain.push(ApprovalLayer {
+            rules: Vec::new(),
+            default: RuleAction::Ask,
+            prompter: Arc::new(Scripted {
+                answer: Some(true),
+                asked: Mutex::new(Vec::new()),
+            }),
+        });
+        let approved = ran(
+            &chain,
+            request("bash", json!({"command": "make"}), Effect::Execute),
+        )
+        .await;
+        assert_eq!(
+            approved,
+            ToolOutput::ok("ran\n[The user was asked about this call and approved it.]")
+        );
+        // A call that needed no question says nothing of the kind.
+        let read = ran(
+            &chain,
+            request("read", json!({"path": "a"}), Effect::ReadOnly),
+        )
+        .await;
+        assert_eq!(read, ToolOutput::ok("ran"));
     }
 
     #[tokio::test]

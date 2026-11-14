@@ -760,9 +760,22 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
             }
         ),
     };
+    // Which commands exist differs by system, and a model that is not told
+    // assumes GNU.
+    let platform = match std::env::consts::OS {
+        "macos" => "macOS. Its command-line tools are the BSD ones: options that only GNU has \
+                    (cat -A, sed -i without a suffix, grep -P, date -d, readlink -f) do not \
+                    work."
+            .to_string(),
+        "windows" => {
+            "Windows. Commands run in Git Bash; Python is `python`, not `python3`.".to_string()
+        }
+        other => other.to_string(),
+    };
     format!(
         "You are zcode, a coding agent working in the user's terminal.\n\
          Working directory: {}\n\
+         Platform: {platform}\n\
          Use the tools to inspect and change files and to run commands; do not guess at file \
          contents. Be concise. When the task is done, say what you did and what you verified.\n\
          Before changing anything, read the files the request names and look at the data it \
@@ -920,6 +933,10 @@ impl Prompter for Always {
         _question: String,
     ) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async move { self.0 })
+    }
+
+    fn is_person(&self) -> bool {
+        false
     }
 }
 
