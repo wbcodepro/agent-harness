@@ -170,7 +170,7 @@ Số đo, giữ ít lần gọi model:
 | `calendar-rules`, tham chiếu | `count: None` được chấp nhận, trái luật 21 ("int >= 0") | Vi phạm thật của lời giải tham chiếu; bộ kiểm ẩn không thử ca này |
 | `rust-incremental-index`, tham chiếu | Bộ nhớ tăng theo số anchor đã từng thêm, trái luật 33 ("O(n + A)") | Vi phạm thật; bộ kiểm ẩn không đo bộ nhớ |
 
-Bắt được cả ba bản sai, và không có báo cáo nào sai sự thật: hai "phát hiện" trên lời giải tham chiếu là lỗi thật mà chính bộ kiểm ẩn bỏ sót. Mỗi lần chấm tốn 9–29 request, 96–512 giây.
+Bắt được cả ba bản sai, và không có báo cáo nào sai sự thật: hai "phát hiện" trên lời giải tham chiếu là lỗi thật mà chính bộ kiểm ẩn bỏ sót. Hai lời giải tham chiếu đã được sửa theo báo cáo đó (vẫn đạt bộ kiểm ẩn; bộ nhớ sau 10 triệu lần thêm rồi xóa anchor giờ 1,5 MB thay vì 43,8 MB). Mỗi lần chấm tốn 9–29 request, 96–512 giây.
 
 Lần chấm bản Go sai lộ ra hai lỗi của hame, đã sửa. Thứ nhất, lớp `stop_on_red` gửi người chấm quay lại vì lệnh `go test` của nó thất bại, trong khi thất bại đó chính là kết quả cần tìm; báo cáo cuối vì thế bị thay bằng lời giải thích về lệnh `cp`. Giờ các hook giữ lượt cho tới khi kiểm tra đạt (`gates_completion`) bị bỏ khỏi agent chấm. Thứ hai, lệnh được trích lại cho model bị cắt ở 200 ký tự đúng chỗ heredoc, và model chạy nguyên văn đoạn bị cắt; giờ đoạn trích dừng ở dòng đầu và ghi rõ là đã rút gọn.
 
