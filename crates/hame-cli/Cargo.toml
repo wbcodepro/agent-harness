@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 hame-verify.workspace = true
+hame-context.workspace = true
 clap.workspace = true
 hame-acp.workspace = true
 hame-agent.workspace = true

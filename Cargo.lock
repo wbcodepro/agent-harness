@@ -1598,6 +1598,7 @@ dependencies = [
  "hame-agent",
  "hame-app",
  "hame-checkpoint",
+ "hame-context",
  "hame-eval",
  "hame-ext",
  "hame-kernel",

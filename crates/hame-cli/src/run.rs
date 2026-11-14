@@ -163,6 +163,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
     }
     let spent = Spent::of(&session.records()[logged_before..]);
     let proof = hame_verify::evidence(session.records());
+    let sources = hame_context::context_sources(session.records());
     if args.output != OutputArg::Text {
         let (status, error, code) = match &outcome {
             Some(Ok(())) => ("completed", None, ExitCode::SUCCESS),
@@ -188,6 +189,9 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
             "output_tokens": spent.output,
             // Ending is not the same as being right: what was run after
             // the last change, and how it came out.
+            // What the next request would carry, by where it comes from
+            // (estimated tokens).
+            "context": sources.iter().map(|(source, tokens)| (source.clone(), serde_json::Value::from(*tokens))).collect::<serde_json::Map<String, serde_json::Value>>(),
             "evidence": proof.status(),
             "evidence_command": proof.command(),
         });
@@ -196,6 +200,18 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
     }
     if spent.requests > 0 {
         eprintln!("{spent}");
+        // The four largest parts of what every further request carries.
+        let mut largest = sources.clone();
+        largest.sort_by_key(|(_, tokens)| std::cmp::Reverse(*tokens));
+        let parts: Vec<String> = largest
+            .iter()
+            .filter(|(_, tokens)| *tokens > 0)
+            .take(4)
+            .map(|(source, tokens)| format!("{source} ~{tokens}"))
+            .collect();
+        if !parts.is_empty() {
+            eprintln!("context now (est. tokens): {}", parts.join(" · "));
+        }
         match &proof {
             hame_verify::Evidence::NoChange => {}
             hame_verify::Evidence::Unchecked => {

@@ -52,6 +52,55 @@ fn tools_chars(tools: &[hame_session::ToolSpec]) -> usize {
         .sum()
 }
 
+/// Where the next request's prompt comes from, in estimated tokens (four
+/// bytes each): the fixed parts, the conversation, and tool results by
+/// tool, largest first. It shows what a session is paying for on every
+/// request: a tool list nobody uses, or one command's output.
+pub fn context_sources(records: &[Record]) -> Vec<(String, u64)> {
+    let history = derive_history(records);
+    let mut names = std::collections::HashMap::new();
+    let (mut said, mut calls) = (0usize, 0usize);
+    let mut results: std::collections::BTreeMap<String, usize> = Default::default();
+    for message in &history.messages {
+        for block in &message.content {
+            match block {
+                Block::Text { text } => said += text.len(),
+                Block::Thinking { .. } | Block::Fallback { .. } => {}
+                Block::ToolUse { id, name, input } => {
+                    names.insert(id.clone(), name.clone());
+                    calls += name.len() + input.to_string().len();
+                }
+                Block::ToolResult {
+                    call_id, content, ..
+                } => {
+                    let tool = names.get(call_id).cloned().unwrap_or_else(|| "?".into());
+                    *results.entry(tool).or_default() += block_chars(content);
+                }
+            }
+        }
+    }
+    let mut sources = vec![
+        (
+            "system".to_string(),
+            history.system.map_or(0, |system| system.len()),
+        ),
+        ("tools".to_string(), tools_chars(&history.tools)),
+        ("messages".to_string(), said),
+        ("tool calls".to_string(), calls),
+    ];
+    let mut results: Vec<(String, usize)> = results.into_iter().collect();
+    results.sort_by_key(|(_, chars)| std::cmp::Reverse(*chars));
+    sources.extend(
+        results
+            .into_iter()
+            .map(|(tool, chars)| (format!("results of {tool}"), chars)),
+    );
+    sources
+        .into_iter()
+        .map(|(source, chars)| (source, chars as u64 / 4))
+        .collect()
+}
+
 /// Estimates how many tokens the next request for this log will carry.
 ///
 /// Uses the provider's own count from the most recent response when there is
@@ -395,6 +444,12 @@ mod tests {
             })
             .unwrap();
         assert!(context_tokens(session.records()) > 1530 + 90);
+
+        // The breakdown names where the prompt comes from.
+        let sources = context_sources(session.records());
+        let of = |name: &str| sources.iter().find(|(source, _)| source == name).unwrap().1;
+        assert_eq!(of("messages"), (400 + 2 + 40) / 4);
+        assert!(of("tools") >= 99);
     }
 
     /// Appends one step in which the model calls a tool and gets `chars`
