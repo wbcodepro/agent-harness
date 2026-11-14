@@ -195,7 +195,7 @@ async fn a_turn_runs_tools_and_feeds_their_results_back_to_the_model() {
     let requests = spy.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].system.as_deref(), Some("You are hame."));
-    assert_eq!(requests[0].tools.len(), 7);
+    assert_eq!(requests[0].tools.len(), 8);
     assert_eq!(requests[0].messages.len(), 1);
     // The second request carries the call and its result.
     let roles: Vec<Role> = requests[1].messages.iter().map(|m| m.role).collect();

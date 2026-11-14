@@ -38,6 +38,19 @@ pub struct SandboxPolicy {
     pub network: Network,
 }
 
+/// Where commands that outlived their time limit keep their output, as a
+/// confined worker sees it (its temp directory). It stays writable when the
+/// rest of the temp directory is not.
+pub fn jobs_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let temp = crate::windows::low_temp_dir()?;
+    #[cfg(not(windows))]
+    let temp = std::env::temp_dir();
+    let dir = temp.join("hame-jobs");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(real(&dir))
+}
+
 impl SandboxPolicy {
     /// Writes confined to `cwd` and the temp directories, well-known
     /// credential locations hidden, no network.

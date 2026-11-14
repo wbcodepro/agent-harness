@@ -267,14 +267,22 @@ async fn a_model_profile_narrows_the_tools_and_picks_the_edit_format() {
 
     let (minimal, system) =
         names("[model]\ntools = \"minimal\"\nedit_format = \"apply-patch\"").await;
-    assert_eq!(minimal, ["read", "bash", "glob", "grep", "apply_patch"]);
+    // A command past its limit moves to the background, so the tool that
+    // reads it back stays.
+    assert_eq!(
+        minimal,
+        ["read", "bash", "job_output", "glob", "grep", "apply_patch"]
+    );
     assert!(
         !system.contains("notes"),
         "no skill is advertised without the skill tool"
     );
 
     let (whole, system) = names("[model]\ntools = \"minimal\"\nedit_format = \"whole-file\"").await;
-    assert_eq!(whole, ["read", "write", "bash", "glob", "grep"]);
+    assert_eq!(
+        whole,
+        ["read", "write", "bash", "job_output", "glob", "grep"]
+    );
     assert!(system.contains("complete new content"));
 
     let (_, system) = names("[model]\ntools = \"minimal\"").await;
@@ -283,7 +291,15 @@ async fn a_model_profile_narrows_the_tools_and_picks_the_edit_format() {
     let (anchored, system) = names(hashline).await;
     assert_eq!(
         anchored,
-        ["read", "write", "bash", "glob", "grep", "edit_lines"]
+        [
+            "read",
+            "write",
+            "bash",
+            "job_output",
+            "glob",
+            "grep",
+            "edit_lines"
+        ]
     );
     assert!(system.contains("number:hash") && system.contains("edit_lines"));
     // The tool called `read` is the one that shows anchors, and only in

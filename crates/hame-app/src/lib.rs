@@ -244,6 +244,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             let mut policy = SandboxPolicy::workspace(cwd);
             if !config.sandbox.writable_tmp {
                 policy.writable.truncate(1);
+                policy.writable.extend(hame_sandbox::jobs_dir());
             }
             policy.writable.extend(config.sandbox.writable.clone());
             policy
@@ -374,6 +375,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                 .map_err(|e| format!("cannot find the hame executable: {e}"))?,
             policy: policy.clone(),
             env: granted,
+            background: Default::default(),
         }),
     };
 

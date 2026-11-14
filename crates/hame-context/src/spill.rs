@@ -59,7 +59,7 @@ impl Layer<ToolRequest, ToolOutput> for SpillLayer {
             // data, not a preview; what the script prints is spilled when
             // the script's own call comes back through here.
             let for_script = request.call_id.starts_with("script-");
-            let from_shell = request.name == "bash";
+            let from_shell = request.name == "bash" || request.name == hame_tools::JOB_TOOL;
             let mut output = next.run(request).await;
             if for_script {
                 return output;

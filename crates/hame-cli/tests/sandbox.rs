@@ -621,3 +621,41 @@ fn hash_anchored_reads_and_edits_run_in_the_confined_worker() {
         "hi\nbye\n"
     );
 }
+
+#[test]
+fn a_command_past_its_limit_runs_on_confined_and_ends_with_hame() {
+    // The fixture turns off the writable temp directory; the job directory
+    // stays writable all the same.
+    let fx = Fixture::new("");
+    let (_, results) = fx.run(
+        vec![
+            (
+                "bash",
+                json!({"command": "echo begun; sleep 1; echo built > out.txt", "timeout_ms": 300}),
+            ),
+            (
+                "bash",
+                json!({"command": "sleep 4; touch survived", "timeout_ms": 300}),
+            ),
+            bash("sleep 2; cat out.txt; echo x > ~/escape.txt"),
+        ],
+        &[],
+    );
+    assert!(!results[0].1, "{}", results[0].0);
+    assert!(
+        results[0].0.starts_with("begun\n") && results[0].0.contains("as job j"),
+        "{}",
+        results[0].0
+    );
+    assert!(results[1].0.contains("as job j"), "{}", results[1].0);
+    // The first job finished inside the worker, still confined.
+    assert!(results[2].0.starts_with("built\n"), "{}", results[2].0);
+    assert!(
+        results[2].1,
+        "writing outside stays blocked: {}",
+        results[2].0
+    );
+    // The second was still running when hame exited, and went with it.
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(!fx.work.join("survived").exists());
+}

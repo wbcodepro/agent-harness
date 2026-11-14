@@ -36,8 +36,9 @@ impl Tool for Bash {
             description: "Run a bash command and return its stdout, \
                           stderr and exit code. Each call starts a new shell in the working \
                           directory (no need to cd into it), with pipefail \
-                          set: a pipeline fails when any command in it fails. The command is \
-                          killed after timeout_ms (default 120000, max 600000)."
+                          set: a pipeline fails when any command in it fails. A command still \
+                          running after timeout_ms (default 120000, max 600000) keeps running \
+                          as a background job you can wait for with job_output."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -111,12 +112,35 @@ impl Tool for Bash {
                     Ok(Err(e)) => {
                         return ToolOutput::error(format!("Lost track of the command: {e}"));
                     }
+                    // Still running: a long build or test run is worth more
+                    // finished later than killed now and started again.
                     Err(_) => {
-                        // Our own group dies when `group` drops; a shared one is
-                        // killed by its owner.
-                        ctx.request_group_kill();
-                        return ToolOutput::error(format!(
-                            "The command did not finish within {timeout} ms and was killed."
+                        let Some((id, dir)) = crate::jobs::new_job() else {
+                            // Our own group dies when `group` drops; a
+                            // shared one is killed by its owner.
+                            ctx.request_group_kill();
+                            return ToolOutput::error(format!(
+                                "The command did not finish within {timeout} ms and was killed."
+                            ));
+                        };
+                        let so_far = crate::jobs::so_far(&stdout, &stderr);
+                        crate::jobs::adopt(
+                            crate::jobs::Running {
+                                command: input.command.clone(),
+                                child,
+                                group,
+                                stdout,
+                                stderr,
+                                shared_group: ctx.shared_group,
+                            },
+                            dir,
+                        );
+                        return ToolOutput::ok(format!(
+                            "{so_far}[Still running after {timeout} ms, so it was moved to the \
+                             background as job {id}. Call {tool} with id \"{id}\" to wait for it \
+                             and read the rest, or with kill: true to stop it. Do not start it \
+                             again.]",
+                            tool = crate::jobs::JOB_TOOL,
                         ));
                     }
                 };
@@ -125,63 +149,72 @@ impl Tool for Bash {
             // output pipes.
             group.disarm();
             let (stdout, stderr) = tokio::join!(stdout.finish(), stderr.finish());
-
-            let mut text = String::new();
-            if !stdout.is_empty() {
-                text.push_str(&truncate_middle(&stdout, SHOWN_LIMIT));
-            }
-            if !stderr.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str("[stderr]\n");
-                text.push_str(&truncate_middle(&stderr, SHOWN_LIMIT));
-            }
-            // A reader that stopped early (`... | head`) kills the writer
-            // with SIGPIPE; that is how such a pipeline normally ends.
-            // `a || b` is not a pipe.
-            let piped = input.command.replace("||", "").contains('|');
-            let closed_pipe = status.code() == Some(141) && piped;
-            if status.success() || closed_pipe {
-                if text.is_empty() {
-                    text.push_str("(no output)");
-                }
-                ToolOutput::ok(text)
-            } else {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                match status.code() {
-                    Some(code) if piped => text.push_str(&format!(
-                        "[exit code {code}: some command in the pipeline exited with it (the \
-                         shell runs with pipefail). That is not always a failure: grep exits 1 \
-                         when nothing matches. The output above is what the pipeline printed.]"
-                    )),
-                    Some(code) => text.push_str(&format!("[exit code {code}]")),
-                    None => text.push_str("[killed by a signal]"),
-                }
-                // Git's bash keeps shared state per installation. Once a
-                // bash outside the sandbox has created it, one inside is
-                // refused access and dies before running anything.
-                #[cfg(windows)]
-                if stderr.contains("NtCreateDirectoryObject") {
-                    text.push_str(
-                        "\n[hame] bash could not start in the sandbox because another bash \
-                         from the same Git installation is running outside it (a Git Bash \
-                         window, an editor's terminal). The command did not run. Tell the user: \
-                         close those, or set HAME_BASH to the bash.exe of a second copy of \
-                         Git for Windows that only hame uses.",
-                    );
-                }
-                ToolOutput::error(text)
-            }
+            render(&input.command, status, &stdout, &stderr)
         })
+    }
+}
+
+/// What a finished command shows the model.
+pub(crate) fn render(
+    command: &str,
+    status: std::process::ExitStatus,
+    stdout: &str,
+    stderr: &str,
+) -> ToolOutput {
+    let mut text = String::new();
+    if !stdout.is_empty() {
+        text.push_str(&truncate_middle(stdout, SHOWN_LIMIT));
+    }
+    if !stderr.is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("[stderr]\n");
+        text.push_str(&truncate_middle(stderr, SHOWN_LIMIT));
+    }
+    // A reader that stopped early (`... | head`) kills the writer with
+    // SIGPIPE; that is how such a pipeline normally ends. `a || b` is not a
+    // pipe.
+    let piped = command.replace("||", "").contains('|');
+    let closed_pipe = status.code() == Some(141) && piped;
+    if status.success() || closed_pipe {
+        if text.is_empty() {
+            text.push_str("(no output)");
+        }
+        ToolOutput::ok(text)
+    } else {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        match status.code() {
+            Some(code) if piped => text.push_str(&format!(
+                "[exit code {code}: some command in the pipeline exited with it (the \
+                 shell runs with pipefail). That is not always a failure: grep exits 1 \
+                 when nothing matches. The output above is what the pipeline printed.]"
+            )),
+            Some(code) => text.push_str(&format!("[exit code {code}]")),
+            None => text.push_str("[killed by a signal]"),
+        }
+        // Git's bash keeps shared state per installation. Once a bash
+        // outside the sandbox has created it, one inside is refused access
+        // and dies before running anything.
+        #[cfg(windows)]
+        if stderr.contains("NtCreateDirectoryObject") {
+            text.push_str(
+                "\n[hame] bash could not start in the sandbox because another bash \
+                 from the same Git installation is running outside it (a Git Bash \
+                 window, an editor's terminal). The command did not run. Tell the user: \
+                 close those, or set HAME_BASH to the bash.exe of a second copy of \
+                 Git for Windows that only hame uses.",
+            );
+        }
+        ToolOutput::error(text)
     }
 }
 
 /// Collects a stream in the background, keeping at most [`CAPTURE_LIMIT`]
 /// bytes so a runaway command cannot exhaust memory.
-struct Capture {
+pub(crate) struct Capture {
     state: Arc<Mutex<Captured>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -196,7 +229,7 @@ struct Captured {
 }
 
 impl Capture {
-    fn start(mut stream: impl AsyncRead + Unpin + Send + 'static) -> Self {
+    pub(crate) fn start(mut stream: impl AsyncRead + Unpin + Send + 'static) -> Self {
         let state = Arc::new(Mutex::new(Captured::default()));
         let shared = Arc::clone(&state);
         let task = tokio::spawn(async move {
@@ -222,13 +255,18 @@ impl Capture {
 
     /// What was captured. Called after the command exited: waits briefly for
     /// the pipe to drain, but not for a background process that kept it open.
-    async fn finish(mut self) -> String {
+    pub(crate) async fn finish(mut self) -> String {
         if tokio::time::timeout(Duration::from_millis(300), &mut self.task)
             .await
             .is_err()
         {
             self.task.abort();
         }
+        self.snapshot()
+    }
+
+    /// What has been captured so far.
+    pub(crate) fn snapshot(&self) -> String {
         let state = self.state.lock().expect("capture lock poisoned");
         let mut text = String::from_utf8_lossy(&state.head).into_owned();
         if state.dropped > 0 {
@@ -276,29 +314,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_timeout_kills_the_whole_process_group() {
+    async fn stopping_a_command_past_its_limit_kills_the_whole_process_group() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
         let started = Instant::now();
 
-        // The grandchild would create the marker if it outlived the timeout.
+        // The grandchild would create the marker if it outlived the stop.
         let out = Bash
             .call(
                 &json!({
-                    "command": "(sleep 1; touch survived) & sleep 30",
+                    "command": "(sleep 2; touch survived) & sleep 30",
                     "timeout_ms": 200
                 }),
                 &ctx,
             )
             .await;
-
         assert!(
-            out.is_error && out.text.contains("was killed"),
+            !out.is_error && out.text.contains("as job "),
             "{}",
             out.text
         );
         assert!(started.elapsed() < Duration::from_secs(5));
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        let at = out.text.find("as job ").unwrap() + "as job ".len();
+        let id: String = out.text[at..]
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        let stopped = crate::JobOutput
+            .call(&json!({"id": id, "kill": true}), &ctx)
+            .await;
+        assert!(
+            stopped.text.contains("stopped on request"),
+            "{}",
+            stopped.text
+        );
+        tokio::time::sleep(Duration::from_millis(2500)).await;
         assert!(!dir.path().join("survived").exists());
     }
 

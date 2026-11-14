@@ -7,6 +7,7 @@
 mod bash;
 mod files;
 mod hashline;
+mod jobs;
 mod patch;
 mod process;
 mod search;
@@ -20,6 +21,7 @@ pub use files::{Edit, Read, Write, write_atomic};
 pub use hame_kernel::BoxFuture;
 use hame_session::ToolSpec;
 pub use hashline::{EditLines, ReadAnchored};
+pub use jobs::{JOB_TOOL, JobOutput, job_ended, jobs_running, moved_to_background, wait_for_jobs};
 pub use patch::ApplyPatch;
 pub use process::GroupGuard;
 pub use search::{Glob, Grep, RepoMap};
@@ -164,13 +166,15 @@ impl ToolSet {
         Self::default()
     }
 
-    /// `read`, `write`, `edit`, `bash`, `glob`, `grep` and `repo_map`.
+    /// `read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep` and
+    /// `repo_map`.
     pub fn builtin() -> Self {
         let mut set = Self::new();
         set.insert(Arc::new(Read));
         set.insert(Arc::new(Write));
         set.insert(Arc::new(Edit));
         set.insert(Arc::new(Bash));
+        set.insert(Arc::new(JobOutput));
         set.insert(Arc::new(Glob));
         set.insert(Arc::new(Grep));
         set.insert(Arc::new(RepoMap));
@@ -285,7 +289,16 @@ mod tests {
         let names: Vec<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
         assert_eq!(
             names,
-            ["read", "write", "edit", "bash", "glob", "grep", "repo_map"]
+            [
+                "read",
+                "write",
+                "edit",
+                "bash",
+                "job_output",
+                "glob",
+                "grep",
+                "repo_map"
+            ]
         );
         assert!(
             specs

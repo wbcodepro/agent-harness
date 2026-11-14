@@ -8,7 +8,7 @@ use hame_kernel::BoxFuture;
 use hame_tools::{GroupGuard, Tool, ToolContext, ToolOutput, ToolRunner, ToolSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 use crate::policy::{Network, SandboxPolicy, wrap};
 
@@ -25,6 +25,10 @@ struct WorkerResponse {
     /// The tool gave up on something it started (a timeout); the parent
     /// should kill the worker's process group.
     kill_group: bool,
+    /// The worker stays alive after answering, supervising a command that
+    /// moved to the background; the parent does not wait for it to exit.
+    #[serde(default)]
+    background: bool,
 }
 
 /// Environment variables a worker inherits. Everything else, including any
@@ -117,11 +121,37 @@ pub async fn worker_main(tools: &ToolSet) -> u8 {
         text: output.text,
         is_error: output.is_error,
         kill_group: ctx.group_kill_requested(),
+        background: hame_tools::jobs_running(),
     };
+    // One line: the parent reads up to the newline, not to the end, since
+    // a worker with a background job keeps running after this.
     let mut stdout = std::io::stdout();
-    match serde_json::to_writer(&mut stdout, &response).map(|_| stdout.flush()) {
-        Ok(Ok(())) => 0,
-        _ => 2,
+    let written = serde_json::to_writer(&mut stdout, &response)
+        .map_err(std::io::Error::other)
+        .and_then(|()| stdout.write_all(b"\n"))
+        .and_then(|()| stdout.flush());
+    hame_tools::wait_for_jobs().await;
+    if written.is_ok() { 0 } else { 2 }
+}
+
+/// Workers kept alive after answering because a command they started moved
+/// to the background. Dropping this (when the harness exits) ends them and
+/// everything they started.
+#[derive(Default)]
+pub struct BackgroundWorkers(std::sync::Mutex<Vec<KeptWorker>>);
+
+struct KeptWorker {
+    child: tokio::process::Child,
+    _group: GroupGuard,
+    #[cfg(windows)]
+    _tree: Option<crate::windows::ProcessTree>,
+}
+
+impl BackgroundWorkers {
+    fn keep(&self, worker: KeptWorker) {
+        let mut kept = self.0.lock().expect("worker list poisoned");
+        kept.retain_mut(|worker| matches!(worker.child.try_wait(), Ok(None)));
+        kept.push(worker);
     }
 }
 
@@ -132,6 +162,7 @@ pub struct SandboxedRunner {
     pub policy: SandboxPolicy,
     /// Extra environment for the worker, e.g. secrets the user granted.
     pub env: Vec<(String, String)>,
+    pub background: BackgroundWorkers,
 }
 
 impl SandboxedRunner {
@@ -232,15 +263,48 @@ impl ToolRunner for SandboxedRunner {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(&request).await;
             }
-            let output = match child.wait_with_output().await {
-                Ok(output) => output,
-                Err(e) => {
-                    return ToolOutput::error(format!("Lost track of the sandboxed worker: {e}."));
+            let stdout = child.stdout.take().expect("stdout is piped");
+            let mut stderr = child.stderr.take().expect("stderr is piped");
+            // Drained alongside, so a chatty worker cannot block on a full
+            // pipe; only the start is kept, for the error message.
+            let errors = tokio::spawn(async move {
+                let mut kept = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while let Ok(n) = stderr.read(&mut chunk).await {
+                    if n == 0 {
+                        break;
+                    }
+                    if kept.len() < 16 * 1024 {
+                        kept.extend_from_slice(&chunk[..n]);
+                    }
                 }
-            };
+                kept
+            });
+            let mut line = Vec::new();
+            let read = tokio::io::BufReader::new(stdout)
+                .read_until(b'\n', &mut line)
+                .await;
+            let response = read
+                .ok()
+                .and_then(|_| serde_json::from_slice::<WorkerResponse>(&line).ok());
 
-            match serde_json::from_slice::<WorkerResponse>(&output.stdout) {
-                Ok(response) => {
+            match response {
+                Some(response) if response.background => {
+                    // Its command runs on in the worker's sandbox; the
+                    // worker ends when the command does, or with hame.
+                    self.background.keep(KeptWorker {
+                        child,
+                        _group: group,
+                        #[cfg(windows)]
+                        _tree: tree,
+                    });
+                    ToolOutput {
+                        text: response.text,
+                        is_error: response.is_error,
+                    }
+                }
+                Some(response) => {
+                    let _ = child.wait().await;
                     if !response.kill_group {
                         group.disarm();
                         #[cfg(windows)]
@@ -253,11 +317,20 @@ impl ToolRunner for SandboxedRunner {
                         is_error: response.is_error,
                     }
                 }
-                Err(_) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
+                None => {
+                    let status = match child.wait().await {
+                        Ok(status) => status.to_string(),
+                        Err(e) => {
+                            return ToolOutput::error(format!(
+                                "Lost track of the sandboxed worker: {e}."
+                            ));
+                        }
+                    };
+                    let stderr = errors.await.unwrap_or_default();
+                    let stderr = String::from_utf8_lossy(&stderr);
                     ToolOutput::error(format!(
                         "The sandboxed worker failed before the tool finished ({}): {}",
-                        output.status,
+                        status,
                         stderr.trim()
                     ))
                 }

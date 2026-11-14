@@ -140,12 +140,6 @@ pub fn evidence(records: &[Record]) -> Evidence {
     }) else {
         return Evidence::NoChange;
     };
-    let failed = |id: &str| {
-        turn.iter().any(|record| {
-            matches!(&record.event, Event::ToolResult { call_id, is_error: true, .. }
-                if call_id == id)
-        })
-    };
     let runs: Vec<(&str, &str)> = turn[last_change..]
         .iter()
         .filter_map(|record| match &record.event {
@@ -167,9 +161,75 @@ pub fn evidence(records: &[Record]) -> Evidence {
         .or(runs.last());
     match decisive {
         None => Evidence::Unchecked,
-        Some((id, command)) if failed(id) => Evidence::Failing((*command).to_string()),
-        Some((_, command)) => Evidence::Passed((*command).to_string()),
+        Some((id, command)) => match outcome(turn, id) {
+            Outcome::Failed => Evidence::Failing((*command).to_string()),
+            Outcome::Passed => Evidence::Passed((*command).to_string()),
+            // Not finished, so not evidence either way.
+            Outcome::Running => Evidence::Unchecked,
+        },
     }
+}
+
+/// How a command run in this turn came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Passed,
+    Failed,
+    /// It moved to the background and its final output has not been read.
+    Running,
+}
+
+/// The outcome of the call `id` in `turn`. A command that moved to the
+/// background counts by its job's final output, read with `job_output`.
+pub fn outcome(turn: &[Record], id: &str) -> Outcome {
+    let result = turn.iter().find_map(|record| match &record.event {
+        Event::ToolResult {
+            call_id,
+            content,
+            is_error,
+        } if call_id == id => Some((text_of(content), *is_error)),
+        _ => None,
+    });
+    let Some((text, is_error)) = result else {
+        return Outcome::Running;
+    };
+    let Some(job) = hame_tools::moved_to_background(&text) else {
+        return if is_error {
+            Outcome::Failed
+        } else {
+            Outcome::Passed
+        };
+    };
+    let reads: Vec<&str> = turn
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ToolCall {
+                call_id,
+                name,
+                input,
+            } if name == hame_tools::JOB_TOOL && input["id"].as_str() == Some(job) => {
+                Some(call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    turn.iter()
+        .find_map(|record| match &record.event {
+            Event::ToolResult {
+                call_id,
+                content,
+                is_error,
+            } if reads.contains(&call_id.as_str()) => {
+                let text = text_of(content);
+                hame_tools::job_ended(&text).then_some(if *is_error {
+                    Outcome::Failed
+                } else {
+                    Outcome::Passed
+                })
+            }
+            _ => None,
+        })
+        .unwrap_or(Outcome::Running)
 }
 
 fn text_of(content: &[Block]) -> String {
@@ -266,13 +326,25 @@ impl TurnHook for RedCheck {
                 ))]);
             }
 
-            let failed_call = |id: &str| {
-                turn.iter().any(|record| {
-                    matches!(&record.event, Event::ToolResult { call_id, is_error: true, .. }
-                        if call_id == id)
-                })
-            };
+            let failed_call = |id: &str| outcome(turn, id) == Outcome::Failed;
             let (last_id, command) = *shell_calls.last()?;
+            // The last check decides, as for evidence; a later run of the
+            // same check that finished supersedes one left running.
+            let decisive = shell_calls
+                .iter()
+                .rfind(|(_, run)| looks_like_a_check(run))
+                .or(shell_calls.last());
+            if let Some((id, run)) = decisive
+                && outcome(turn, id) == Outcome::Running
+            {
+                let shown = quoted(run);
+                return Some(vec![Block::text(format!(
+                    "{CHECK_PREFIX} {shown} is still running in the background, so its result \
+                     is not known yet. Wait for it with {} and act on what it says before you \
+                     finish.",
+                    hame_tools::JOB_TOOL
+                ))]);
+            }
             if !failed_call(last_id) {
                 // The last command passed, but it may be an unrelated one
                 // (`git status`) run after a check that failed and was
@@ -329,7 +401,7 @@ mod tests {
         );
         assert!(shown.contains("rerun the full command"), "{shown}");
     }
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn log(prompt: &str, runs: &[(&str, bool)]) -> Vec<Record> {
         let mut events = vec![
@@ -429,6 +501,73 @@ mod tests {
         let rename = |path: &str| json!({"path": path, "line": 1, "symbol": "a", "new_name": "b"});
         assert!(changes_source("rename_symbol", &rename("src/a.rs")));
         assert!(!changes_source("references", &rename("src/a.rs")));
+    }
+
+    #[tokio::test]
+    async fn a_check_left_running_in_the_background_is_not_evidence() {
+        // (tool, input, result text, failed)
+        let turn = |steps: &[(&str, Value, &str, bool)]| {
+            let mut records = log("Fix it", &[]);
+            let mut push = |event| {
+                let seq = records.len() as u64;
+                records.push(Record { seq, ts: 0, event });
+            };
+            for (n, (tool, input, text, failed)) in steps.iter().enumerate() {
+                push(Event::ToolCall {
+                    call_id: format!("b{n}"),
+                    name: (*tool).into(),
+                    input: input.clone(),
+                });
+                push(Event::ToolResult {
+                    call_id: format!("b{n}"),
+                    content: vec![Block::text(*text)],
+                    is_error: *failed,
+                });
+            }
+            records
+        };
+        let write = (
+            "write",
+            json!({"path": "a.py", "content": "x"}),
+            "ok",
+            false,
+        );
+        let test = (
+            "bash",
+            json!({"command": "pytest -q"}),
+            "collecting\n[Still running after 120000 ms, so it was moved to the background \
+             as job j1a2b. Call job_output ...]",
+            false,
+        );
+        let waiting = (
+            "job_output",
+            json!({"id": "j1a2b"}),
+            "[job j1a2b is still running after waiting 60000 ms; ...]",
+            false,
+        );
+        let ended = |failed| {
+            (
+                "job_output",
+                json!({"id": "j1a2b"}),
+                "3 passed\n[job j1a2b ended, 130 s after it moved to the background]",
+                failed,
+            )
+        };
+
+        let running = turn(&[write.clone(), test.clone(), waiting.clone()]);
+        assert_eq!(evidence(&running), Evidence::Unchecked);
+        let nudge = RedCheck.before_stop(&running, true).await.unwrap();
+        assert!(
+            matches!(&nudge[..], [Block::Text { text }] if text.contains("still running")),
+            "{nudge:?}"
+        );
+
+        let passed = turn(&[write.clone(), test.clone(), waiting, ended(false)]);
+        assert_eq!(evidence(&passed), Evidence::Passed("pytest -q".into()));
+        assert!(RedCheck.before_stop(&passed, true).await.is_none());
+
+        let failed = turn(&[write, test, ended(true)]);
+        assert_eq!(evidence(&failed), Evidence::Failing("pytest -q".into()));
     }
 
     #[tokio::test]

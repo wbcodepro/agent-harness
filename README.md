@@ -77,9 +77,13 @@ Máy chủ cũng được kiểm thử tự động bằng runtime client chính
 
 ## Tool có sẵn
 
-`read`, `write`, `edit`, `bash`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill; khi có cấu hình language server thì thêm `diagnostics`, `references` và `rename_symbol`. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
+`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill; khi có cấu hình language server thì thêm `diagnostics`, `references` và `rename_symbol`. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
 
 `write` từ chối ghi đè một file đã tồn tại mà model chưa đọc trong phiên (nó phải đọc trước, vì nội dung file thường là thứ đề bài phụ thuộc vào); khi ghi làm file nhỏ đi quá nửa, kết quả nói rõ là cả file đã bị thay. `edit` không tìm thấy đoạn cần thay thì chỉ ra khớp tới dòng nào và khác ở đâu. `grep` ghi kèm tên hàm hoặc lớp bao quanh mỗi dòng khớp. Sau mỗi lần `edit`, `write` hay `apply_patch`, nếu file nguồn đang hợp lệ trở nên sai cú pháp thì kết quả báo ngay dòng lỗi (Python được kiểm bằng `python3` khi có; Rust, JS, TS, Go bằng tree-sitter).
+
+Lệnh `bash` chưa xong khi hết `timeout_ms` (mặc định 120 giây) không bị giết mà chuyển thành tác vụ nền, vẫn trong sandbox: kết quả trả ngay phần đầu ra đã có cùng mã tác vụ, và model gọi `job_output` để chờ tiếp và đọc phần còn lại, hoặc dừng nó bằng `kill: true`. Build hay bộ test dài vì thế không phải chạy lại từ đầu. Tác vụ bị dừng khi hame thoát, hoặc sau một giờ. Lệnh test còn đang chạy nền không được tính là bằng chứng đã qua: lớp kiểm tra hoàn thành nhắc model chờ kết quả trước khi kết thúc.
+
+Gọi model: khi nhà cung cấp trả về `Retry-After`, hame chờ đúng thời gian đó (tối đa 60 giây, lâu hơn thì báo lỗi ngay thay vì chờ im lặng). Khi request bị từ chối vì vượt cửa sổ ngữ cảnh, hame nén lịch sử ngay (giữ nguyên khoảng một phần tư cuối) rồi gửi lại một lần.
 
 `references` và `rename_symbol` hỏi thẳng language server thay cho một chuỗi `grep` rồi `edit`: model chỉ ra symbol bằng file, số dòng và tên (không phải đếm cột). `references` liệt kê mọi nơi dùng symbol dưới dạng `path:line: nội dung dòng`, tối đa 100 dòng. `rename_symbol` đổi tên ở mọi file trong một lần gọi và trả về số chỗ sửa theo từng file; mọi chỗ sửa được tính xong trước khi ghi, và nếu có chỗ nằm ngoài thư mục làm việc hoặc server đòi đổi tên, tạo hay xoá file thì không file nào bị đổi. Khi không có server cho loại file đó, hoặc server không hỗ trợ, kết quả bảo model quay về `grep` và `edit`.
 
