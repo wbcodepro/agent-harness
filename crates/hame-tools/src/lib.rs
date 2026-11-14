@@ -6,6 +6,7 @@
 
 mod bash;
 mod files;
+mod hashline;
 mod patch;
 mod process;
 mod search;
@@ -18,6 +19,7 @@ pub use bash::Bash;
 pub use files::{Edit, Read, Write};
 pub use hame_kernel::BoxFuture;
 use hame_session::ToolSpec;
+pub use hashline::{EditLines, ReadAnchored};
 pub use patch::ApplyPatch;
 pub use process::GroupGuard;
 pub use search::{Glob, Grep, RepoMap};
@@ -115,6 +117,12 @@ pub trait Tool: Send + Sync {
         self.effect() == Effect::ReadOnly
     }
 
+    /// The name a worker process finds this tool under. It is the declared
+    /// name except where two tools share one, as the two `read`s do.
+    fn worker_name(&self) -> String {
+        self.spec().name
+    }
+
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput>;
 }
 
@@ -174,7 +182,30 @@ impl ToolSet {
     pub fn every() -> Self {
         let mut set = Self::builtin();
         set.insert(Arc::new(ApplyPatch));
+        set.insert(Arc::new(EditLines));
+        // Declared as `read` like the plain one, which `insert` would
+        // drop. A worker tells them apart with `for_worker`.
+        set.tools.push(Arc::new(ReadAnchored));
         set
+    }
+
+    /// The tool a worker process runs for the name its parent sent, which
+    /// is the tool's [`Tool::worker_name`].
+    pub fn for_worker(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools
+            .iter()
+            .find(|tool| tool.worker_name() == name)
+            .cloned()
+    }
+
+    /// Puts a tool where the one with the same name is, so the order the
+    /// model sees stays the same; adds it at the end when there is none.
+    pub fn replace(&mut self, tool: Arc<dyn Tool>) {
+        let name = tool.spec().name;
+        match self.tools.iter_mut().find(|old| old.spec().name == name) {
+            Some(old) => *old = tool,
+            None => self.tools.push(tool),
+        }
     }
 
     /// Adds a tool, replacing any tool with the same name.

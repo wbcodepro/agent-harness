@@ -262,10 +262,13 @@ impl SubagentTool {
             child.agent.system.push_str(&kind.instructions);
             // A kind can narrow the child's tools, never widen them.
             if let Some(allowed) = &kind.tools {
-                child
-                    .agent
-                    .tools
-                    .retain(|tool| allowed.contains(&tool.spec().name));
+                child.agent.tools.retain(|tool| {
+                    // `edit_lines` is what `edit` is under the
+                    // hashline edit format.
+                    let name = tool.spec().name;
+                    allowed.contains(&name)
+                        || (name == "edit_lines" && allowed.iter().any(|a| a == "edit"))
+                });
             }
         }
         let writer = self

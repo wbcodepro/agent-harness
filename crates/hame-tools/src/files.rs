@@ -61,6 +61,86 @@ struct ReadInput {
     limit: Option<usize>,
 }
 
+/// The input both `read` tools declare.
+pub(crate) fn read_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute path, or relative to the working directory."},
+            "offset": {"type": "integer", "minimum": 1, "description": "First line to return, 1-based. Default 1."},
+            "limit": {"type": "integer", "minimum": 1, "description": "Maximum number of lines. Default 2000."}
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+/// Reads a page of a file. `prefix` is what goes before each line, given
+/// its 1-based number and full text: the two `read` tools differ only in
+/// that.
+pub(crate) fn read_lines(
+    input: &Value,
+    ctx: &ToolContext,
+    prefix: impl Fn(usize, &str) -> String,
+) -> ToolOutput {
+    let input: ReadInput = match parse_input(input) {
+        Ok(input) => input,
+        Err(output) => return output,
+    };
+    let path = ctx.resolve(&input.path);
+    match fs::metadata(&path) {
+        Ok(meta) if meta.is_dir() => {
+            return ToolOutput::error(format!("{} is a directory.", path.display()));
+        }
+        Ok(meta) if meta.len() > MAX_FILE_BYTES => {
+            return ToolOutput::error(format!(
+                "{} is {} bytes; files over {MAX_FILE_BYTES} bytes cannot be read with this tool.",
+                path.display(),
+                meta.len()
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => return ToolOutput::error(format!("Cannot read {}: {e}", path.display())),
+    }
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) => return ToolOutput::error(format!("Cannot read {}: {e}", path.display())),
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return ToolOutput::error(format!("{} is not UTF-8 text.", path.display()));
+    };
+    if text.is_empty() {
+        return ToolOutput::ok("(empty file)");
+    }
+
+    let offset = input.offset.unwrap_or(1).max(1);
+    let limit = input.limit.unwrap_or(DEFAULT_LINE_LIMIT).max(1);
+    let total = text.lines().count();
+    if offset > total {
+        return ToolOutput::error(format!(
+            "offset {offset} is past the end of the file ({total} lines)."
+        ));
+    }
+    let mut out = String::new();
+    for (index, line) in text.lines().enumerate().skip(offset - 1).take(limit) {
+        let shown: String = line.chars().take(MAX_LINE_CHARS).collect();
+        out.push_str(&prefix(index + 1, line));
+        out.push_str(&shown);
+        if shown.len() < line.len() {
+            out.push_str(" [line truncated]");
+        }
+        out.push('\n');
+    }
+    let last = (offset - 1 + limit).min(total);
+    if last < total {
+        out.push_str(&format!(
+            "[showing lines {offset}-{last} of {total}; continue with offset {}]\n",
+            last + 1
+        ));
+    }
+    ToolOutput::ok(out)
+}
+
 impl Tool for Read {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -68,16 +148,7 @@ impl Tool for Read {
             description: "Read a text file. Returns numbered lines. Use offset and limit to \
                           page through files longer than 2000 lines."
                 .into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Absolute path, or relative to the working directory."},
-                    "offset": {"type": "integer", "minimum": 1, "description": "First line to return, 1-based. Default 1."},
-                    "limit": {"type": "integer", "minimum": 1, "description": "Maximum number of lines. Default 2000."}
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
+            input_schema: read_schema(),
         }
     }
 
@@ -86,63 +157,7 @@ impl Tool for Read {
     }
 
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
-        Box::pin(async move {
-            let input: ReadInput = match parse_input(input) {
-                Ok(input) => input,
-                Err(output) => return output,
-            };
-            let path = ctx.resolve(&input.path);
-            match fs::metadata(&path) {
-                Ok(meta) if meta.is_dir() => {
-                    return ToolOutput::error(format!("{} is a directory.", path.display()));
-                }
-                Ok(meta) if meta.len() > MAX_FILE_BYTES => {
-                    return ToolOutput::error(format!(
-                        "{} is {} bytes; files over {MAX_FILE_BYTES} bytes cannot be read with this tool.",
-                        path.display(),
-                        meta.len()
-                    ));
-                }
-                Ok(_) => {}
-                Err(e) => return ToolOutput::error(format!("Cannot read {}: {e}", path.display())),
-            }
-            let bytes = match fs::read(&path) {
-                Ok(bytes) => bytes,
-                Err(e) => return ToolOutput::error(format!("Cannot read {}: {e}", path.display())),
-            };
-            let Ok(text) = String::from_utf8(bytes) else {
-                return ToolOutput::error(format!("{} is not UTF-8 text.", path.display()));
-            };
-            if text.is_empty() {
-                return ToolOutput::ok("(empty file)");
-            }
-
-            let offset = input.offset.unwrap_or(1).max(1);
-            let limit = input.limit.unwrap_or(DEFAULT_LINE_LIMIT).max(1);
-            let total = text.lines().count();
-            if offset > total {
-                return ToolOutput::error(format!(
-                    "offset {offset} is past the end of the file ({total} lines)."
-                ));
-            }
-            let mut out = String::new();
-            for (index, line) in text.lines().enumerate().skip(offset - 1).take(limit) {
-                let shown: String = line.chars().take(MAX_LINE_CHARS).collect();
-                out.push_str(&format!("{}\t{shown}", index + 1));
-                if shown.len() < line.len() {
-                    out.push_str(" [line truncated]");
-                }
-                out.push('\n');
-            }
-            let last = (offset - 1 + limit).min(total);
-            if last < total {
-                out.push_str(&format!(
-                    "[showing lines {offset}-{last} of {total}; continue with offset {}]\n",
-                    last + 1
-                ));
-            }
-            ToolOutput::ok(out)
-        })
+        Box::pin(async move { read_lines(input, ctx, |number, _| format!("{number}\t")) })
     }
 }
 

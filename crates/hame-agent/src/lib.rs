@@ -179,7 +179,7 @@ const STEPS_LEFT_WARNING: u64 = 3;
 pub const THEN_RUN: &str = "then_run";
 const SHELL_TOOL: &str = "bash";
 /// The tools that take [`THEN_RUN`].
-const FUSED_TOOLS: [&str; 3] = ["edit", "write", "apply_patch"];
+const FUSED_TOOLS: [&str; 4] = ["edit", "edit_lines", "write", "apply_patch"];
 /// How often in one turn a response cut off by the output limit is asked
 /// to carry on before the turn ends as it stands.
 const MAX_CONTINUATIONS: u32 = 2;

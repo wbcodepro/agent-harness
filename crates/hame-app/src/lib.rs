@@ -26,7 +26,9 @@ use hame_policy::{
 };
 use hame_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
 use hame_session::{CreateOptions, Event, SessionId, SessionStore};
-use hame_tools::{ApplyPatch, Bash, Effect, ToolContext, ToolRunner, ToolSet};
+use hame_tools::{
+    ApplyPatch, Bash, EditLines, Effect, ReadAnchored, ToolContext, ToolRunner, ToolSet,
+};
 use hame_verify::Verifier;
 
 pub use hame_policy::NetworkMode as NetworkChoice;
@@ -717,6 +719,17 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         EditFormat::ApplyPatch => {
             tools.retain(|tool| !matches!(tool.spec().name.as_str(), "edit" | "write"));
             tools.insert(Arc::new(ApplyPatch));
+        }
+        EditFormat::Hashline => {
+            tools.retain(|tool| tool.spec().name != "edit");
+            tools.replace(Arc::new(ReadAnchored));
+            tools.insert(Arc::new(EditLines));
+            system.push_str(
+                "\nThe read tool shows each line as `number:hash|text`. To change part of a \
+                 file, give edit_lines the `number:hash` anchors of the lines to replace \
+                 instead of retyping them. Anchors stop working once the file changes: use \
+                 the ones from the latest read or edit_lines result.",
+            );
         }
     }
     if options.plan {

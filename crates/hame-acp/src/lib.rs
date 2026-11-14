@@ -431,7 +431,7 @@ impl Updates {
             } => {
                 let kind = match name.as_str() {
                     "read" => "read",
-                    "write" | "edit" | "apply_patch" => "edit",
+                    "write" | "edit" | "edit_lines" | "apply_patch" => "edit",
                     "bash" => "execute",
                     "glob" | "grep" | "repo_map" => "search",
                     _ => "other",

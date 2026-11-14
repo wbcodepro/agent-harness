@@ -276,6 +276,33 @@ async fn a_model_profile_narrows_the_tools_and_picks_the_edit_format() {
     let (whole, system) = names("[model]\ntools = \"minimal\"\nedit_format = \"whole-file\"").await;
     assert_eq!(whole, ["read", "write", "bash", "glob", "grep"]);
     assert!(system.contains("complete new content"));
+
+    let (_, system) = names("[model]\ntools = \"minimal\"").await;
+    assert!(!system.contains("number:hash"));
+    let hashline = "[model]\ntools = \"minimal\"\nedit_format = \"hashline\"";
+    let (anchored, system) = names(hashline).await;
+    assert_eq!(
+        anchored,
+        ["read", "write", "bash", "glob", "grep", "edit_lines"]
+    );
+    assert!(system.contains("number:hash") && system.contains("edit_lines"));
+    // The tool called `read` is the one that shows anchors, and only in
+    // this format.
+    std::fs::write(work.join("a.txt"), "hello\n").unwrap();
+    let read = |config: &'static str| {
+        let (home, work) = (home.clone(), work.clone());
+        async move {
+            std::fs::write(home.join("config.toml"), config).unwrap();
+            let runtime = hame_app::build(&home, &work, &options(Vec::new()))
+                .await
+                .unwrap();
+            let read = runtime.agent.tools.get("read").unwrap();
+            let context = hame_tools::ToolContext::new(&work);
+            read.call(&json!({"path": "a.txt"}), &context).await.text
+        }
+    };
+    assert_eq!(read("").await, "1\thello\n");
+    assert_eq!(read(hashline).await, "1:516|hello\n");
 }
 
 #[cfg(unix)]

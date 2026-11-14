@@ -54,7 +54,10 @@ impl Layer<ToolRequest, ToolOutput> for ReadFirst {
         next: Next<'a, ToolRequest, ToolOutput>,
     ) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
-            let tracked = matches!(request.name.as_str(), "read" | "write" | "edit");
+            let tracked = matches!(
+                request.name.as_str(),
+                "read" | "write" | "edit" | "edit_lines"
+            );
             let Some(path) = request.input["path"].as_str().filter(|_| tracked) else {
                 return next.run(request).await;
             };
@@ -143,6 +146,10 @@ mod tests {
         // A new file needs no read, and neither does rewriting one's own.
         assert_eq!(call("write", "app.py".into()).await.text, "ran");
         assert_eq!(call("write", "app.py".into()).await.text, "ran");
+        // Changing part of a file means its content has been seen.
+        std::fs::write(root.join("conf.py"), "x = 1\n").unwrap();
+        assert_eq!(call("edit_lines", "conf.py".into()).await.text, "ran");
+        assert_eq!(call("write", "conf.py".into()).await.text, "ran");
         // Other tools are not this layer's business.
         assert_eq!(call("bash", "test_app.py".into()).await.text, "ran");
     }

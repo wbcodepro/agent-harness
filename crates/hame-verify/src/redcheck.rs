@@ -50,7 +50,7 @@ fn changes_source(name: &str, input: &serde_json::Value) -> bool {
             .is_some_and(|(_, extension)| SOURCE_EXTENSIONS.contains(&extension))
     };
     match name {
-        "edit" | "write" => input["path"].as_str().is_some_and(is_source),
+        "edit" | "edit_lines" | "write" => input["path"].as_str().is_some_and(is_source),
         "apply_patch" => input["patch"].as_str().is_some_and(|patch| {
             patch.lines().any(|line| {
                 line.strip_prefix("*** Update File: ")
@@ -358,6 +358,11 @@ mod tests {
         );
         // Notes are not source.
         assert_eq!(turn(&[("write", "notes.md", false)]), Evidence::NoChange);
+        // Every tool that changes a file counts, in every edit format.
+        let lines = |path: &str| json!({"path": path, "edits": []});
+        assert!(changes_source("edit_lines", &lines("src/a.rs")));
+        assert!(!changes_source("edit_lines", &lines("notes.md")));
+        assert!(!changes_source("read", &lines("src/a.rs")));
     }
 
     #[tokio::test]

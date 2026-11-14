@@ -98,7 +98,7 @@ pub struct ModelConfig {
     pub temperature: Option<f32>,
     /// Most tool calls run from one model response.
     pub max_tool_calls: usize,
-    /// Let `edit`, `write` and `apply_patch` take a `then_run` command that
+    /// Let `edit`, `edit_lines`, `write` and `apply_patch` take a `then_run` command that
     /// runs right after the change, so a change and its check cost one
     /// request instead of two.
     pub fuse_actions: bool,
@@ -147,6 +147,10 @@ pub enum EditFormat {
     WholeFile,
     /// `apply_patch` replaces both `edit` and `write`.
     ApplyPatch,
+    /// `read` puts a short hash of each line next to its number, and
+    /// `edit_lines` replaces `edit`: it names lines by number and hash
+    /// instead of quoting them, and is refused once the file has changed.
+    Hashline,
 }
 
 impl Default for ModelConfig {
@@ -490,6 +494,13 @@ mod tests {
         assert_eq!(config.model.provider.as_deref(), Some("openai"));
         assert_eq!(config.model.tools, ToolProfile::Minimal);
         assert_eq!(config.model.edit_format, EditFormat::ApplyPatch);
+        assert_eq!(
+            Config::parse("[model]\nedit_format = \"hashline\"")
+                .unwrap()
+                .model
+                .edit_format,
+            EditFormat::Hashline
+        );
         assert!(Config::parse("[model]\nedit_format = \"diff\"").is_err());
         assert_eq!(config.sandbox.mode, Mode::ReadOnly);
         assert!(!config.sandbox.writable_tmp);

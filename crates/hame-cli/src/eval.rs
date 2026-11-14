@@ -612,8 +612,8 @@ pub async fn probe(home: &Path, args: ProbeArgs) -> Result<ExitCode, String> {
         })
     };
     // Every edit format with all tools, then the best format again with
-    // the short tool list: four runs instead of six.
-    for edit_format in ["search-replace", "whole-file", "apply-patch"] {
+    // the short tool list: five runs instead of eight.
+    for edit_format in ["search-replace", "whole-file", "apply-patch", "hashline"] {
         trials.push(try_setting(edit_format, "full").await?);
     }
     let format = best(&trials).edit_format;

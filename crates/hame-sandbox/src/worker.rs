@@ -105,7 +105,7 @@ pub async fn worker_main(tools: &ToolSet) -> u8 {
             return 2;
         }
     };
-    let Some(tool) = tools.get(&request.tool) else {
+    let Some(tool) = tools.for_worker(&request.tool) else {
         eprintln!("tool-worker: unknown tool {:?}", request.tool);
         return 2;
     };
@@ -195,7 +195,7 @@ impl ToolRunner for SandboxedRunner {
                 Err(e) => return ToolOutput::error(format!("Not run: {e}.")),
             };
             let request = WorkerRequest {
-                tool: tool.spec().name,
+                tool: tool.worker_name(),
                 input: input.clone(),
             };
             let request = serde_json::to_vec(&request).expect("requests serialize");

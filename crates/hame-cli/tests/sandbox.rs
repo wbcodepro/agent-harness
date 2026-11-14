@@ -587,3 +587,32 @@ for line in sys.stdin:
         "{offered:?}"
     );
 }
+
+#[test]
+fn hash_anchored_reads_and_edits_run_in_the_confined_worker() {
+    let fx = Fixture::new("[model]\nedit_format = \"hashline\"\n");
+    fs::write(fx.work.join("a.txt"), "hello\nbye\n").unwrap();
+    let (_, results) = fx.run(
+        vec![
+            ("read", json!({"path": "a.txt"})),
+            (
+                "edit_lines",
+                json!({"path": "a.txt", "edits": [{"from": "1:516", "new_text": "hi"}]}),
+            ),
+            // The anchor of the line just replaced no longer holds.
+            (
+                "edit_lines",
+                json!({"path": "a.txt", "edits": [{"from": "1:516", "new_text": "ho"}]}),
+            ),
+        ],
+        &[],
+    );
+    // The worker finds the `read` that shows anchors, not the plain one.
+    assert_eq!(results[0], ("1:516|hello\n2:02b|bye\n".to_string(), false));
+    assert!(!results[1].1, "{}", results[1].0);
+    assert!(results[2].1 && results[2].0.contains("is stale"));
+    assert_eq!(
+        fs::read_to_string(fx.work.join("a.txt")).unwrap(),
+        "hi\nbye\n"
+    );
+}

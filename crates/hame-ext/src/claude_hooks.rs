@@ -276,7 +276,7 @@ fn claude_tool_name(tool: &str) -> &str {
         "bash" => "Bash",
         "read" => "Read",
         "write" => "Write",
-        "edit" => "Edit",
+        "edit" | "edit_lines" => "Edit",
         "glob" => "Glob",
         "grep" => "Grep",
         "subagent" => "Agent",
@@ -285,7 +285,7 @@ fn claude_tool_name(tool: &str) -> &str {
 }
 
 fn takes_a_file(tool: &str) -> bool {
-    matches!(tool, "read" | "write" | "edit")
+    matches!(tool, "read" | "write" | "edit" | "edit_lines")
 }
 
 /// Hooks loaded from Claude Code settings files.

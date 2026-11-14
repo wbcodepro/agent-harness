@@ -82,7 +82,11 @@ impl ApprovalLayer {
         self.rules
             .iter()
             .find(|rule| {
-                (rule.tool == "*" || rule.tool == request.name)
+                // A rule about `edit` is about changing part of a file,
+                // whichever tool the edit format gives the model for it.
+                (rule.tool == "*"
+                    || rule.tool == request.name
+                    || (rule.tool == "edit" && request.name == "edit_lines"))
                     && rule
                         .pattern
                         .as_deref()
@@ -253,6 +257,7 @@ mod tests {
                 rule("bash", Some("git push*"), RuleAction::Ask),
                 rule("bash", Some("rm *"), RuleAction::Deny),
                 rule("write", Some("*/secrets/*"), RuleAction::Deny),
+                rule("edit", Some("*/vendor/*"), RuleAction::Deny),
                 rule("read", Some("*.pem"), RuleAction::Deny),
             ],
             default: RuleAction::Allow,
@@ -295,6 +300,10 @@ mod tests {
         let write = |path: &str| request("write", json!({"path": path}), Effect::Write);
         assert!(ran(&chain, write("/w/secrets/k")).await.is_error);
         assert!(!ran(&chain, write("/w/src/a.rs")).await.is_error);
+        // A rule about `edit` covers the tool that stands in for it.
+        let lines = |path: &str| request("edit_lines", json!({"path": path}), Effect::Write);
+        assert!(ran(&chain, lines("/w/vendor/a.rs")).await.is_error);
+        assert!(!ran(&chain, lines("/w/src/a.rs")).await.is_error);
         // Rules can restrict even read-only tools.
         let read = |path: &str| request("read", json!({"path": path}), Effect::ReadOnly);
         assert!(ran(&chain, read("id.pem")).await.is_error);
