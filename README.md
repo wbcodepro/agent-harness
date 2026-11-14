@@ -179,6 +179,7 @@ stop_on_red = true              # model định dừng khi lệnh test/build cu�
 [limits]
 tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn
 subagent_depth = 1
+max_steps = 100                 # số request tối đa trong một lượt (hame run --max-steps ghi đè)
 
 [mcp.docs]                      # server MCP (stdio); mặc định chạy trong sandbox
 command = "docs-server"

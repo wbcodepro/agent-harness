@@ -413,6 +413,10 @@ pub struct LimitsConfig {
     pub tree_tokens: u64,
     /// How many levels of subagents may be nested. Zero turns subagents off.
     pub subagent_depth: u32,
+    /// Most model requests in one turn. Long work (a spec with many rules,
+    /// a change across many files) can need more than fifty; a turn that
+    /// loops on the same call is stopped earlier by other means.
+    pub max_steps: u64,
 }
 
 impl Default for LimitsConfig {
@@ -420,6 +424,7 @@ impl Default for LimitsConfig {
         Self {
             tree_tokens: 0,
             subagent_depth: 1,
+            max_steps: 100,
         }
     }
 }

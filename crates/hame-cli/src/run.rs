@@ -57,9 +57,10 @@ pub struct RunArgs {
     /// configuration, then the provider's own.
     #[arg(long)]
     base_url: Option<String>,
-    /// Most model requests allowed in the turn.
-    #[arg(long, default_value_t = 50)]
-    max_steps: u64,
+    /// Most model requests allowed in the turn. Defaults to
+    /// `[limits] max_steps` in the configuration (100).
+    #[arg(long)]
+    max_steps: Option<u64>,
     /// How tools are confined. Defaults to the configuration
     /// (workspace-write unless changed).
     #[arg(long, value_enum)]
@@ -94,7 +95,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         provider: args.provider.clone(),
         model: args.model.clone(),
         base_url: args.base_url.clone(),
-        max_steps: args.max_steps,
+        max_steps: args.max_steps.unwrap_or(0),
         plan: args.plan,
         ..Options::default()
     };

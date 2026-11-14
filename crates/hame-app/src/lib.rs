@@ -95,6 +95,7 @@ pub struct Options {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+    /// Most model requests in a turn; zero takes `[limits] max_steps`.
     pub max_steps: u64,
     /// Plan mode: nothing can be changed, and the agent is told to produce
     /// a plan instead of doing the work.
@@ -779,7 +780,12 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         checkpointer,
         hooks,
         system,
-        max_steps: options.max_steps,
+        // Zero leaves it to the configuration.
+        max_steps: if options.max_steps > 0 {
+            options.max_steps
+        } else {
+            config.limits.max_steps.max(1)
+        },
         max_tokens: None,
         max_tool_calls: config.model.max_tool_calls,
         fuse_actions: config.model.fuse_actions,

@@ -177,7 +177,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                     .map_err(display)?,
             };
             let options = hame_app::Options {
-                max_steps: 50,
+                max_steps: 0,
                 plan,
                 ..hame_app::Options::default()
             };
@@ -190,7 +190,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 .and_then(|cwd| hame_kernel::real_path(&cwd))
                 .map_err(display)?;
             let options = hame_app::Options {
-                max_steps: 50,
+                max_steps: 0,
                 ..hame_app::Options::default()
             };
             let server = hame_web::start(home, cwd, options, port).await?;
@@ -203,7 +203,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Acp => {
             let options = hame_app::Options {
-                max_steps: 50,
+                max_steps: 0,
                 ..hame_app::Options::default()
             };
             hame_acp::serve(home, options, tokio::io::stdin(), tokio::io::stdout())
