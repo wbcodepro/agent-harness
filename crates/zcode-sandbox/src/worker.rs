@@ -137,6 +137,8 @@ impl SandboxedRunner {
             ] {
                 env.push((name.into(), proxy.clone().into()));
             }
+            // Node's own fetch looks at the proxy variables only when told to.
+            env.push(("NODE_USE_ENV_PROXY".into(), "1".into()));
             for name in ["NO_PROXY", "no_proxy"] {
                 env.push((name.into(), "localhost,127.0.0.1,::1".into()));
             }
