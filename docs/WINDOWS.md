@@ -71,6 +71,37 @@ Windows này và sửa những gì hỏng. Đọc README.md và docs/WINDOWS.md 
    Không chạy CI trên GitHub trừ khi cần (workflow chỉ chạy thủ công: gh workflow run ci).
 ```
 
+## Lượt ba: sau khi đổi tên thành hame (2026-11-14)
+
+Dự án đổi tên từ zcode thành hame: lệnh là `hame`, thư mục dữ liệu là `%USERPROFILE%\.hame` (thư mục `.zcode` cũ vẫn được dùng kèm một dòng nhắc cho tới khi đổi tên), biến môi trường là `HAME_*`, thư mục cấu hình trong dự án là `.hame\`. Dán khối sau cho Claude Code trên máy Windows:
+
+```text
+Repo này trước tên zcode, nay là hame. Hãy git pull, build lại (cargo build --release -p hame-cli),
+chạy cargo test --workspace --no-fail-fast, rồi kiểm các phần dưới đây và ghi kết quả vào một
+mục mới "Lượt ba" trong docs/WINDOWS-RESULTS.md. Sửa trong mã sản phẩm những gì hỏng, mỗi bản
+sửa một commit. Trước khi push luôn git fetch và rebase.
+
+1. Đổi tên: hame --version chạy được; khi chỉ có %USERPROFILE%\.zcode thì hame dùng nó và in
+   một dòng nhắc; sau khi đổi tên thư mục thành .hame thì không còn dòng nhắc. Cập nhật mọi cấu
+   hình editor (ACP) đang trỏ tới zcode.exe.
+2. pipefail: tool bash giờ chạy với "bash -o pipefail -c". Yêu cầu agent chạy
+   "(echo boom; exit 3) | tail -n 5": kết quả phải là lỗi và có chữ pipefail. Chạy
+   "seq 1 200000 | head -n 2": không được báo lỗi.
+3. Ghi file nguyên khối: write, edit và apply_patch ghi ra file tạm cùng thư mục rồi đổi tên đè
+   lên. Kiểm khi file đích đang mở trong một editor (Windows có thể từ chối đổi tên): lỗi phải
+   rõ ràng và nội dung cũ còn nguyên; kiểm rằng không còn sót file ".<tên>.<pid>-<n>.tmp".
+4. then_run: yêu cầu agent sửa một file .py rồi kiểm tra trong cùng lời gọi. Kết quả của lời
+   gọi edit phải có dòng "[then_run] $ ..." kèm đầu ra của lệnh; lệnh đó phải chịu luật quyền và
+   sandbox như một lệnh bash thường.
+5. Lọc đầu ra: chạy cargo test trong một crate nhỏ qua agent. Kết quả tool phải có dòng
+   "lines omitted: passing tests or build progress", giữ dòng "test result:", và đường dẫn file
+   lưu bản đầy đủ phải đọc được bằng tool read.
+6. hame run in dòng "evidence: ..." sau một lượt có sửa mã nguồn; --output json có trường
+   evidence.
+
+Không chạy CI trên GitHub trừ khi cần (gh workflow run ci).
+```
+
 ## Đã kiểm trên GitHub Actions (Windows Server)
 
 Lần chạy gần nhất: commit `3fea852` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Lần đó gồm cả các phần thêm sau lượt kiểm trên máy thật (lệnh và loại subagent từ file, cài plugin, MCP không trạng thái, đăng nhập OAuth, tool `script`, thay secret tại proxy), nhưng chỉ ở mức biên dịch và test tự động: chúng chưa được dùng thử bằng tay trên Windows.
