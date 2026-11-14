@@ -224,3 +224,35 @@ Mỗi lỗi một commit, tên commit ghi trong ngoặc.
 - Một editor thật giữ file trong lúc hame ghi: mục 3 được mô phỏng bằng cách giữ file qua `CreateFileW`, không phải bằng một editor cụ thể.
 - Language server khác rust-analyzer (pyright, typescript-language-server…): máy không có.
 - `hame acp` trong editor và `hame mcp login` với nhà cung cấp thật: vẫn cần người làm theo `docs/KIEM-THU-TAY.md`.
+
+# Lượt bốn
+
+Thực hiện ngày 2026-11-15 trên cùng máy, theo khối lệnh "Lượt bốn" trong `docs/WINDOWS.md`. Mục 2 và 3 phát lại phản hồi viết sẵn qua `HAME_SCRIPT` trên binary thật; mục 1 chạy bằng model thật.
+
+## Build và test
+
+| | đạt | hỏng |
+|---|---|---|
+| Sau `git pull` (commit `267de4b`), `cargo build --release -p hame-cli` đạt | 179 | 0 |
+| Sau bản sửa của lượt này | 179 | 0 |
+
+Một test bị bỏ qua theo thiết kế (cần server OAuth thật). `cargo clippy --workspace --all-targets -- -D warnings` sạch.
+
+## Lỗi đã sửa
+
+1. **Lệnh chạy riêng các test bị ảnh hưởng không chạy được trên Windows** ("Name the tests to run with the Python that runs here"). Sau khi đổi chữ ký một hàm Python, lệnh được gợi ý bắt đầu bằng `python3 -m pytest`; `python3` trên Windows là stub mở Microsoft Store, nên lệnh hỏng trong Git Bash. Giờ lệnh dùng cùng cách tìm Python như tool `script`: `python3` nếu chạy được, không thì `python`.
+
+## Từng mục
+
+| Mục | Kết quả |
+|---|---|
+| 1. `[verify] review = true` (model thật) | Đạt. DeepSeek báo hết số dư (HTTP 402) nên lần chạy dùng `--provider anthropic --model claude-haiku-5-5`. Đặc tả `shipping_cost` có một luật dễ sót (cân nặng ≤ 0 hoặc > 30 kg phải raise `ValueError`); agent làm đúng. Người chấm chạy trong một session riêng, đọc đặc tả, viết hai script thử trong `%TEMP%` (trong sandbox là `C:\Users\ADMIN\AppData\LocalLow\hame-tmp\probe_shipping`), thử cả biên (2, 2.1, 3, 3.5, 30, 30.0001, 0, -1, `nan`, `Decimal`, `Fraction`) và trả `NO FINDINGS`. Trong thư mục dự án chỉ `shipping.py` đổi, do agent sửa; người chấm không đổi file nào. Session của người chấm không có tin nhắn `[hame check]` nào |
+| 2. Chọn test sau khi đổi chữ ký | Hỏng với Python lúc đầu (lỗi 1), đạt sau khi sửa. Python: kết quả `edit` có "Tests that call `parse_money`: test_parse. To run just those: `python -m pytest -q pkg/tests/test_money.py -k "test_parse"`", đường dẫn dùng `/`; chạy lệnh đó trong Git Bash (pytest cài trong một venv của dự án vì Python chung không có) cho "1 passed, 1 deselected". Rust: "Tests that call `total_cents`: outer_total. To run just those: `cargo test -q -- outer_total`", chỗ dùng ghi `tests/outer.rs:3`; sau khi sửa nơi gọi, lệnh chạy trong Git Bash và `outer_total` đạt. Go: máy không có Go, chỉ test đơn vị kiểm |
+| 3. Lệnh dài trong `[hame check]` | Đạt. Một heredoc Python nhiều dòng có chữ "test" và thất bại: tin nhắn trích `` `python - <<'EOF' …` (shortened here; rerun the full command from your earlier call) `` |
+| 4. Stream đứt giữa chừng | Đạt: `a_response_cut_off_midway_is_asked_for_again` trong `crates/hame-agent/tests/turn.rs` đạt, cả trước và sau bản sửa |
+
+## Ghi nhận
+
+- Trong lần chạy mục 1, một Git Bash khác (của chính phần kiểm mục 2, đang cài pytest) đang mở ngoài sandbox. Vì vậy lệnh kiểm tra của agent và lệnh bash đầu tiên của người chấm không khởi động được (`NtCreateDirectoryObject … 0xC0000022`, giới hạn đã ghi ở lượt đầu). hame báo đúng nguyên nhân, agent nói rõ là chưa chạy được thay vì nhận là đã kiểm, và người chấm vẫn thử được sau khi Git Bash kia đóng. Đây không phải lỗi mới; nó cho thấy giới hạn đó gặp được trong thực tế.
+- Với Rust, ghi chú chỉ nêu test ở file khác (`tests/outer.rs`). Test trong chính file vừa sửa (mô-đun `tests` của `src/lib.rs`) không được nêu vì bộ tìm bỏ qua file đang sửa. Hành vi này giống nhau trên mọi hệ điều hành nên không sửa ở lượt này.
+- Trong Git Bash bị giam, `echo $TEMP` in `/tmp`, và `/tmp` trỏ tới `LocalLow\hame-tmp`, nên lời dặn "%TEMP%" cho người chấm dẫn đúng chỗ.
