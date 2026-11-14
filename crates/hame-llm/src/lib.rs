@@ -109,7 +109,10 @@ pub struct Retry {
 impl Default for Retry {
     fn default() -> Self {
         Self {
-            max_retries: 3,
+            // Five tries spread over a quarter of a minute: three over
+            // three seconds lost whole runs to a network that was away
+            // for ten.
+            max_retries: 5,
             base_delay: Duration::from_millis(500),
         }
     }

@@ -252,3 +252,7 @@ Bộ `evals/harder` (8 tác vụ), ba lần chạy mỗi cấu hình, mọi lầ
 | `gpt-6.1-sol` | Codex CLI | 213, 232, 225 giây |
 
 Bộ tác vụ này quá dễ để phân biệt chất lượng (mọi bên đều đạt hết) và mức suy luận mặc định của các harness chưa được cân bằng, nên con số chỉ nói về thời gian trên việc nhỏ. Theo `techniques.md`, bước tiếp theo đúng là bộ 20 đến 50 tác vụ lấy từ lỗi thật, chấm theo kết quả, chạy nhiều lần, và đo token trên mỗi tác vụ giải được.
+
+## 9. Khảo sát 116 repo đang nổi (2026-11-14)
+
+Bảng kỹ thuật, ưu nhược điểm và ứng dụng của 116 repo, cùng số đo của hai kỹ thuật đã cài từ đó (ít hơn 14,9% request, 19,3% token prompt trên 36 lượt ghép cặp với `deepseek-flash`), nằm ở [`100-REPO.md`](100-REPO.md).

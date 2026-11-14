@@ -124,6 +124,7 @@ summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch s
 tools = "full"                  # full | minimal (chỉ file, tìm kiếm, shell; cho model nhỏ)
 edit_format = "search-replace"  # search-replace | whole-file | apply-patch
 max_tool_calls = 32             # số lời gọi tool tối đa trong một phản hồi
+fuse_actions = true             # edit/write/apply_patch nhận tham số then_run: lệnh chạy ngay sau khi sửa, kết quả trả về cùng lời gọi
 temperature = 0.0               # chỉ với API chat-completions (DeepSeek, máy chủ tương thích, model chạy tại chỗ)
 escalate_to = "claude-fable-5-2"     # model mạnh hơn tiếp quản phần còn lại của lượt khi model chính kẹt
 escalate_provider = "anthropic"      # tùy chọn: model mạnh thuộc nhà cung cấp khác (ví dụ model chính chạy tại chỗ)
@@ -160,6 +161,7 @@ substitute = { NPM_TOKEN = ["registry.npmjs.org"] }   # tool chỉ nhận giá t
 compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng
 clear_tool_results = false      # true: vượt ngưỡng thì xóa kết quả tool cũ trước, chưa đủ mới tóm tắt
 spill_at_bytes = 16000          # đầu ra dài hơn thì lưu ra file, chỉ xem trước
+condense_output = true          # bỏ dòng test đạt và tiến trình build khỏi đầu ra lệnh; dòng lỗi và tổng kết giữ nguyên văn, bản đầy đủ lưu ra file
 defer_tools_over = 20           # nhiều tool MCP/plugin hơn số này thì không khai báo cho model;
                                 # model tìm bằng tool_search và chạy bằng tool_call
 
