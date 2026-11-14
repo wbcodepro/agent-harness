@@ -90,7 +90,9 @@ fn mask(content: &[Block]) -> Vec<Block> {
 /// event replaces long tool results up to its mark with a short note.
 pub fn derive_history(records: &[Record]) -> History {
     let compaction = records.iter().rev().find_map(|record| match &record.event {
-        Event::Compaction { summary, up_to_seq } => Some((summary, *up_to_seq)),
+        Event::Compaction {
+            summary, up_to_seq, ..
+        } => Some((summary, *up_to_seq)),
         _ => None,
     });
 

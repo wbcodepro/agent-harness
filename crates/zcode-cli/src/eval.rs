@@ -226,7 +226,8 @@ async fn run_task(
     for header in store.list().unwrap_or_default() {
         for record in store.read(&header.id).unwrap_or_default() {
             match record.event {
-                Event::AssistantMessage { usage, .. } => {
+                // A summary is a model request too, and is paid for.
+                Event::AssistantMessage { usage, .. } | Event::Compaction { usage, .. } => {
                     outcome.requests += 1;
                     outcome.input_tokens += usage.input_tokens + usage.cache_write_tokens;
                     outcome.cached_tokens += usage.cache_read_tokens;

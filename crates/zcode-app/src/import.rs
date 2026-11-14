@@ -180,6 +180,7 @@ pub fn import_dsh(
                     .map(|(_, seq)| Event::Compaction {
                         summary: joined(&data["summary"]),
                         up_to_seq: *seq,
+                        usage: Default::default(),
                     })
             }
             _ => None,

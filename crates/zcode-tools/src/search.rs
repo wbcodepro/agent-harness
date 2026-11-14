@@ -18,6 +18,29 @@ const MAX_GLOB_RESULTS: usize = 200;
 const DEFAULT_GREP_RESULTS: usize = 200;
 const MAX_SHOWN_LINE_CHARS: usize = 300;
 
+/// A line as shown in results: whole when short, otherwise the part
+/// around the match, so a hit far into a long line is still visible.
+fn excerpt(line: &str, regex: &Regex) -> String {
+    if line.chars().count() <= MAX_SHOWN_LINE_CHARS {
+        return line.to_string();
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let at = regex
+        .find(line)
+        .map_or(0, |found| line[..found.start()].chars().count());
+    let start = at.saturating_sub(MAX_SHOWN_LINE_CHARS / 3);
+    let end = (start + MAX_SHOWN_LINE_CHARS).min(chars.len());
+    let mut shown = String::new();
+    if start > 0 {
+        shown.push('…');
+    }
+    shown.extend(&chars[start..end]);
+    if end < chars.len() {
+        shown.push('…');
+    }
+    shown
+}
+
 /// Files under `root`, skipping what the project ignores and `.git`.
 fn walk(root: &Path) -> impl Iterator<Item = PathBuf> {
     WalkBuilder::new(root)
@@ -222,7 +245,7 @@ impl Tool for Grep {
                     total += 1;
                     if shown < limit {
                         shown += 1;
-                        let line: String = line.chars().take(MAX_SHOWN_LINE_CHARS).collect();
+                        let line = excerpt(line, &regex);
                         let name = relative(path, &ctx.cwd);
                         // Which function a line is in is usually the next
                         // thing asked; saying it here saves reading the file.

@@ -129,7 +129,14 @@ pub enum Event {
     /// Model history up to and including `up_to_seq` is represented by
     /// `summary` from here on. The earlier records stay in the log.
     #[serde(rename = "compaction")]
-    Compaction { summary: String, up_to_seq: u64 },
+    Compaction {
+        summary: String,
+        up_to_seq: u64,
+        /// What the request that wrote the summary cost. It is a model
+        /// request like any other and belongs in the totals.
+        #[serde(default, skip_serializing_if = "is_default")]
+        usage: Usage,
+    },
     /// Tool results up to and including `up_to_seq` are no longer shown to
     /// the model in full; a short note stands in for each long one. They
     /// stay in the log.
@@ -205,6 +212,10 @@ pub enum StopReason {
     MaxTokens,
     /// The provider declined to answer.
     Refusal,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

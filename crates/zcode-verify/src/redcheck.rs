@@ -131,13 +131,32 @@ impl TurnHook for RedCheck {
                 ))]);
             }
 
+            let failed_call = |id: &str| {
+                turn.iter().any(|record| {
+                    matches!(&record.event, Event::ToolResult { call_id, is_error: true, .. }
+                        if call_id == id)
+                })
+            };
             let (last_id, command) = *shell_calls.last()?;
-            let failed = turn.iter().any(|record| {
-                matches!(&record.event, Event::ToolResult { call_id, is_error: true, .. }
-                    if call_id == last_id)
-            });
-            if !failed {
-                return None;
+            if !failed_call(last_id) {
+                // The last command passed, but it may be an unrelated one
+                // (`git status`) run after a check that failed and was
+                // never seen to pass.
+                let mut red = None;
+                for (id, run) in &shell_calls {
+                    if !looks_like_a_check(run) {
+                        continue;
+                    }
+                    red = failed_call(id).then_some(*run);
+                }
+                let run = red?;
+                let shown: String = run.chars().take(200).collect();
+                return Some(vec![Block::text(format!(
+                    "{CHECK_PREFIX} `{shown}` failed earlier in this turn and no check has \
+                     passed since. Run it again: if it still fails, fix the cause and rerun \
+                     until it passes. If it cannot pass, or its failure does not matter, say \
+                     so explicitly and why."
+                ))]);
             }
             let times = shell_calls
                 .iter()
@@ -222,6 +241,26 @@ mod tests {
             objects(log(
                 "Fix it",
                 &[("./run.sh", true), ("ls", false), ("./run.sh", true)]
+            ))
+            .await
+        );
+        // An unrelated command after a failed check does not clear it;
+        // a later check that passes does.
+        assert!(
+            objects(log(
+                "Fix it",
+                &[("cargo test", true), ("git status", false)]
+            ))
+            .await
+        );
+        assert!(
+            !objects(log(
+                "Fix it",
+                &[
+                    ("cargo test", true),
+                    ("git status", false),
+                    ("cargo test -q", false)
+                ]
             ))
             .await
         );

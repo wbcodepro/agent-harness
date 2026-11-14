@@ -3,7 +3,7 @@ use std::sync::Arc;
 use zcode_agent::{AgentError, Session, TurnHook};
 use zcode_kernel::BoxFuture;
 use zcode_llm::{Llm, Request, SinkError};
-use zcode_session::{Block, Delta, Event, Message, Record, Role, derive_history};
+use zcode_session::{Block, Delta, Event, Message, Record, Role, StopReason, derive_history};
 
 const SUMMARY_SYSTEM: &str = "You compress the working memory of a coding agent. You will be \
 given the transcript of its session so far. Write the summary the agent will continue from; it \
@@ -124,15 +124,24 @@ fn transcript(messages: &[Message]) -> String {
                 } => {
                     let mut inner = String::new();
                     render(content, &mut inner);
-                    let shown = clip(&inner, TRANSCRIPT_RESULT_BYTES);
                     out.push_str(if *is_error {
                         "[tool error] "
                     } else {
                         "[tool result] "
                     });
-                    out.push_str(shown);
-                    if shown.len() < inner.len() {
+                    // Both ends: a long result says what went wrong, and
+                    // where the whole of it was saved, at the end.
+                    if inner.len() <= TRANSCRIPT_RESULT_BYTES {
+                        out.push_str(&inner);
+                    } else {
+                        let head = clip(&inner, TRANSCRIPT_RESULT_BYTES * 3 / 5);
+                        let mut from = inner.len() - TRANSCRIPT_RESULT_BYTES * 2 / 5;
+                        while !inner.is_char_boundary(from) {
+                            from += 1;
+                        }
+                        out.push_str(head);
                         out.push_str("\n[... truncated ...]\n");
+                        out.push_str(&inner[from..]);
                     }
                 }
             }
@@ -265,7 +274,15 @@ impl Compactor {
             }
             Ok(())
         };
-        self.llm.stream(&request, &mut collect).await?;
+        let completion = self.llm.stream(&request, &mut collect).await?;
+        // A summary that was refused or cut off would stand in for the
+        // history and hide what was asked; the history is kept instead.
+        if completion.stop != StopReason::EndTurn {
+            return Err(AgentError::Hook(format!(
+                "compaction failed: the summary did not finish ({:?})",
+                completion.stop
+            )));
+        }
         if summary.trim().is_empty() {
             return Err(AgentError::Hook(
                 "compaction failed: the model returned an empty summary".into(),
@@ -279,6 +296,7 @@ impl Compactor {
                 summary.trim()
             ),
             up_to_seq,
+            usage: completion.usage,
         })?;
         Ok(true)
     }

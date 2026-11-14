@@ -246,7 +246,9 @@ impl Spent {
     fn of(records: &[Record]) -> Self {
         let mut spent = Self::default();
         for record in records {
-            if let Event::AssistantMessage { usage, .. } = &record.event {
+            if let Event::AssistantMessage { usage, .. } | Event::Compaction { usage, .. } =
+                &record.event
+            {
                 spent.requests += 1;
                 spent.input +=
                     usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens;

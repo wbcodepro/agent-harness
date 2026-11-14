@@ -34,7 +34,8 @@ impl Tool for Bash {
         ToolSpec {
             name: "bash".into(),
             description: "Run a bash command in the working directory and return its stdout, \
-                          stderr and exit code. Each call starts a new shell. The command is \
+                          stderr and exit code. Each call starts a new shell, with pipefail \
+                          set: a pipeline fails when any command in it fails. The command is \
                           killed after timeout_ms (default 120000, max 600000)."
                 .into(),
             input_schema: json!({
@@ -74,8 +75,10 @@ impl Tool for Bash {
                 );
             }
             let mut command = Command::new(zcode_kernel::bash_program());
+            // With pipefail a failing test run piped through `tail` still
+            // reports its failure, where bash alone reports `tail`'s success.
             command
-                .arg("-c")
+                .args(["-o", "pipefail", "-c"])
                 .arg(&input.command)
                 .current_dir(&ctx.cwd)
                 .stdin(Stdio::null())
@@ -133,7 +136,10 @@ impl Tool for Bash {
                 text.push_str("[stderr]\n");
                 text.push_str(&truncate_middle(&stderr, SHOWN_LIMIT));
             }
-            if status.success() {
+            // A reader that stopped early (`... | head`) kills the writer
+            // with SIGPIPE; that is how such a pipeline normally ends.
+            let closed_pipe = status.code() == Some(141) && input.command.contains('|');
+            if status.success() || closed_pipe {
                 if text.is_empty() {
                     text.push_str("(no output)");
                 }
@@ -143,6 +149,10 @@ impl Tool for Bash {
                     text.push('\n');
                 }
                 match status.code() {
+                    Some(code) if input.command.contains('|') => text.push_str(&format!(
+                        "[exit code {code}: a command in the pipeline failed; the shell runs \
+                         with pipefail]"
+                    )),
                     Some(code) => text.push_str(&format!("[exit code {code}]")),
                     None => text.push_str("[killed by a signal]"),
                 }
@@ -168,13 +178,22 @@ impl Tool for Bash {
 /// Collects a stream in the background, keeping at most [`CAPTURE_LIMIT`]
 /// bytes so a runaway command cannot exhaust memory.
 struct Capture {
-    state: Arc<Mutex<(Vec<u8>, usize)>>,
+    state: Arc<Mutex<Captured>>,
     task: tokio::task::JoinHandle<()>,
+}
+
+/// The start and the end of a stream: the end is where a long run says
+/// what went wrong.
+#[derive(Default)]
+struct Captured {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    dropped: usize,
 }
 
 impl Capture {
     fn start(mut stream: impl AsyncRead + Unpin + Send + 'static) -> Self {
-        let state = Arc::new(Mutex::new((Vec::new(), 0usize)));
+        let state = Arc::new(Mutex::new(Captured::default()));
         let shared = Arc::clone(&state);
         let task = tokio::spawn(async move {
             let mut chunk = [0u8; 8192];
@@ -183,9 +202,13 @@ impl Capture {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         let mut state = shared.lock().expect("capture lock poisoned");
-                        let room = CAPTURE_LIMIT.saturating_sub(state.0.len()).min(n);
-                        state.0.extend_from_slice(&chunk[..room]);
-                        state.1 += n - room;
+                        let half = CAPTURE_LIMIT / 2;
+                        let room = half.saturating_sub(state.head.len()).min(n);
+                        state.head.extend_from_slice(&chunk[..room]);
+                        state.tail.extend(&chunk[room..n]);
+                        let over = state.tail.len().saturating_sub(half);
+                        state.tail.drain(..over);
+                        state.dropped += over;
                     }
                 }
             }
@@ -203,13 +226,15 @@ impl Capture {
             self.task.abort();
         }
         let state = self.state.lock().expect("capture lock poisoned");
-        let mut text = String::from_utf8_lossy(&state.0).into_owned();
-        if state.1 > 0 {
+        let mut text = String::from_utf8_lossy(&state.head).into_owned();
+        if state.dropped > 0 {
             text.push_str(&format!(
-                "\n[... {} more bytes not captured ...]\n",
-                state.1
+                "\n[... {} bytes not captured ...]\n",
+                state.dropped
             ));
         }
+        let (front, back) = state.tail.as_slices();
+        text.push_str(&String::from_utf8_lossy(&[front, back].concat()));
         text
     }
 }
@@ -285,6 +310,37 @@ mod tests {
             .await;
         assert_eq!(out, ToolOutput::ok("started\n"));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn a_failure_hidden_behind_a_pipe_is_still_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(dir.path());
+        let out = Bash
+            .call(&json!({"command": "(echo boom; exit 3) | tail -n 5"}), &ctx)
+            .await;
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("boom") && out.text.contains("pipefail"));
+
+        // A reader that stops early is not a failure.
+        let out = Bash
+            .call(&json!({"command": "seq 1 200000 | head -n 2"}), &ctx)
+            .await;
+        assert!(!out.is_error, "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn the_end_of_very_long_output_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(dir.path());
+        let out = Bash
+            .call(
+                &json!({"command": "head -c 3000000 /dev/zero | tr '\\0' 'x'; echo; echo THE-END"}),
+                &ctx,
+            )
+            .await;
+        assert!(out.text.contains("THE-END"), "the tail is lost");
+        assert!(out.text.contains("omitted"));
     }
 
     #[tokio::test]

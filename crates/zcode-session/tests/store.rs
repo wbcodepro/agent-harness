@@ -350,6 +350,7 @@ fn compaction_hides_covered_messages_without_touching_the_log() {
         writer.append(Event::Compaction {
             summary: "too far".into(),
             up_to_seq: last_seq + 1,
+            usage: Default::default(),
         }),
         Err(SessionError::InvalidEvent(_))
     ));
@@ -357,6 +358,7 @@ fn compaction_hides_covered_messages_without_touching_the_log() {
         .append(Event::Compaction {
             summary: "Earlier: read a.rs and b.rs; each has one function.".into(),
             up_to_seq: last_seq,
+            usage: Default::default(),
         })
         .unwrap();
     writer.append(Event::TurnStart { turn: 2 }).unwrap();
