@@ -25,9 +25,9 @@ Phần lớn giá trị nằm ở một số ít ý lặp lại ở nhiều repo
 | 5 | Chọn model và mức suy luận theo từng lượt: việc dễ dùng mức thấp, chỉ leo thang khi kẹt | `JuliusBrussee/caveman`, `codewhale-hq/Codewhale`, `microsoft/TokenEconomizer` | Khoảng nửa chi phí và nửa thời gian ở tỷ lệ giải tương đương; 18,4–30,9% chi phí thấp hơn mà Pass@1 không giảm | Phân loại sai việc khó thành dễ làm giảm độ chính xác | **Đã làm** theo cách ngược lại: bắt đầu ở mức thấp, nâng mức (hoặc đổi model, kể cả sang nhà cung cấp khác) khi lượt bị kẹt; số đo ở dưới. Chưa có bộ phân loại việc dễ/khó trước khi làm |
 | 6 | Cắt nguyên văn trước khi tóm tắt: bỏ kết quả tool cũ, giữ nguyên mọi lời của người dùng và model | `tamaratran/fast-jev-compaction`, `esengine/DeepSeek-Reasonix` | Giữ được đường dẫn, lỗi và ràng buộc mà bản tóm tắt hay làm mất | Viết lại phần đầu prompt làm mất cache một lần | Đã có (`[context] clear_tool_results`), mặc định tắt vì số đo trước đây không cho thấy lợi rõ |
 | 7 | Tool theo ký hiệu qua LSP: tìm tham chiếu chính xác, đổi tên xuyên file, thay thân hàm | `oraios/serena` | Một lời gọi đúng thay cho nhiều bước sửa chữ | Phụ thuộc language server của từng ngôn ngữ | **Đã làm** (`references`, `rename_symbol`), đã thử với rust-analyzer |
-| 8 | Ghi nhận chi phí theo từng nguồn trong prompt (hệ thống, tool, lịch sử, kết quả tool) và theo từng lần gọi model | `tigerless-labs/cost-xray`, `getagentseal/codeburn` | Thấy được schema tool không dùng và những lần cache bị viết lại | Không có; chỉ là đo | Một phần: tổng token và tỷ lệ cache; từ hôm nay tính cả lần gọi tóm tắt |
-| 9 | Bài học rút từ thất bại lặp lại giữa các phiên, lưu thành dữ kiện của repo | `microsoft/TokenEconomizer`, `riponcm/projectmem` | Nằm trong kết quả 18,4–30,9% ở trên | Bài học sai hoặc cũ gây hại lâu dài; cần điều kiện hết hiệu lực | Chưa làm |
-| 10 | Thay kết quả lớn bị lặp lại bằng tham chiếu ổn định, đọc lại theo trang | `NVlabs/SoL-Pi` | Không có số riêng | Model có thể không tìm lại được nội dung sau khi lịch sử bị nén | Chưa làm |
+| 8 | Ghi nhận chi phí theo từng nguồn trong prompt (hệ thống, tool, lịch sử, kết quả tool) và theo từng lần gọi model | `tigerless-labs/cost-xray`, `getagentseal/codeburn` | Thấy được schema tool không dùng và những lần cache bị viết lại | Không có; chỉ là đo | **Đã làm**: `hame run` in các phần lớn nhất của ngữ cảnh theo nguồn (hệ thống, khai báo tool, hội thoại, kết quả theo từng tool), JSON có đủ bảng; tổng token tính cả lần gọi tóm tắt |
+| 9 | Bài học rút từ thất bại lặp lại giữa các phiên, lưu thành dữ kiện của repo | `microsoft/TokenEconomizer`, `riponcm/projectmem` | Nằm trong kết quả 18,4–30,9% ở trên | Bài học sai hoặc cũ gây hại lâu dài; cần điều kiện hết hiệu lực | **Làm phần an toàn**: chỉ nhớ điều log chứng minh được (lệnh kiểm tra đã đạt sau lần sửa cuối, lệnh không có trên máy), bỏ khi phiên sau cho thấy hết đúng (`[context] project_facts`). Không lưu kết luận của model |
+| 10 | Thay kết quả lớn bị lặp lại bằng tham chiếu ổn định, đọc lại theo trang | `NVlabs/SoL-Pi` | Không có số riêng | Model có thể không tìm lại được nội dung sau khi lịch sử bị nén | **Đã làm** ở dạng đơn giản: kết quả từ 2.000 byte giống hệt một kết quả trước còn trong ngữ cảnh thì chỉ ghi một dòng trỏ tới kết quả đó (`[context] dedupe_results`) |
 
 Ba điều rút ra cho hướng đi:
 
@@ -83,6 +83,12 @@ Một lần chạy mỗi bên nên chênh lệch (khoảng 10% request, 15% toke
 ### Tool theo ký hiệu qua LSP (mục 7 trong bảng)
 
 `references` và `rename_symbol` đã cài trên client LSP sẵn có. Thử thật với rust-analyzer trên một dự án Rust nhỏ: tìm đủ 4 chỗ dùng ở 2 file, đổi tên 4 chỗ trong một lời gọi, `cargo test` đạt. Giới hạn đã biết: luật quyền theo đường dẫn chỉ thấy file xuất phát của lệnh đổi tên, không thấy các file khác nó sửa (lệnh vẫn từ chối sửa ngoài thư mục làm việc và trong `.git`); lần gọi đầu khi server còn lập chỉ mục có thể trả về rỗng.
+
+### Dữ kiện dự án giữa các phiên (mục 9)
+
+Thử thật với `deepseek-flash` trên một dự án Python nhỏ, hai phiên liên tiếp: phiên đầu tìm ra lệnh kiểm tra (`python3 -m pytest test_calc.py -q`) sau một lần thử lệnh sai, và file dữ kiện ghi lại lệnh đó; phiên sau dùng đúng lệnh ấy ngay trong lời gọi sửa file (4 request so với 5). Một cặp phiên, chỉ xác nhận cơ chế.
+
+Cũng từ lượt thử này, bảng ngữ cảnh theo nguồn cho thấy ở phiên ngắn phần lớn nhất là khai báo tool (khoảng 1.470 token ước tính, so với 344 của prompt hệ thống): với việc nhỏ, bộ tool rút gọn (`[model] tools = "minimal"`) là chỗ tiết kiệm rõ nhất.
 
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.
 
