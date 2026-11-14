@@ -1,0 +1,14 @@
+[package]
+name = "hame-kernel"
+description = "Service registry, event bus and middleware chains for the hame harness."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

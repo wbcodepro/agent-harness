@@ -1,0 +1,366 @@
+mod eval;
+mod run;
+mod skill;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use hame_session::{Block, Event, Message, Record, Role, SessionId, SessionStore, derive_history};
+
+#[derive(Parser)]
+#[command(name = "hame", version, about = "The hame agent harness")]
+struct Cli {
+    /// Data directory. Defaults to $HAME_HOME, then ~/.hame.
+    #[arg(long, global = true)]
+    home: Option<PathBuf>,
+    /// With no command, opens the interactive interface.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run one turn: send a prompt and let the agent work until it answers.
+    Run(run::RunArgs),
+    /// Open the interactive interface (the default).
+    Tui {
+        /// Continue this session instead of starting a new one.
+        #[arg(long)]
+        session: Option<String>,
+        /// Start in plan mode.
+        #[arg(long)]
+        plan: bool,
+    },
+    /// Serve the web interface on this machine.
+    Web {
+        /// Port to listen on. Defaults to a free one.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
+    /// Serve the Agent Client Protocol on stdin/stdout, for editors.
+    Acp,
+    /// Run a suite of tasks and report pass rate, time and token use.
+    Eval(eval::EvalArgs),
+    /// Try a model with each edit format and tool list on a suite of
+    /// tasks, and print the configuration it does best with.
+    Probe(eval::ProbeArgs),
+    /// Install and list skills.
+    Skill {
+        #[command(subcommand)]
+        command: skill::SkillCommand,
+    },
+    /// Install and list plugins packaged for Claude Code.
+    Plugin {
+        #[command(subcommand)]
+        command: skill::PluginCommand,
+    },
+    /// Sign in to and out of MCP servers that use OAuth.
+    Mcp {
+        #[command(subcommand)]
+        command: skill::McpCommand,
+    },
+    /// List sessions.
+    Sessions,
+    /// Import a session recorded by another harness.
+    Import {
+        /// Where the session comes from. Supported: dsh (DeepSeek Harness).
+        format: String,
+        /// The session log file.
+        file: PathBuf,
+        /// Working directory for the imported session. Defaults to the one
+        /// it was recorded in.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
+    /// Undo a turn: restore the workspace to how it was when the turn began
+    /// and continue in a new session that ends just before it.
+    Rewind {
+        id: String,
+        /// Turn to undo, together with everything after it. Defaults to the
+        /// last turn.
+        #[arg(long)]
+        turn: Option<u64>,
+    },
+    /// Runs one tool call inside the sandbox. Internal.
+    #[command(hide = true)]
+    ToolWorker,
+    /// Applies a sandbox policy to itself, then executes a program. Internal.
+    #[command(hide = true)]
+    SandboxExec {
+        #[arg(long)]
+        policy: String,
+        #[arg(last = true, required = true)]
+        command: Vec<std::ffi::OsString>,
+    },
+    /// Print what the model would see for a session.
+    Show {
+        id: String,
+        /// Print the raw event log instead.
+        #[arg(long)]
+        events: bool,
+    },
+    /// Close a session that was left mid-turn by a crash.
+    Recover { id: String },
+    /// Start a new session from a prefix of an existing one.
+    Fork {
+        id: String,
+        /// Last record to copy. Defaults to the whole session.
+        #[arg(long)]
+        at: Option<u64>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match run(cli).await {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("hame: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<ExitCode, String> {
+    // The internal commands run confined and must not touch the data
+    // directory.
+    let command = cli.command.unwrap_or(Command::Tui {
+        session: None,
+        plan: false,
+    });
+    match &command {
+        Command::ToolWorker => {
+            let code = hame_sandbox::worker_main(&hame_tools::ToolSet::every()).await;
+            // On Windows a program the tool left running still holds the
+            // pipes its output was read from, and the runtime would wait for
+            // those reads before returning. The answer is written; leave.
+            #[cfg(windows)]
+            std::process::exit(code.into());
+            #[cfg(not(windows))]
+            return Ok(ExitCode::from(code));
+        }
+        Command::SandboxExec { policy, command } => return sandbox_exec(policy, command),
+        _ => {}
+    }
+    let home = cli
+        .home
+        .or_else(|| std::env::var_os("HAME_HOME").map(PathBuf::from))
+        .or_else(|| {
+            let user = std::env::home_dir()?;
+            let home = user.join(".hame");
+            // The project was called zcode before; a data directory from
+            // then is used where it is until the user moves it.
+            let before = user.join(".zcode");
+            if !home.exists() && before.is_dir() {
+                eprintln!(
+                    "hame: using {}, the data directory from when this was zcode. Rename it \
+                     to {} when convenient.",
+                    before.display(),
+                    home.display()
+                );
+                return Some(before);
+            }
+            Some(home)
+        })
+        .ok_or("cannot find a home directory; pass --home or set HAME_HOME")?;
+    let store = SessionStore::new(home.join("sessions"));
+
+    match command {
+        Command::Tui { session, plan } => {
+            let resume = session.as_deref().map(parse_id).transpose()?;
+            let cwd = match &resume {
+                Some(id) => hame_app::session_cwd(&store, id)?,
+                None => std::env::current_dir()
+                    .and_then(|cwd| hame_kernel::real_path(&cwd))
+                    .map_err(display)?,
+            };
+            let options = hame_app::Options {
+                max_steps: 50,
+                plan,
+                ..hame_app::Options::default()
+            };
+            hame_tui::run(home, cwd, options, resume).await?;
+        }
+        Command::Run(args) => return run::run(&home, &store, args).await,
+        Command::ToolWorker | Command::SandboxExec { .. } => unreachable!("handled above"),
+        Command::Web { port } => {
+            let cwd = std::env::current_dir()
+                .and_then(|cwd| hame_kernel::real_path(&cwd))
+                .map_err(display)?;
+            let options = hame_app::Options {
+                max_steps: 50,
+                ..hame_app::Options::default()
+            };
+            let server = hame_web::start(home, cwd, options, port).await?;
+            println!("{}", server.url());
+            eprintln!("hame web: open the address above; Ctrl-C stops the server");
+            tokio::select! {
+                _ = server.wait() => {}
+                _ = tokio::signal::ctrl_c() => {}
+            }
+        }
+        Command::Acp => {
+            let options = hame_app::Options {
+                max_steps: 50,
+                ..hame_app::Options::default()
+            };
+            hame_acp::serve(home, options, tokio::io::stdin(), tokio::io::stdout())
+                .await
+                .map_err(display)?;
+        }
+        Command::Rewind { id, turn } => {
+            let rewound = hame_app::rewind(&home, &store, &parse_id(&id)?, turn).await?;
+            for name in &rewound.restored.removed {
+                eprintln!("removed {name}");
+            }
+            eprintln!(
+                "workspace restored to the start of turn {}; to undo: checkpoint {}",
+                rewound.turn, rewound.restored.before
+            );
+            println!("{}", rewound.session);
+        }
+        Command::Import { format, file, cwd } => match format.as_str() {
+            "dsh" => println!("{}", hame_app::import_dsh(&store, &file, cwd.as_deref())?),
+            other => return Err(format!("cannot import {other:?} sessions; supported: dsh")),
+        },
+        Command::Eval(args) => return eval::run(&home, args).await,
+        Command::Probe(args) => return eval::probe(&home, args).await,
+        Command::Skill { command } => return skill::run(&home, command),
+        Command::Plugin { command } => return skill::run_plugin(&home, command),
+        Command::Mcp { command } => return skill::run_mcp(&home, command).await,
+        Command::Sessions => {
+            for header in store.list().map_err(display)? {
+                println!("{}\t{}", header.id, header.cwd);
+            }
+        }
+        Command::Show { id, events } => {
+            let records = store.read(&parse_id(&id)?).map_err(display)?;
+            if events {
+                for record in &records {
+                    println!("{}", serde_json::to_string(record).map_err(display)?);
+                }
+            } else {
+                print_history(&records);
+            }
+        }
+        Command::Recover { id } => {
+            let id = parse_id(&id)?;
+            let before = store.read(&id).map_err(display)?.len();
+            let (records, _writer) = store.open(&id).map_err(display)?;
+            match records.len().saturating_sub(before) {
+                0 => println!("{id}: nothing to recover"),
+                added => println!("{id}: closed with {added} recovery event(s)"),
+            }
+        }
+        Command::Fork { id, at } => {
+            let id = parse_id(&id)?;
+            let at = match at {
+                Some(at) => at,
+                None => store.read(&id).map_err(display)?.len() as u64 - 1,
+            };
+            let options = hame_session::CreateOptions {
+                id: None,
+                cwd: cwd_of(&store.read(&id).map_err(display)?),
+            };
+            let (_records, writer) = store.fork(&id, at, options).map_err(display)?;
+            println!("{}", writer.id());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
+    use std::os::unix::process::CommandExt;
+    let policy: hame_sandbox::SandboxPolicy =
+        serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
+    hame_sandbox::apply_to_current_process(&policy).map_err(display)?;
+    let error = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .exec();
+    Err(format!(
+        "cannot execute {}: {error}",
+        command[0].to_string_lossy()
+    ))
+}
+
+/// Windows has no `exec`: lower this process, run the program as a child
+/// (which inherits the lowered level), and pass its exit status on.
+#[cfg(windows)]
+fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
+    let policy: hame_sandbox::SandboxPolicy =
+        serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
+    hame_sandbox::apply_to_current_process(&policy).map_err(display)?;
+    // The program gets copies of the standard handles; the originals must
+    // not travel along as well, or what it starts holds the caller's pipes.
+    hame_sandbox::keep_stdio_private();
+    let status = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .status()
+        .map_err(|e| format!("cannot execute {}: {e}", command[0].to_string_lossy()))?;
+    Ok(ExitCode::from(
+        status.code().unwrap_or(1).clamp(0, 255) as u8
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn sandbox_exec(_policy: &str, _command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
+    Err("sandbox-exec is not used on this platform".into())
+}
+
+fn parse_id(raw: &str) -> Result<SessionId, String> {
+    SessionId::parse(raw).map_err(display)
+}
+
+fn display(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+fn cwd_of(records: &[Record]) -> String {
+    match records.first().map(|record| &record.event) {
+        Some(Event::Session(header)) => header.cwd.clone(),
+        _ => String::new(),
+    }
+}
+
+fn print_history(records: &[Record]) {
+    let history = derive_history(records);
+    if let Some(system) = &history.system {
+        println!("[system]\n{system}\n");
+    }
+    for Message { role, content } in &history.messages {
+        let label = match role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+        };
+        println!("[{label}]");
+        for block in content {
+            print_block(block, 0);
+        }
+        println!();
+    }
+}
+
+fn print_block(block: &Block, depth: usize) {
+    let pad = "  ".repeat(depth);
+    match block {
+        Block::Text { text } => println!("{pad}{text}"),
+        Block::Thinking { text, .. } => println!("{pad}(thinking) {text}"),
+        Block::ToolUse { id, name, input } => println!("{pad}-> {name} {input} ({id})"),
+        Block::Fallback { to, .. } => println!("{pad}(continued by {})", to["model"]),
+        Block::ToolResult {
+            call_id,
+            content,
+            is_error,
+        } => {
+            let status = if *is_error { "error" } else { "ok" };
+            println!("{pad}<- {call_id} [{status}]");
+            for inner in content {
+                print_block(inner, depth + 1);
+            }
+        }
+    }
+}

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hame</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1c1b18; --muted: #6f6b62; --line: #e2dfd6;
+    --accent: #0f6b5c; --accent-ink: #ffffff; --user: #ecebe4; --warn: #9a5b00; --bad: #a3271c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151513; --panel: #1d1d1a; --ink: #ecebe6; --muted: #9a968b; --line: #32312c;
+      --accent: #4fb8a4; --accent-ink: #0c1f1b; --user: #2a2925; --warn: #e0a84a; --bad: #ef7d70; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 240px 1fr; }
+  aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  aside header { padding: 16px; display: flex; align-items: center; justify-content: space-between; }
+  .brand { font: 600 18px var(--mono); letter-spacing: -0.02em; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  #sessions { list-style: none; margin: 0; padding: 0 8px 16px; overflow-y: auto; }
+  #sessions li { padding: 8px; border-radius: 6px; cursor: pointer; font: 13px var(--mono);
+    color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sessions li:hover { background: var(--user); }
+  #sessions li[aria-current="true"] { background: var(--user); color: var(--ink); }
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100vh; }
+  #status { padding: 10px 24px; border-bottom: 1px solid var(--line); color: var(--muted); font: 13px var(--mono); }
+  #log { flex: 1; overflow-y: auto; padding: 24px; }
+  #log > * { max-width: 760px; margin: 0 auto 14px; }
+  .user { background: var(--user); border-radius: 8px; padding: 10px 14px; white-space: pre-wrap; }
+  .assistant { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .notice { color: var(--muted); font-size: 13px; }
+  details.tool { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font: 13px var(--mono); }
+  details.tool summary { padding: 7px 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  details.tool summary::before { content: "running  "; color: var(--warn); }
+  details.tool.ok summary::before { content: "ok  "; color: var(--accent); }
+  details.tool.failed summary::before { content: "failed  "; color: var(--bad); }
+  details.tool pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); white-space: pre-wrap;
+    overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+  #approval { display: none; margin: 0 24px 12px; padding: 12px 14px; border: 1px solid var(--warn);
+    border-radius: 8px; background: var(--panel); gap: 12px; align-items: center; }
+  #approval.open { display: flex; }
+  #approval span { flex: 1; font: 13px var(--mono); overflow-wrap: anywhere; }
+  form { display: flex; gap: 10px; padding: 14px 24px 20px; border-top: 1px solid var(--line); }
+  textarea { flex: 1; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; resize: none; height: 68px; }
+  @media (max-width: 720px) { body { grid-template-columns: 1fr; } aside { display: none; } }
+</style>
+</head>
+<body>
+<aside>
+  <header><span class="brand">hame</span><button id="new" type="button">New</button></header>
+  <ul id="sessions" aria-label="Sessions"></ul>
+</aside>
+<main>
+  <div id="status" role="status">Connecting…</div>
+  <div id="log" aria-live="polite"></div>
+  <div id="approval" role="alertdialog" aria-label="Approval needed">
+    <span id="question"></span>
+    <button id="allow" class="primary" type="button">Allow</button>
+    <button id="deny" type="button">Deny</button>
+  </div>
+  <form id="composer">
+    <textarea id="input" placeholder="Ask hame to do something. Enter sends, Shift+Enter adds a line." aria-label="Message"></textarea>
+    <button id="send" class="primary" type="submit">Send</button>
+    <button id="cancel" type="button" disabled>Stop</button>
+  </form>
+</main>
+<script>
+const token = new URLSearchParams(location.search).get("token") || "";
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+let current = null, stream = null, lastSeq = -1, streaming = null, pending = [];
+const tools = new Map();
+
+async function api(path, body) {
+  const response = await fetch("/api" + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {"x-hame-token": token, "content-type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error((await response.text()) || response.statusText);
+  return response.json();
+}
+
+function add(kind, text) {
+  const node = document.createElement("div");
+  node.className = kind;
+  node.textContent = text;
+  log.append(node);
+  log.scrollTop = log.scrollHeight;
+  return node;
+}
+
+function textOf(content) {
+  return (content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+}
+
+function show(record) {
+  if (record.seq <= lastSeq) return;
+  lastSeq = record.seq;
+  const data = record.data || {};
+  switch (record.type) {
+    case "user/message": {
+      const text = textOf(data.content);
+      add(text.startsWith("[hame verify]") ? "notice" : "user",
+          text.startsWith("[hame verify]") ? "Checks failed; sent back to the model." : text);
+      streaming = null;
+      break;
+    }
+    case "assistant/delta":
+      if (data.delta.type !== "text") break;
+      if (!streaming) streaming = add("assistant", "");
+      streaming.textContent += data.delta.text;
+      log.scrollTop = log.scrollHeight;
+      break;
+    case "assistant/message":
+      // When replaying a stored session the deltas were already shown.
+      if (!streaming && textOf(data.content)) add("assistant", textOf(data.content));
+      if (data.stop === "refusal") add("notice", "The model declined to answer.");
+      streaming = null;
+      break;
+    case "tool/call": {
+      const node = document.createElement("details");
+      node.className = "tool";
+      const summary = document.createElement("summary");
+      const input = data.input || {};
+      summary.textContent = data.name + " " + (input.command || input.path || input.pattern || input.task || "");
+      const body = document.createElement("pre");
+      body.textContent = JSON.stringify(input, null, 2);
+      node.append(summary, body);
+      log.append(node);
+      tools.set(data.call_id, node);
+      streaming = null;
+      break;
+    }
+    case "tool/result": {
+      const node = tools.get(data.call_id);
+      if (!node) break;
+      node.classList.add(data.is_error ? "failed" : "ok");
+      node.querySelector("pre").textContent = textOf(data.content);
+      break;
+    }
+    case "compaction": add("notice", "Earlier history was summarized."); break;
+    case "turn/end":
+      if (data.reason !== "completed") add("notice", "Turn " + data.reason + ".");
+      break;
+  }
+}
+
+function setBusy(busy) {
+  $("send").disabled = busy;
+  $("cancel").disabled = !busy;
+}
+
+function askNext() {
+  const next = pending[0];
+  $("approval").classList.toggle("open", !!next);
+  if (next) $("question").textContent = next.question;
+}
+
+async function answer(allow) {
+  const next = pending.shift();
+  askNext();
+  if (next) await api(`/sessions/${current}/approval`, {id: next.id, allow});
+}
+
+async function open(id) {
+  if (stream) stream.close();
+  current = id; lastSeq = -1; streaming = null; pending = []; tools.clear();
+  log.replaceChildren(); askNext(); setBusy(false);
+  for (const item of $("sessions").children) item.setAttribute("aria-current", item.dataset.id === id);
+  $("status").textContent = "session " + id;
+  stream = new EventSource(`/api/sessions/${id}/events?token=${encodeURIComponent(token)}`);
+  stream.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (event.kind === "record") show(event.record);
+    else if (event.kind === "approval") { pending.push(event); askNext(); }
+    else if (event.kind === "turn") {
+      setBusy(event.state === "started");
+      if (event.error) add("notice", "Error: " + event.error);
+    }
+  };
+  stream.onerror = () => { $("status").textContent = "connection lost; retrying…"; };
+}
+
+async function refresh() {
+  const sessions = await api("/sessions");
+  const list = $("sessions");
+  list.replaceChildren();
+  for (const session of sessions.reverse()) {
+    const item = document.createElement("li");
+    item.dataset.id = session.id;
+    item.textContent = session.id.slice(-10) + "  " + session.cwd.split("/").pop();
+    item.title = session.cwd;
+    item.tabIndex = 0;
+    item.setAttribute("aria-current", session.id === current);
+    item.onclick = () => open(session.id);
+    item.onkeydown = (e) => { if (e.key === "Enter") open(session.id); };
+    list.append(item);
+  }
+}
+
+async function create() {
+  const created = await api("/sessions", {});
+  await refresh();
+  await open(created.id);
+}
+
+$("new").onclick = () => create().catch((e) => add("notice", String(e)));
+$("allow").onclick = () => answer(true);
+$("deny").onclick = () => answer(false);
+$("cancel").onclick = () => api(`/sessions/${current}/cancel`, {});
+$("composer").onsubmit = async (event) => {
+  event.preventDefault();
+  const text = $("input").value.trim();
+  if (!text || !current) return;
+  $("input").value = "";
+  try { await api(`/sessions/${current}/prompt`, {text}); }
+  catch (e) { add("notice", String(e.message || e)); }
+};
+$("input").onkeydown = (event) => {
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("composer").requestSubmit(); }
+};
+
+create().catch((e) => { $("status").textContent = "cannot start: " + (e.message || e); });
+</script>
+</body>
+</html>

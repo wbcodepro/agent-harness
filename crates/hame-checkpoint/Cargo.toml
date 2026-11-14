@@ -1,0 +1,18 @@
+[package]
+name = "hame-checkpoint"
+description = "Workspace checkpoints in a shadow git repository, for rewinding a session."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-agent.workspace = true
+hame-kernel.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

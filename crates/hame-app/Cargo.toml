@@ -1,0 +1,30 @@
+[package]
+name = "hame-app"
+description = "Assembles a ready-to-run agent from the user's configuration."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-agent.workspace = true
+hame-checkpoint.workspace = true
+hame-context.workspace = true
+hame-verify.workspace = true
+hame-eval.workspace = true
+hame-ext.workspace = true
+hame-kernel.workspace = true
+hame-llm.workspace = true
+hame-multi.workspace = true
+hame-policy.workspace = true
+hame-sandbox.workspace = true
+hame-session.workspace = true
+serde_json.workspace = true
+hame-tools.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

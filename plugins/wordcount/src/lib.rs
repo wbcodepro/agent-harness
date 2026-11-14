@@ -1,27 +1,27 @@
-//! An example zcode plugin.
+//! An example hame plugin.
 //!
 //! A plugin is a WebAssembly module with three exports:
 //!
-//! - `zcode_alloc(len) -> ptr`: reserves `len` bytes the host can write into.
-//! - `zcode_tools() -> packed`: JSON array of `{name, description, input_schema}`.
-//! - `zcode_call(ptr, len) -> packed`: takes JSON `{tool, input}` and returns
+//! - `hame_alloc(len) -> ptr`: reserves `len` bytes the host can write into.
+//! - `hame_tools() -> packed`: JSON array of `{name, description, input_schema}`.
+//! - `hame_call(ptr, len) -> packed`: takes JSON `{tool, input}` and returns
 //!   JSON `{text, is_error}`.
 //!
 //! `packed` is `(ptr << 32) | len` of a UTF-8 string in the module's memory.
 //!
-//! The only thing a plugin can ask of the host is `zcode.read_file`, and the
+//! The only thing a plugin can ask of the host is `hame.read_file`, and the
 //! host answers only for paths the user granted to this plugin.
 
 use serde_json::{Value, json};
 
-#[link(wasm_import_module = "zcode")]
+#[link(wasm_import_module = "hame")]
 unsafe extern "C" {
     /// Returns packed JSON: `{"ok": "<contents>"}` or `{"error": "<why>"}`.
     fn read_file(path: *const u8, len: usize) -> u64;
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn zcode_alloc(len: usize) -> *mut u8 {
+pub extern "C" fn hame_alloc(len: usize) -> *mut u8 {
     let mut buffer = Vec::<u8>::with_capacity(len.max(1));
     let pointer = buffer.as_mut_ptr();
     std::mem::forget(buffer);
@@ -61,7 +61,7 @@ fn stats(text: &str) -> String {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn zcode_tools() -> u64 {
+pub extern "C" fn hame_tools() -> u64 {
     pack(
         json!([
             {
@@ -89,9 +89,9 @@ pub extern "C" fn zcode_tools() -> u64 {
 
 /// # Safety
 /// `pointer` and `len` must describe bytes the host wrote into a buffer
-/// obtained from `zcode_alloc`.
+/// obtained from `hame_alloc`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn zcode_call(pointer: *const u8, len: usize) -> u64 {
+pub unsafe extern "C" fn hame_call(pointer: *const u8, len: usize) -> u64 {
     let request = unsafe { take(pointer as u64, len as u64) };
     let reply = |text: String, is_error: bool| {
         pack(json!({"text": text, "is_error": is_error}).to_string())

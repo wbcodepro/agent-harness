@@ -1,4 +1,4 @@
-# Báo cáo thị trường agent lập trình và hệ quả cho zcode
+# Báo cáo thị trường agent lập trình và hệ quả cho hame
 
 Ngày 2026-11-14. Tổng hợp từ bảy báo cáo nghiên cứu trong cùng thư mục, mỗi báo cáo do một agent riêng thực hiện bằng nguồn gốc (repo, tài liệu chính thức, `gh`, binary cài trên máy) và có dẫn nguồn từng ý:
 
@@ -90,7 +90,7 @@ DeepSeek đáng chú ý: token trúng cache chỉ bằng 2 đến 3% giá token 
 - Giới hạn: trên việc khó, harness đóng được khoảng một phần tư đến một nửa khoảng cách. Model cỡ nano vẫn ở 3 đến 12% dưới mọi harness đã thử. Phần còn lại cần model mạnh hơn, hoặc leo thang sang model mạnh do harness quyết định khi nào.
 - Khuôn nặng làm hại model mạnh, nên cần hồ sơ năng lực theo từng model.
 
-## 6. zcode đang đứng ở đâu
+## 6. hame đang đứng ở đâu
 
 **Đã có, và là lợi thế so với thị trường**
 - Checkpoint bằng kho git riêng bắt được cả thay đổi do bash: Codex không có undo, Claude Code bỏ qua thay đổi của bash.
@@ -98,10 +98,10 @@ DeepSeek đáng chú ý: token trúng cache chỉ bằng 2 đến 3% giá token 
 - Log sự kiện chỉ ghi thêm, khôi phục sau crash, phát lại tất định.
 - Ba giao thức model: OpenAI Responses, Anthropic Messages, chat-completions.
 - Plugin WebAssembly chỉ đọc được nơi được cấp; server MCP chạy trong sandbox.
-- ACP, MCP (stdio), skills, plan mode, subagent trên worktree, chẩn đoán LSP, cổng kiểm chứng, repo map tree-sitter, `zcode eval`.
+- ACP, MCP (stdio), skills, plan mode, subagent trên worktree, chẩn đoán LSP, cổng kiểm chứng, repo map tree-sitter, `hame eval`.
 
 **Thiếu so với mức mặc định của thị trường**
-- Hooks tương thích Claude Code: zcode mới có 2 sự kiện, định dạng riêng.
+- Hooks tương thích Claude Code: hame mới có 2 sự kiện, định dạng riêng.
 - Đầu ra JSON cho chế độ headless.
 - MCP qua HTTP kèm OAuth; bản đặc tả MCP 2026-07-28.
 - Hoãn nạp tool MCP (tool search).
@@ -117,7 +117,7 @@ Xếp theo bằng chứng về tác động trên mỗi đơn vị công sức.
 1. Đo và báo tỷ lệ trúng cache theo phiên; kiểm tra tiền tố ổn định cho từng nhà cung cấp; đặt khóa cache cho OpenAI.
 2. Che kết quả tool cũ trước khi tóm tắt, theo lô lớn và thưa.
 3. Hồ sơ năng lực theo model: định dạng sửa file (`apply_patch` cho GPT, search/replace mặc định, cả file cho model nhỏ), áp dụng khoan dung, sửa tham số gọi tool, giới hạn số lời gọi mỗi lượt, bộ tool rút gọn, tham số lấy mẫu.
-4. Bộ thăm dò đo hồ sơ đó cho một model bất kỳ (đưa vào `zcode eval`).
+4. Bộ thăm dò đo hồ sơ đó cho một model bất kỳ (đưa vào `hame eval`).
 5. Leo thang khi thất bại: mức suy luận thấp trước, hỏng thì cao; model rẻ trước, hỏng thì model mạnh, chỉ đổi ở ranh giới phiên hoặc subagent.
 6. Danh sách kiểm trước khi kết thúc và phát hiện lặp.
 
@@ -125,16 +125,16 @@ Trạng thái đợt 1 (2026-11-14), đã có trong mã:
 
 | Mục | Đã làm | Chưa làm |
 |---|---|---|
-| 1 | Dòng tổng kết token và tỷ lệ cache cuối `zcode run`, cảnh báo khi cache nguội; `prompt_cache_key` theo session cho OpenAI Responses | Kiểm tra tiền tố ổn định riêng cho từng nhà cung cấp |
+| 1 | Dòng tổng kết token và tỷ lệ cache cuối `hame run`, cảnh báo khi cache nguội; `prompt_cache_key` theo session cho OpenAI Responses | Kiểm tra tiền tố ổn định riêng cho từng nhà cung cấp |
 | 2 | Sự kiện `context/masked`: xóa kết quả tool cũ khỏi ngữ cảnh theo lô lớn, thử trước khi tóm tắt, không gọi model. **Mặc định tắt** (`[context] clear_tool_results`), xem số đo bên dưới | Đo trên phiên dài thật với ngưỡng mặc định |
 | 3 | `[model] tools`, `edit_format`, `max_tool_calls`; tool `apply_patch`; `edit` khoan dung với khoảng trắng; sửa tham số gọi tool | Tham số lấy mẫu theo model |
-| 4 | `zcode probe` | Bộ tác vụ đủ khó để phân biệt các cấu hình |
+| 4 | `hame probe` | Bộ tác vụ đủ khó để phân biệt các cấu hình |
 | 5 | `escalate_to` / `escalate_provider` / `escalate_effort` / `escalate_after`: model mạnh tiếp quản phần còn lại của lượt, ghi sự kiện `model/switched`; model mạnh có thể thuộc nhà cung cấp khác (model chính chạy tại chỗ, model mạnh trên đám mây) | Leo thang riêng theo mức suy luận trên cùng model; chưa đo tỷ lệ đạt khi leo thang khác nhà cung cấp |
 | 6 | `[verify] checklist`; ghi chú khi lời gọi tool lặp y hệt ba lần | — |
 
 Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình một hoặc hai lần chạy, nên chỉ là chỉ dấu):
 
-- `zcode probe evals/harder`: cả bốn cấu hình đạt 8/8. Token cả bộ: search-replace 186.772; whole-file 163.649; apply-patch 168.714; whole-file với bộ tool rút gọn 116.937 (ít hơn khoảng 29% so với cùng định dạng với bộ tool đầy đủ).
+- `hame probe evals/harder`: cả bốn cấu hình đạt 8/8. Token cả bộ: search-replace 186.772; whole-file 163.649; apply-patch 168.714; whole-file với bộ tool rút gọn 116.937 (ít hơn khoảng 29% so với cùng định dạng với bộ tool đầy đủ).
 - Xóa kết quả tool cũ, trên một tác vụ phải đọc tám file lớn rồi cộng số liệu, ngưỡng hạ xuống 14.000 token để ép kích hoạt: bật thì 133.642 và 197.482 token (14 và 19 request); tắt (chỉ tóm tắt) thì 153.858 và 90.033 token (14 và 10 request); không giới hạn ngữ cảnh thì 97.567 token (9 request). Mọi lần đều ra đáp án đúng. Model không ghi lại số liệu trước khi kết quả bị xóa nên phải đọc lại file. Kết quả này không ủng hộ việc bật mặc định, trái với kết luận của các nghiên cứu ở mục 4; tác vụ này bất lợi cho kỹ thuật (cần mọi kết quả cũ, ngưỡng rất thấp), nên cần đo lại trên phiên dài thật trước khi kết luận.
 - Leo thang: với `claude-haiku-5-5` leo lên `claude-opus-5-5`, sau hai lần lệnh kiểm tra hỏng thì model mạnh tiếp quản giữa lượt, API không báo lỗi về khối suy luận.
 - Leo thang khác nhà cung cấp: `qwen3.5:4b` chạy tại chỗ qua Ollama với `escalate_provider = "deepseek"`, `escalate_after = 1`; sau một lần lệnh kiểm tra hỏng, `deepseek-flash` tiếp quản giữa lượt và trả lời bình thường (một lần chạy, chỉ xác nhận cơ chế).
@@ -143,7 +143,7 @@ Số đo của đợt 1 với model thật (`deepseek-flash`, mỗi cấu hình 
 
 ### Model yếu: đo bằng `gpt-4o-mini`, sửa theo log thất bại
 
-`deepseek-flash` đạt hết bộ `evals/harder` nên không cho biết gì. `gpt-4o-mini` (model cũ, nhỏ) thì không, nên nó được dùng làm thước đo. Cách làm: chạy `zcode probe evals/harder --model gpt-4o-mini --keep <thư mục>`, đọc `session.v1.jsonl` của từng tác vụ hỏng, tìm chỗ harness đã làm model lạc hướng hoặc không ngăn nó, sửa, rồi chạy lại.
+`deepseek-flash` đạt hết bộ `evals/harder` nên không cho biết gì. `gpt-4o-mini` (model cũ, nhỏ) thì không, nên nó được dùng làm thước đo. Cách làm: chạy `hame probe evals/harder --model gpt-4o-mini --keep <thư mục>`, đọc `session.v1.jsonl` của từng tác vụ hỏng, tìm chỗ harness đã làm model lạc hướng hoặc không ngăn nó, sửa, rồi chạy lại.
 
 Tám tác vụ gốc của `evals/harder`, mỗi ô một lần chạy (nên sai số lớn; chỉ nên tin xu hướng chung):
 
@@ -178,7 +178,7 @@ Ba tác vụ thêm sau đó (`spec-hidden-tests`, `large-file-fix`, `api-change`
 
 Một lần chạy cả 11 tác vụ ở cấu hình mặc định sau các bản sửa trên (commit `f8be489`): 7/11. Hỏng `api-change`, `schema-validator`, `spec-hidden-tests`, `three-bugs`, trong khi `schema-validator` và `three-bugs` từng đạt ở lần đo trước: dao động giữa các lần chạy của model này lớn, một lần chạy không đủ để so sánh hai bản. `three-bugs` chạy lại bốn lần sau khi có cảnh báo cú pháp: 3/4.
 
-**Đo lặp và leo thang.** `zcode eval --runs 3` trên cả 11 tác vụ, `gpt-4o-mini`, cùng một bản build (commit `bc750e7`):
+**Đo lặp và leo thang.** `hame eval --runs 3` trên cả 11 tác vụ, `gpt-4o-mini`, cùng một bản build (commit `bc750e7`):
 
 | Tác vụ | Chỉ `gpt-4o-mini` | `gpt-4o-mini`, leo thang sang `gpt-4.1` sau 2 tín hiệu kẹt |
 |---|---|---|
@@ -218,9 +218,9 @@ Leo thang vừa tăng tỷ lệ đạt vừa giảm tổng token, vì model rẻ
 
 Đọc log các lần hỏng trên tác vụ mới cho thấy chủ yếu là giới hạn của model: viết lại cả file ở mỗi vòng nên hết 300 giây (đã thêm gợi ý dùng `edit` khi chỉ vài dòng đổi), xoay vòng giữa hai lỗi, và một lần ghi đè bài test tự viết bằng một dòng để cho "đạt". Lần chạy 4.440 giây này dùng 6,3 triệu token, 94% đọc từ cache.
 
-Cùng bộ 20 tác vụ với leo thang sang `gpt-4.1` (commit `daaf729`): lượt một đạt 16/20, so với trung bình 12/20 mỗi lượt khi không leo thang. Lượt hai không dùng được: tài khoản OpenAI hết tín dụng giữa chừng (sau đó `zcode eval` được sửa để dừng hẳn khi nhà cung cấp từ chối tài khoản, thay vì ghi các tác vụ còn lại là hỏng). Trong lượt một, có tác vụ mà model mạnh chỉ được gọi vào ở ba bước cuối, vì dấu hiệu kẹt chỉ đếm ghi chú của harness; từ commit `5e35ada`, cứ năm lời gọi tool lỗi cũng tính là một dấu hiệu. Thay đổi này chưa được đo, vì hết tín dụng.
+Cùng bộ 20 tác vụ với leo thang sang `gpt-4.1` (commit `daaf729`): lượt một đạt 16/20, so với trung bình 12/20 mỗi lượt khi không leo thang. Lượt hai không dùng được: tài khoản OpenAI hết tín dụng giữa chừng (sau đó `hame eval` được sửa để dừng hẳn khi nhà cung cấp từ chối tài khoản, thay vì ghi các tác vụ còn lại là hỏng). Trong lượt một, có tác vụ mà model mạnh chỉ được gọi vào ở ba bước cuối, vì dấu hiệu kẹt chỉ đếm ghi chú của harness; từ commit `5e35ada`, cứ năm lời gọi tool lỗi cũng tính là một dấu hiệu. Thay đổi này chưa được đo, vì hết tín dụng.
 
-**Model cũ của Anthropic.** `claude-haiku-5-5` đạt 20/20. `claude-haiku-4-5` lúc đầu không chạy được qua zcode: adapter gửi tham số `effort` mà model này không nhận, mọi request trả HTTP 400. Sau khi adapter biết bỏ những phần model cũ từ chối (commit `9b32539`), nó đạt 19/20; tác vụ hỏng là `doc-state-machine`, và nguyên nhân là đề bài: quy tắc về `return` viết mơ hồ (model hiểu là áp dụng cả cho trạng thái `shipped`). Viết lại quy tắc xong, model đạt 3/3. Vì vậy kết quả 0/2 của `gpt-4o-mini` ở tác vụ này (bảng trên) được đo với đề mơ hồ và chưa đo lại được, do tài khoản OpenAI hết tín dụng.
+**Model cũ của Anthropic.** `claude-haiku-5-5` đạt 20/20. `claude-haiku-4-5` lúc đầu không chạy được qua hame: adapter gửi tham số `effort` mà model này không nhận, mọi request trả HTTP 400. Sau khi adapter biết bỏ những phần model cũ từ chối (commit `9b32539`), nó đạt 19/20; tác vụ hỏng là `doc-state-machine`, và nguyên nhân là đề bài: quy tắc về `return` viết mơ hồ (model hiểu là áp dụng cả cho trạng thái `shipped`). Viết lại quy tắc xong, model đạt 3/3. Vì vậy kết quả 0/2 của `gpt-4o-mini` ở tác vụ này (bảng trên) được đo với đề mơ hồ và chưa đo lại được, do tài khoản OpenAI hết tín dụng.
 
 Điều chưa làm được: không có leo thang, `rust-tokenizer` và `three-bugs` chỉ đạt 1/3, và `spec-hidden-tests` 0/3 trong mọi cấu hình; ở các lần hỏng đó tôi không thấy thêm nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
 
@@ -230,9 +230,9 @@ Cùng bộ 20 tác vụ với leo thang sang `gpt-4.1` (commit `daaf729`): lư�
 9. Hoãn nạp tool MCP; MCP qua HTTP.
 10. Bảo vệ `.git`; luật quyền hiểu cú pháp shell.
 
-Trạng thái đợt 2 (2026-11-14): mục 8 có `zcode run --output json|stream-json` và steering (nhắn cho lượt đang chạy, trong giao diện terminal và qua `_zcode/steer`); mục 10 đã làm (hoàn tác thay đổi vào `.git/hooks` và `.git/config`; luật quyền so với từng lệnh trong dòng shell). Mục 7: chạy được hooks định dạng Claude Code cho bốn sự kiện (`[compat] claude_hooks`), và nạp được gói plugin (skills, commands, agents, hooks, server MCP; cài bằng `zcode plugin install` có quét an toàn, đã thử với một plugin công khai thật; đọc được danh mục marketplace và có `zcode plugin update`, đã thử trên danh mục công khai 317 plugin). Mục 9: đã hoãn nạp tool MCP/plugin (`tool_search` + `tool_call`, `[context] defer_tools_over`); MCP qua HTTP đã có (streamable HTTP, header tĩnh; đã thử với một server công khai thật), và bản đặc tả không trạng thái `2026-07-28` (kiểm với server giả lập theo đặc tả và với server dựng bằng SDK MCP chính thức 2.3.0, qua stdio và HTTP), và đăng nhập OAuth bằng `zcode mcp login` (PKCE, đăng ký client động, tự làm mới token; kiểm với máy chủ cấp quyền giả lập và chạy trọn với server MCP thật của Notion, trả về 77 tool).
+Trạng thái đợt 2 (2026-11-14): mục 8 có `hame run --output json|stream-json` và steering (nhắn cho lượt đang chạy, trong giao diện terminal và qua `_hame/steer`); mục 10 đã làm (hoàn tác thay đổi vào `.git/hooks` và `.git/config`; luật quyền so với từng lệnh trong dòng shell). Mục 7: chạy được hooks định dạng Claude Code cho bốn sự kiện (`[compat] claude_hooks`), và nạp được gói plugin (skills, commands, agents, hooks, server MCP; cài bằng `hame plugin install` có quét an toàn, đã thử với một plugin công khai thật; đọc được danh mục marketplace và có `hame plugin update`, đã thử trên danh mục công khai 317 plugin). Mục 9: đã hoãn nạp tool MCP/plugin (`tool_search` + `tool_call`, `[context] defer_tools_over`); MCP qua HTTP đã có (streamable HTTP, header tĩnh; đã thử với một server công khai thật), và bản đặc tả không trạng thái `2026-07-28` (kiểm với server giả lập theo đặc tả và với server dựng bằng SDK MCP chính thức 2.3.0, qua stdio và HTTP), và đăng nhập OAuth bằng `hame mcp login` (PKCE, đăng ký client động, tự làm mới token; kiểm với máy chủ cấp quyền giả lập và chạy trọn với server MCP thật của Notion, trả về 77 tool).
 
-Trạng thái đợt 3 (2026-11-14): mục 11 đã có (`[approval] reviewer`; với `deepseek-flash` thật nó phán đúng 7/7 lệnh thử: cho phép `ls`, ghi và đọc file trong dự án; chuyển cho người dùng lệnh xóa ngoài dự án, `curl`, `git push` và mã bị mã hóa base64). Mục 14 đã có (`zcode skill install`, quét trước khi cài; đã thử với một skill công khai thật và một skill gài bẫy). Mục 12 (thay secret tại proxy) đã có (`[secrets] substitute`: proxy chặn TLS chỉ cho các host được nêu, thay giá trị giả bằng secret thật trong phần đầu request; đã kiểm bằng `curl` thật trong sandbox với một dịch vụ công khai); mục 13 (code mode) đã có dưới dạng tool `script` cho các tool bị hoãn nạp; đã thử với `deepseek-flash` và một server MCP thật (hai lời gọi trong một bước), chưa đo mức tiết kiệm token trên chuỗi dài.
+Trạng thái đợt 3 (2026-11-14): mục 11 đã có (`[approval] reviewer`; với `deepseek-flash` thật nó phán đúng 7/7 lệnh thử: cho phép `ls`, ghi và đọc file trong dự án; chuyển cho người dùng lệnh xóa ngoài dự án, `curl`, `git push` và mã bị mã hóa base64). Mục 14 đã có (`hame skill install`, quét trước khi cài; đã thử với một skill công khai thật và một skill gài bẫy). Mục 12 (thay secret tại proxy) đã có (`[secrets] substitute`: proxy chặn TLS chỉ cho các host được nêu, thay giá trị giả bằng secret thật trong phần đầu request; đã kiểm bằng `curl` thật trong sandbox với một dịch vụ công khai); mục 13 (code mode) đã có dưới dạng tool `script` cho các tool bị hoãn nạp; đã thử với `deepseek-flash` và một server MCP thật (hai lời gọi trong một bước), chưa đo mức tiết kiệm token trên chuỗi dài.
 
 **Đợt 3: khác biệt hóa**
 11. Agent duyệt lệnh chỉ cho các lệnh muốn thoát sandbox.
@@ -240,15 +240,15 @@ Trạng thái đợt 3 (2026-11-14): mục 11 đã có (`[approval] reviewer`; v
 13. Code mode cho chuỗi lời gọi tool.
 14. Cài skill kèm quét an toàn.
 
-## 8. Số đo của zcode đến nay
+## 8. Số đo của hame đến nay
 
 Bộ `evals/harder` (8 tác vụ), ba lần chạy mỗi cấu hình, mọi lần đều đạt 8/8:
 
 | Model | Harness | Thời gian ba lần chạy |
 |---|---|---|
-| `claude-opus-5-5` | zcode | 93, 87, 91 giây |
+| `claude-opus-5-5` | hame | 93, 87, 91 giây |
 | `claude-opus-5-5` | Claude Code | 129, 127, 131 giây |
-| `gpt-6.1-sol` | zcode | 139, 144, 135 giây |
+| `gpt-6.1-sol` | hame | 139, 144, 135 giây |
 | `gpt-6.1-sol` | Codex CLI | 213, 232, 225 giây |
 
 Bộ tác vụ này quá dễ để phân biệt chất lượng (mọi bên đều đạt hết) và mức suy luận mặc định của các harness chưa được cân bằng, nên con số chỉ nói về thời gian trên việc nhỏ. Theo `techniques.md`, bước tiếp theo đúng là bộ 20 đến 50 tác vụ lấy từ lỗi thật, chấm theo kết quả, chạy nhiều lần, và đo token trên mỗi tác vụ giải được.

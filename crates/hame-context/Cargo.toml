@@ -1,0 +1,24 @@
+[package]
+name = "hame-context"
+description = "Keeps the model context useful: output spilling, compaction, project instructions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+regex.workspace = true
+hame-agent.workspace = true
+hame-kernel.workspace = true
+hame-llm.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+
+[dev-dependencies]
+hame-eval.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "hame-tui"
+description = "Interactive terminal interface for hame."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-acp.workspace = true
+serde_json.workspace = true
+hame-app.workspace = true
+hame-session.workspace = true
+ratatui = "0.30.2"
+tokio.workspace = true
+unicode-width = "0.2.3"
+
+[dev-dependencies]
+hame-agent.workspace = true
+hame-eval.workspace = true
+hame-tools.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

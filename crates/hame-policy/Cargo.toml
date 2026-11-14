@@ -1,0 +1,25 @@
+[package]
+name = "hame-policy"
+description = "User configuration, permission rules, approval and secret redaction."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-agent.workspace = true
+hame-ext.workspace = true
+hame-kernel.workspace = true
+hame-sandbox.workspace = true
+hame-tools.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

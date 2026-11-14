@@ -1,0 +1,38 @@
+[package]
+name = "hame-cli"
+description = "The hame command line."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hame"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+hame-acp.workspace = true
+hame-agent.workspace = true
+hame-app.workspace = true
+hame-checkpoint.workspace = true
+hame-sandbox.workspace = true
+hame-eval.workspace = true
+hame-ext.workspace = true
+hame-kernel.workspace = true
+hame-llm.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+hame-tui.workspace = true
+hame-web.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+agent-client-protocol = { version = "5.2.0", features = ["process"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

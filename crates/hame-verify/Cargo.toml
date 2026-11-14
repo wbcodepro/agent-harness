@@ -1,0 +1,24 @@
+[package]
+name = "hame-verify"
+description = "Completion gate: runs the project checks before a turn that changed files may end."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-agent.workspace = true
+hame-kernel.workspace = true
+hame-llm.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+hame-eval.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "hame-llm"
+description = "Model adapter seam and an OpenAI-compatible chat-completions adapter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-kernel.workspace = true
+hame-session.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

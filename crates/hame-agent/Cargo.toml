@@ -1,0 +1,24 @@
+[package]
+name = "hame-agent"
+description = "The turn/step loop that drives a model and its tools over a session log."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+futures-util = "0.3.34"
+hame-kernel.workspace = true
+hame-llm.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hame-eval.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

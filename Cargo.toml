@@ -10,21 +10,21 @@ license = "MIT"
 rust-version = "1.89"
 
 [workspace.dependencies]
-zcode-kernel = { path = "crates/zcode-kernel" }
-zcode-multi = { path = "crates/zcode-multi" }
-zcode-policy = { path = "crates/zcode-policy" }
-zcode-sandbox = { path = "crates/zcode-sandbox" }
-zcode-session = { path = "crates/zcode-session" }
-zcode-acp = { path = "crates/zcode-acp" }
-zcode-agent = { path = "crates/zcode-agent" }
-zcode-app = { path = "crates/zcode-app" }
-zcode-checkpoint = { path = "crates/zcode-checkpoint" }
-zcode-context = { path = "crates/zcode-context" }
-zcode-eval = { path = "crates/zcode-eval" }
-zcode-ext = { path = "crates/zcode-ext" }
-zcode-llm = { path = "crates/zcode-llm" }
-zcode-tools = { path = "crates/zcode-tools" }
-zcode-tui = { path = "crates/zcode-tui" }
+hame-kernel = { path = "crates/hame-kernel" }
+hame-multi = { path = "crates/hame-multi" }
+hame-policy = { path = "crates/hame-policy" }
+hame-sandbox = { path = "crates/hame-sandbox" }
+hame-session = { path = "crates/hame-session" }
+hame-acp = { path = "crates/hame-acp" }
+hame-agent = { path = "crates/hame-agent" }
+hame-app = { path = "crates/hame-app" }
+hame-checkpoint = { path = "crates/hame-checkpoint" }
+hame-context = { path = "crates/hame-context" }
+hame-eval = { path = "crates/hame-eval" }
+hame-ext = { path = "crates/hame-ext" }
+hame-llm = { path = "crates/hame-llm" }
+hame-tools = { path = "crates/hame-tools" }
+hame-tui = { path = "crates/hame-tui" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1"
@@ -35,8 +35,8 @@ serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 toml = "1"
-zcode-verify = { path = "crates/zcode-verify" }
-zcode-web = { path = "crates/zcode-web" }
+hame-verify = { path = "crates/hame-verify" }
+hame-web = { path = "crates/hame-web" }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 uuid = { version = "1", features = ["v4", "v7"] }

@@ -1,6 +1,6 @@
 [package]
-name = "zcode-plugin-wordcount"
-description = "Example zcode plugin: text statistics, with file access only where the user grants it."
+name = "hame-plugin-wordcount"
+description = "Example hame plugin: text statistics, with file access only where the user grants it."
 version = "0.0.1"
 edition = "2024"
 license = "MIT"

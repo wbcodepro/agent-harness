@@ -1,0 +1,23 @@
+[package]
+name = "hame-multi"
+description = "Several agents on one job: subagents, isolated worktrees, a shared task board and a shared budget."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hame-agent.workspace = true
+hame-kernel.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+hame-eval.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
