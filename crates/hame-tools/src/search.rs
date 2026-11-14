@@ -653,6 +653,18 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
             }
         }
     }
+    // Tests in the changed file itself (a Rust `tests` module, say) are
+    // not "other places", but they are still what will fail.
+    let own_rel = relative(path, root).to_path_buf();
+    let own_scopes = scopes(extension, after);
+    for (index, line) in after.lines().enumerate() {
+        if let Some(found) = regex.find(line)
+            && let Some(test) = test_around(&own_rel, &own_scopes, index)
+            && !tests.iter().any(|(_, f, t)| *f == own_rel && *t == test)
+        {
+            tests.push((found.as_str().to_string(), own_rel.clone(), test));
+        }
+    }
     let mut note = String::new();
     for name in changed {
         let mut places: Vec<&str> = uses
@@ -667,23 +679,23 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
                      large to look through here: grep for `{name}` to find what uses it.]"
                 ));
             }
-            continue;
+        } else {
+            // Tests first: they are what will fail.
+            places.sort_by_key(|place| !place.contains("test"));
+            let more = places.len().saturating_sub(SHOWN_USES);
+            note.push_str(&format!(
+                "\n[The first line of `{name}` changed or it is gone. It is also used in: {}{}. \
+                 Make sure those still fit.]",
+                places[..places.len().min(SHOWN_USES)].join(", "),
+                if cut_short {
+                    " and possibly more (the search stopped early; grep for the rest)".to_string()
+                } else if more > 0 {
+                    format!(" and {more} more places")
+                } else {
+                    String::new()
+                }
+            ));
         }
-        // Tests first: they are what will fail.
-        places.sort_by_key(|place| !place.contains("test"));
-        let more = places.len().saturating_sub(SHOWN_USES);
-        note.push_str(&format!(
-            "\n[The first line of `{name}` changed or it is gone. It is also used in: {}{}. \
-             Make sure those still fit.]",
-            places[..places.len().min(SHOWN_USES)].join(", "),
-            if cut_short {
-                " and possibly more (the search stopped early; grep for the rest)".to_string()
-            } else if more > 0 {
-                format!(" and {more} more places")
-            } else {
-                String::new()
-            }
-        ));
         let mine: Vec<(&Path, &str)> = tests
             .iter()
             .filter(|(used, _, _)| used == name)
@@ -970,6 +982,16 @@ mod tests {
         .unwrap();
         let note = uses_note(&root.join("lib.rs"), before, after, root);
         assert!(note.contains("`cargo test -q -- adds_up`"), "{note}");
+
+        // A test in the changed file itself is named too.
+        let before = "pub fn scale_cents(a: i64) -> i64 {\n    a\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn scales() {\n        assert_eq!(scale_cents(1), 1);\n    }\n}\n";
+        let after = before.replace("scale_cents(a: i64)", "scale_cents(a: i64, by: i64)");
+        fs::write(root.join("scale.rs"), &after).unwrap();
+        let note = uses_note(&root.join("scale.rs"), before, &after, root);
+        assert!(
+            note.contains("Tests that call `scale_cents`: scales."),
+            "{note}"
+        );
 
         fs::create_dir_all(root.join("wal")).unwrap();
         let before = "package wal\n\nfunc OpenLog(dir string) error {\n\treturn nil\n}\n";
