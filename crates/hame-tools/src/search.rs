@@ -619,6 +619,8 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
     let started = std::time::Instant::now();
     let own = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut uses: Vec<(String, String)> = Vec::new();
+    // Tests that use a changed name: (name, file, test).
+    let mut tests: Vec<(String, PathBuf, String)> = Vec::new();
     let mut cut_short = false;
     for file in walk(root) {
         if started.elapsed() > USES_TIME_LIMIT {
@@ -631,12 +633,23 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
         let Some(text) = searchable_text(&file) else {
             continue;
         };
+        let mut file_scopes: Option<Vec<Scope>> = None;
         for (index, line) in text.lines().enumerate() {
             if let Some(found) = regex.find(line) {
                 uses.push((
                     found.as_str().to_string(),
                     format!("{}:{}", display_path(relative(&file, root)), index + 1),
                 ));
+                let rel = relative(&file, root).to_path_buf();
+                let file_scopes = file_scopes.get_or_insert_with(|| {
+                    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    scopes(ext, &text)
+                });
+                if let Some(test) = test_around(&rel, file_scopes, index)
+                    && !tests.iter().any(|(_, f, t)| *f == rel && *t == test)
+                {
+                    tests.push((found.as_str().to_string(), rel, test));
+                }
             }
         }
     }
@@ -671,8 +684,101 @@ pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> 
                 String::new()
             }
         ));
+        let mine: Vec<(&Path, &str)> = tests
+            .iter()
+            .filter(|(used, _, _)| used == name)
+            .map(|(_, file, test)| (file.as_path(), test.as_str()))
+            .collect();
+        if let Some(command) = narrow_test_command(&mine) {
+            note.push_str(&format!(
+                "\n[Tests that call `{name}`: {}. To run just those: `{command}`]",
+                mine.iter()
+                    .take(SHOWN_USES)
+                    .map(|(_, test)| *test)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
     }
     note
+}
+
+/// The test function a use on `row` of a file is inside, if it is in one:
+/// a `test…` function in Python, a `Test…` function in a Go `_test.go`
+/// file, and in Rust a function in a `tests` module or under `tests/`.
+fn test_around(file: &Path, scopes: &[Scope], row: usize) -> Option<String> {
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let inner = scopes
+        .iter()
+        .filter(|scope| scope.start <= row && row <= scope.end)
+        .max_by_key(|scope| scope.start)?;
+    let name = inner.name.as_str();
+    let is_test = match ext {
+        "py" => name.starts_with("test"),
+        "go" => file.to_string_lossy().ends_with("_test.go") && name.starts_with("Test"),
+        "rs" => {
+            file.components().any(|part| part.as_os_str() == "tests")
+                || scopes
+                    .iter()
+                    .any(|scope| scope.name == "tests" && scope.start <= row && row <= scope.end)
+        }
+        _ => false,
+    };
+    is_test.then(|| name.to_string())
+}
+
+/// Most test names put in one suggested command.
+const NARROW_TESTS: usize = 6;
+
+/// A command that runs only the given tests, all in one language. `None`
+/// when there are none, or they are in a language without a known way.
+fn narrow_test_command(tests: &[(&Path, &str)]) -> Option<String> {
+    let (first, _) = tests.first()?;
+    let ext = first.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let tests: Vec<&(&Path, &str)> = tests
+        .iter()
+        .filter(|(file, _)| file.extension().and_then(|e| e.to_str()) == Some(ext))
+        .take(NARROW_TESTS)
+        .collect();
+    let mut names: Vec<&str> = Vec::new();
+    for (_, name) in &tests {
+        if !names.contains(name) {
+            names.push(name);
+        }
+    }
+    let mut places: Vec<String> = Vec::new();
+    let mut add = |place: String| {
+        if !places.contains(&place) {
+            places.push(place);
+        }
+    };
+    match ext {
+        "rs" => Some(format!("cargo test -q -- {}", names.join(" "))),
+        "py" => {
+            tests.iter().for_each(|(file, _)| add(display_path(file)));
+            Some(format!(
+                "python3 -m pytest -q {} -k \"{}\"",
+                places.join(" "),
+                names.join(" or ")
+            ))
+        }
+        "go" => {
+            tests.iter().for_each(|(file, _)| {
+                let dir = file.parent().map(display_path).unwrap_or_default();
+                add(if dir.is_empty() {
+                    ".".into()
+                } else {
+                    format!("./{dir}")
+                });
+            });
+            Some(format!(
+                "go test -run '^({})$' {}",
+                names.join("|"),
+                places.join(" ")
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// The innermost definition that `row` is inside of, not counting one that
@@ -823,6 +929,59 @@ impl Tool for RepoMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_signature_names_the_tests_that_call_it_and_how_to_run_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("tests")).unwrap();
+        let before = "def parse_money(text):\n    return 1\n";
+        let after = "def parse_money(text, currency):\n    return 1\n";
+        fs::write(root.join("money.py"), after).unwrap();
+        fs::write(
+            root.join("tests/test_money.py"),
+            "from money import parse_money\n\ndef test_parse():\n    assert parse_money('1')\n\n\
+             def test_other():\n    assert True\n\nclass TestMore:\n    def test_cents(self):\n        parse_money('2')\n",
+        )
+        .unwrap();
+        let note = uses_note(&root.join("money.py"), before, after, root);
+        assert!(
+            note.contains("Tests that call `parse_money`: test_parse, test_cents."),
+            "{note}"
+        );
+        assert!(
+            note.contains(
+                "python3 -m pytest -q tests/test_money.py -k \"test_parse or test_cents\""
+            ),
+            "{note}"
+        );
+
+        let before = "pub fn total_cents(a: i64) -> i64 {\n    a\n}\n";
+        let after = "pub fn total_cents(a: i64, b: i64) -> i64 {\n    a + b\n}\n";
+        fs::write(root.join("lib.rs"), after).unwrap();
+        fs::write(
+            root.join("cart.rs"),
+            "fn sum() -> i64 {\n    total_cents(1)\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds_up() {\n        assert_eq!(total_cents(1), 1);\n    }\n}\n",
+        )
+        .unwrap();
+        let note = uses_note(&root.join("lib.rs"), before, after, root);
+        assert!(note.contains("`cargo test -q -- adds_up`"), "{note}");
+
+        fs::create_dir_all(root.join("wal")).unwrap();
+        let before = "package wal\n\nfunc OpenLog(dir string) error {\n\treturn nil\n}\n";
+        let after = "package wal\n\nfunc OpenLog(dir string, fs FS) error {\n\treturn nil\n}\n";
+        fs::write(root.join("wal/wal.go"), after).unwrap();
+        fs::write(
+            root.join("wal/wal_test.go"),
+            "package wal\n\nfunc TestReopen(t *testing.T) {\n\tOpenLog(\"x\")\n}\n",
+        )
+        .unwrap();
+        let note = uses_note(&root.join("wal/wal.go"), before, after, root);
+        assert!(
+            note.contains("`go test -run '^(TestReopen)$' ./wal`"),
+            "{note}"
+        );
+    }
 
     fn project() -> (tempfile::TempDir, ToolContext) {
         let dir = tempfile::tempdir().unwrap();
