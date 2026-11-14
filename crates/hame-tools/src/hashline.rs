@@ -277,7 +277,7 @@ impl Tool for EditLines {
             for edit in &input.edits {
                 let mut ends = [0usize; 2];
                 let anchors = [&edit.from, edit.to.as_ref().unwrap_or(&edit.from)];
-                for (end, raw) in ends.iter_mut().zip(anchors) {
+                for (index, (end, raw)) in ends.iter_mut().zip(anchors).enumerate() {
                     let Some((number, hash)) = parse_anchor(raw) else {
                         return ToolOutput::error(format!(
                             "`{raw}` is not an anchor. An anchor is the `number:hash` that read \
@@ -285,6 +285,11 @@ impl Tool for EditLines {
                         ));
                     };
                     *end = number - 1;
+                    // Without `to` the one anchor stands for both ends: check it,
+                    // and report it, once.
+                    if index == 1 && edit.to.is_none() {
+                        continue;
+                    }
                     match lines.get(number - 1) {
                         Some(_) if anchor_hash(&lines, number - 1) == hash => {}
                         Some(_) => {
@@ -530,6 +535,12 @@ mod tests {
         ] {
             assert!(refused.text.contains(&needle), "{needle}: {}", refused.text);
         }
+        assert_eq!(
+            refused.text.matches("is stale").count(),
+            1,
+            "{}",
+            refused.text
+        );
 
         // A line past the end, and text that is no anchor at all.
         let past = edit(&ctx, "a.py", json!([{"from": "9:abc", "new_text": "x"}])).await;
