@@ -652,6 +652,80 @@ async fn a_hook_can_keep_the_turn_going_when_the_model_tries_to_stop() {
     assert_eq!(kinds(&session).iter().filter(|k| **k == "user").count(), 3);
 }
 
+/// Speaks once, whether or not anything changed.
+struct Nudge;
+
+impl zcode_agent::TurnHook for Nudge {
+    fn before_stop<'a>(
+        &'a self,
+        records: &'a [zcode_session::Record],
+        _changed: bool,
+    ) -> BoxFuture<'a, Option<Vec<Block>>> {
+        Box::pin(async move {
+            let already = records.iter().any(|record| {
+                matches!(&record.event, Event::UserMessage { content }
+                    if content == &vec![Block::text("Did you run anything?")])
+            });
+            (!already).then(|| vec![Block::text("Did you run anything?")])
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_hook_that_speaks_first_does_not_hide_the_change_from_later_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![
+            tool_call("c1", "write", json!({"path": "a.txt", "content": "bad"})),
+            ScriptedResponse::text("Done."),
+            // After the first hook's nudge the model changes nothing.
+            ScriptedResponse::text("Yes, done."),
+            ScriptedResponse::text("Fixed."),
+        ],
+    }));
+    let mut agent = agent(llm, dir.path());
+    agent.hooks.push(Arc::new(Nudge));
+    agent.hooks.push(Arc::new(Objector));
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent
+        .run_turn(&mut session, user("Write a.txt"))
+        .await
+        .unwrap();
+
+    let said = |text: &str| {
+        session.records().iter().any(|record| {
+            matches!(&record.event, Event::UserMessage { content }
+                if content == &vec![Block::text(text)])
+        })
+    };
+    assert!(said("Did you run anything?"));
+    assert!(
+        said("Check failed: fix it."),
+        "the second hook still hears about the change"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_cut_off_by_the_output_limit_is_asked_to_carry_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let cut = || ScriptedResponse {
+        stop: StopReason::MaxTokens,
+        ..ScriptedResponse::text("Thinking about")
+    };
+    let llm = Arc::new(ScriptedLlm::new(Recording {
+        responses: vec![cut(), ScriptedResponse::text("The answer is 4.")],
+    }));
+    let agent = agent(llm, dir.path());
+    let mut session = new_session(&dir.path().join("sessions"));
+
+    agent.run_turn(&mut session, user("2+2?")).await.unwrap();
+
+    let kinds = kinds(&session);
+    assert_eq!(kinds.iter().filter(|k| **k == "user").count(), 2);
+    assert_eq!(kinds.iter().filter(|k| **k == "turn/end").count(), 1);
+}
+
 /// A read-only tool that takes a while and notes when it ran.
 struct Slow(Arc<Mutex<Vec<(std::time::Instant, std::time::Instant)>>>);
 

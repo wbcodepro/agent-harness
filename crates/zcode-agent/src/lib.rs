@@ -175,6 +175,9 @@ pub trait TurnHook: Send + Sync {
 /// Starts the message telling the model the turn is about to run out.
 pub const STEPS_LEFT_PREFIX: &str = "[zcode limit]";
 const STEPS_LEFT_WARNING: u64 = 3;
+/// How often in one turn a response cut off by the output limit is asked
+/// to carry on before the turn ends as it stands.
+const MAX_CONTINUATIONS: u32 = 2;
 
 pub struct Agent {
     pub llm: Arc<dyn Llm>,
@@ -248,7 +251,10 @@ impl Agent {
         session.append(Event::UserMessage { content: input })?;
         self.checkpoint(session).await?;
 
-        let mut changed = false;
+        // One flag per hook: a hook that has spoken about a change has had
+        // its say, but the hooks after it have not seen that change yet.
+        let mut changed = vec![false; self.hooks.len()];
+        let mut cut_short = 0;
         for step in 1..=self.max_steps {
             session.append(Event::StepStart { turn, step })?;
             for hook in &self.hooks {
@@ -367,7 +373,7 @@ impl Agent {
             }
 
             if may_have_changed {
-                changed = true;
+                changed.fill(true);
                 self.checkpoint(session).await?;
             }
             // A turn cut off at the limit ends mid-thought with nothing
@@ -395,18 +401,31 @@ impl Agent {
                 return Ok(());
             }
             if !called_tools {
+                // An answer that ran into the output limit is not an
+                // answer: the model may have spent it all on reasoning.
+                if completion.stop == StopReason::MaxTokens && cut_short < MAX_CONTINUATIONS {
+                    cut_short += 1;
+                    session.append(Event::UserMessage {
+                        content: vec![Block::text(
+                            "[zcode] Your last response hit the output limit before it was \
+                             finished. Carry on from where it stopped: act with tools, or give \
+                             the rest of the answer briefly.",
+                        )],
+                    })?;
+                    continue;
+                }
                 let mut follow_up = None;
-                for hook in &self.hooks {
-                    follow_up = hook.before_stop(session.records(), changed).await;
+                for (hook, changed) in self.hooks.iter().zip(changed.iter_mut()) {
+                    follow_up = hook.before_stop(session.records(), *changed).await;
+                    // This hook has seen the change, whatever it said;
+                    // for it, only new changes count from here.
+                    *changed = false;
                     if follow_up.is_some() {
                         break;
                     }
                 }
                 if let Some(content) = follow_up {
                     session.append(Event::UserMessage { content })?;
-                    // What the hook objected to has been reported; only new
-                    // changes count from here.
-                    changed = false;
                     continue;
                 }
                 session.append(Event::TurnEnd {

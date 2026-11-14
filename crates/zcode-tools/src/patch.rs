@@ -361,6 +361,19 @@ type Outcome = (PathBuf, Option<String>);
 fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), String> {
     let mut outcomes: Vec<Outcome> = Vec::new();
     let mut summary = Vec::new();
+    // Each section is worked out from the file on disk, so two sections
+    // for one file would each undo the other.
+    let mut touched: Vec<std::path::PathBuf> = Vec::new();
+    let mut touch = |target: &std::path::Path, path: &str| {
+        if touched.iter().any(|seen| seen == target) {
+            return Err(format!(
+                "{path} appears in more than one section of this patch. Put all the changes \
+                 to one file in a single section."
+            ));
+        }
+        touched.push(target.to_path_buf());
+        Ok(())
+    };
     for op in ops {
         match op {
             Op::Add { path, lines } => {
@@ -371,6 +384,7 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                          it first."
                     ));
                 }
+                touch(&target, path)?;
                 let mut content = lines.join("\n");
                 if !content.is_empty() {
                     content.push('\n');
@@ -387,6 +401,7 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                 if !target.is_file() {
                     return Err(format!("{path} does not exist, so it cannot be deleted."));
                 }
+                touch(&target, path)?;
                 outcomes.push((target, None));
                 summary.push(format!("D {path}"));
             }
@@ -396,6 +411,7 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                 hunks,
             } => {
                 let source = ctx.resolve(path);
+                touch(&source, path)?;
                 let text =
                     fs::read_to_string(&source).map_err(|e| format!("Cannot read {path}: {e}"))?;
                 let updated = apply_hunks(path, &text, hunks)?;
@@ -405,8 +421,17 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                 }
                 match move_to {
                     Some(new_path) => {
+                        let destination = ctx.resolve(new_path);
+                        if destination.exists() {
+                            return Err(format!(
+                                "{new_path} already exists, so {path} cannot be moved there."
+                            ));
+                        }
+                        touch(&destination, new_path)?;
+                        // The new file first: if it cannot be written,
+                        // the old one is still there.
+                        outcomes.push((destination, Some(updated)));
                         outcomes.push((source, None));
-                        outcomes.push((ctx.resolve(new_path), Some(updated)));
                         summary.push(format!("R {path} -> {new_path}"));
                     }
                     None => {
@@ -458,7 +483,7 @@ impl Tool for ApplyPatch {
                     Some(content) => path
                         .parent()
                         .map_or(Ok(()), fs::create_dir_all)
-                        .and_then(|()| fs::write(path, content)),
+                        .and_then(|()| crate::files::write_atomic(path, content.as_bytes())),
                     None => fs::remove_file(path),
                 };
                 if let Err(e) = result {
@@ -476,6 +501,44 @@ impl Tool for ApplyPatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_move_never_lands_on_a_file_that_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "kept\n").unwrap();
+        let output = apply(
+            dir.path(),
+            "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-one\n+two\n*** End Patch",
+        )
+        .await;
+        assert!(output.is_error, "{}", output.text);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+            "kept\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_sections_for_one_file_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        let output = apply(
+            dir.path(),
+            "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+1\n*** Update File: a.txt\n@@\n-two\n+2\n*** End Patch",
+        )
+        .await;
+        assert!(output.is_error, "{}", output.text);
+        assert!(output.text.contains("more than one section"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "one\ntwo\n"
+        );
+    }
 
     async fn apply(dir: &std::path::Path, patch: &str) -> ToolOutput {
         ApplyPatch

@@ -6,6 +6,46 @@ use zcode_session::ToolSpec;
 
 use crate::{BoxFuture, Effect, Tool, ToolContext, ToolOutput, parse_input};
 
+/// Replaces a file's content in one step: the new content goes to a
+/// sibling file that is then renamed over the old one, so a full disk or a
+/// killed worker leaves the old file whole instead of cut short.
+pub(crate) fn write_atomic(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // A link is written through, not replaced.
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else {
+        return fs::write(&target, content);
+    };
+    let sibling = dir.join(format!(
+        ".{}.{}-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Where no sibling can be made (a file that is writable in a folder
+    // that is not), write in place as before.
+    let Ok(mut file) = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&sibling)
+    else {
+        return fs::write(&target, content);
+    };
+    let written = file.write_all(content).and_then(|()| {
+        if let Ok(meta) = fs::metadata(&target) {
+            fs::set_permissions(&sibling, meta.permissions())?;
+        }
+        drop(file);
+        fs::rename(&sibling, &target)
+    });
+    if written.is_err() {
+        let _ = fs::remove_file(&sibling);
+    }
+    written
+}
+
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_LINE_LIMIT: usize = 2000;
 const MAX_LINE_CHARS: usize = 2000;
@@ -155,7 +195,7 @@ impl Tool for Write {
             // only those lines, and loses the rest of the file. It cannot
             // be told apart from a deliberate rewrite, but it can be said.
             let before = fs::read_to_string(&path).ok();
-            match fs::write(&path, &input.content) {
+            match write_atomic(&path, input.content.as_bytes()) {
                 Ok(()) => {
                     let mut said =
                         format!("Wrote {} bytes to {}.", input.content.len(), path.display());
@@ -480,7 +520,7 @@ impl Tool for Edit {
                 }
             };
             let warning = crate::search::syntax_warning(&path, Some(&text), &updated);
-            match fs::write(&path, updated) {
+            match write_atomic(&path, updated.as_bytes()) {
                 Ok(()) => ToolOutput::ok(format!("{note} in {}.{warning}", path.display())),
                 Err(e) => ToolOutput::error(format!("Cannot write {}: {e}", path.display())),
             }
