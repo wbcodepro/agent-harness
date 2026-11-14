@@ -66,6 +66,10 @@ fn rounds_this_turn(records: &[Record]) -> usize {
 }
 
 impl TurnHook for Verifier {
+    fn gates_completion(&self) -> bool {
+        true
+    }
+
     fn before_stop<'a>(
         &'a self,
         records: &'a [Record],

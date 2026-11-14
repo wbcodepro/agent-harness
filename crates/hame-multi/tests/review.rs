@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use hame_agent::{Agent, Session, ToolPipeline};
+use hame_agent::{Agent, Session, ToolPipeline, TurnHook};
 use hame_eval::{Recording, ScriptedLlm, ScriptedResponse};
 use hame_multi::{Child, ChildFactory, REVIEW_PREFIX, Reviewer};
 use hame_session::{
@@ -51,8 +51,11 @@ fn reviewer(report: &'static str, cwd: &Path, asked: Arc<Mutex<Vec<String>>>) ->
         let asked = Arc::clone(&asked);
         Box::pin(async move {
             asked.lock().unwrap().push(spec.cwd.display().to_string());
+            let mut child = agent(vec![ScriptedResponse::text(report)], &spec.cwd);
+            // The reviewer must run without hooks that send it back.
+            child.hooks.push(Arc::new(AlwaysRed));
             Ok(Child {
-                agent: agent(vec![ScriptedResponse::text(report)], &spec.cwd),
+                agent: child,
                 keep_alive: Box::new(()),
             })
         })
@@ -62,6 +65,23 @@ fn reviewer(report: &'static str, cwd: &Path, asked: Arc<Mutex<Vec<String>>>) ->
         store: SessionStore::new(cwd.join(".sessions")),
         cwd: cwd.to_path_buf(),
         depth: 0,
+    }
+}
+
+/// A completion gate that is never satisfied.
+struct AlwaysRed;
+
+impl TurnHook for AlwaysRed {
+    fn before_stop<'a>(
+        &'a self,
+        _records: &'a [hame_session::Record],
+        _changed: bool,
+    ) -> hame_kernel::BoxFuture<'a, Option<Vec<Block>>> {
+        Box::pin(async { Some(vec![Block::text("[hame check] run it again")]) })
+    }
+
+    fn gates_completion(&self) -> bool {
+        true
     }
 }
 

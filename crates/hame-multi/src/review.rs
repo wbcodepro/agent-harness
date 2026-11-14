@@ -141,6 +141,9 @@ impl Reviewer {
             .deferred
             .retain(|tool| tool.effect() != Effect::Write);
         child.agent.max_steps = child.agent.max_steps.min(REVIEW_STEPS);
+        // Its probes are meant to fail when the work is wrong; nothing may
+        // send it back to make them pass.
+        child.agent.hooks.retain(|hook| !hook.gates_completion());
         let id = SessionId::generate();
         let writer = self
             .store
@@ -167,6 +170,10 @@ impl Reviewer {
 }
 
 impl TurnHook for Reviewer {
+    fn gates_completion(&self) -> bool {
+        true
+    }
+
     fn before_stop<'a>(
         &'a self,
         records: &'a [Record],

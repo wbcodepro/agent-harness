@@ -170,6 +170,13 @@ pub trait TurnHook: Send + Sync {
     ) -> BoxFuture<'a, Option<Vec<Block>>> {
         Box::pin(async { None })
     }
+
+    /// Whether this hook holds the turn open until the agent's work passes
+    /// some check. An agent whose job is to find failures, such as a
+    /// reviewer, runs without these: its failing probes are the result.
+    fn gates_completion(&self) -> bool {
+        false
+    }
 }
 
 /// Starts the message telling the model the turn is about to run out.

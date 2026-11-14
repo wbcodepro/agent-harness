@@ -159,6 +159,21 @@ Số đo, giữ ít lần gọi model:
 - Trên `calendar-rules`, hai lần chạy đầu-cuối có bật người chấm: 2/2, 29 và 31 request (mặc định 14–23), token prompt khoảng 1,76 triệu mỗi lần so với 1,52 triệu, token đầu ra 160 nghìn so với 116 nghìn, thời gian 596 và 738 giây so với khoảng 475. Tức là tốn thêm khoảng 30–40%.
 - Hai lần chạy không đủ để nói tỷ lệ đạt có tăng không (mặc định trượt khoảng 1/4 đến 1/8 lần). Bằng chứng hiện có là người chấm bắt được đúng lỗi mà mọi lớp kiểm chứng khác bỏ qua.
 
+Đo khả năng của chính người chấm, rẻ hơn chạy cả bộ eval nhiều lần: cho nó chấm các bản cài đặt đã biết chắc sai (lối tắt có sẵn của từng tác vụ) và các lời giải tham chiếu, mỗi bản một lần, `claude-haiku-5-5`, tối đa 30 request:
+
+| Workspace | Người chấm báo | Đúng không |
+|---|---|---|
+| `calendar-rules`, lối tắt (bộ kiểm ẩn sai 27 ca) | 4 vi phạm, gồm ngày lễ dời sang năm trước bị bỏ khỏi `holidays()` và `TypeError` thay cho `ValueError` | Đúng, lỗi thật |
+| `go-wal-recovery`, lối tắt | 2 vi phạm: xóa file `.tmp` trước khi kiểm tra (luật 25), compaction ghi thẳng vào tên cuối nên lần mở sau hỏng (luật 28, 33) | Đúng, chính là hai chỗ bộ kiểm ẩn bắt |
+| `rust-incremental-index`, lối tắt cắt chunk giữa CR LF | Đúng lỗi đó, kèm ví dụ ở byte 1024 | Đúng |
+| `go-wal-recovery`, tham chiếu | `NO FINDINGS` | Đúng |
+| `calendar-rules`, tham chiếu | `count: None` được chấp nhận, trái luật 21 ("int >= 0") | Vi phạm thật của lời giải tham chiếu; bộ kiểm ẩn không thử ca này |
+| `rust-incremental-index`, tham chiếu | Bộ nhớ tăng theo số anchor đã từng thêm, trái luật 33 ("O(n + A)") | Vi phạm thật; bộ kiểm ẩn không đo bộ nhớ |
+
+Bắt được cả ba bản sai, và không có báo cáo nào sai sự thật: hai "phát hiện" trên lời giải tham chiếu là lỗi thật mà chính bộ kiểm ẩn bỏ sót. Mỗi lần chấm tốn 9–29 request, 96–512 giây.
+
+Lần chấm bản Go sai lộ ra hai lỗi của hame, đã sửa. Thứ nhất, lớp `stop_on_red` gửi người chấm quay lại vì lệnh `go test` của nó thất bại, trong khi thất bại đó chính là kết quả cần tìm; báo cáo cuối vì thế bị thay bằng lời giải thích về lệnh `cp`. Giờ các hook giữ lượt cho tới khi kiểm tra đạt (`gates_completion`) bị bỏ khỏi agent chấm. Thứ hai, lệnh được trích lại cho model bị cắt ở 200 ký tự đúng chỗ heredoc, và model chạy nguyên văn đoạn bị cắt; giờ đoạn trích dừng ở dòng đầu và ghi rõ là đã rút gọn.
+
 Nên bật khi sai đắt hơn token: việc theo đặc tả dài, nhiều luật tương tác.
 
 Từ log của lần DeepSeek hỏng có hai bản sửa: các mảnh stream đến cùng lúc giờ được ghi gộp (log của lần đó có 114.000 bản ghi, 13 MB), và mô tả tool shell nói rõ lệnh đã chạy sẵn trong thư mục làm việc (model gắn `cd <đường dẫn tuyệt đối>` vào mọi lệnh).

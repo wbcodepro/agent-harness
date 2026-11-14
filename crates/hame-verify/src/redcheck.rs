@@ -182,7 +182,27 @@ fn text_of(content: &[Block]) -> String {
         .collect()
 }
 
+/// A command as quoted back to the model: its first line, at most 200
+/// characters, and a plain mark when that is not all of it, so the model
+/// does not run the shortened text as if it were the command.
+fn quoted(command: &str) -> String {
+    let command = command.trim();
+    let first = command.lines().next().unwrap_or("");
+    let mut shown: String = first.chars().take(200).collect();
+    if shown.len() < command.len() {
+        shown.push_str(" …");
+        return format!(
+            "`{shown}` (shortened here; rerun the full command from your earlier call)"
+        );
+    }
+    format!("`{shown}`")
+}
+
 impl TurnHook for RedCheck {
+    fn gates_completion(&self) -> bool {
+        true
+    }
+
     fn before_stop<'a>(
         &'a self,
         records: &'a [Record],
@@ -265,9 +285,9 @@ impl TurnHook for RedCheck {
                     red = failed_call(id).then_some(*run);
                 }
                 let run = red?;
-                let shown: String = run.chars().take(200).collect();
+                let shown = quoted(run);
                 return Some(vec![Block::text(format!(
-                    "{CHECK_PREFIX} `{shown}` failed earlier in this turn and no check has \
+                    "{CHECK_PREFIX} {shown} failed earlier in this turn and no check has \
                      passed since. Run it again: if it still fails, fix the cause and rerun \
                      until it passes. If it cannot pass, or its failure does not matter, say \
                      so explicitly and why."
@@ -283,9 +303,9 @@ impl TurnHook for RedCheck {
             if !(times >= 2 || requested || looks_like_a_check(command)) {
                 return None;
             }
-            let shown: String = command.chars().take(200).collect();
+            let shown = quoted(command);
             Some(vec![Block::text(format!(
-                "{CHECK_PREFIX} The last command you ran, `{shown}`, failed, and you are \
+                "{CHECK_PREFIX} The last command you ran, {shown}, failed, and you are \
                  stopping without having run it successfully. Do not describe what should be \
                  done next: do it, and run the command again until it passes. If it cannot \
                  pass, or its failure does not matter, say so explicitly and why."
@@ -297,6 +317,18 @@ impl TurnHook for RedCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shortened_command_is_marked_as_shortened() {
+        assert_eq!(quoted("cargo test -q"), "`cargo test -q`");
+        let long = "cd /tmp/p && cp a b . && cat > t.go <<'EOF'\npackage p\nEOF\ngo test";
+        let shown = quoted(long);
+        assert!(
+            shown.starts_with("`cd /tmp/p && cp a b . && cat > t.go <<'EOF' …`"),
+            "{shown}"
+        );
+        assert!(shown.contains("rerun the full command"), "{shown}");
+    }
     use serde_json::json;
 
     fn log(prompt: &str, runs: &[(&str, bool)]) -> Vec<Record> {
