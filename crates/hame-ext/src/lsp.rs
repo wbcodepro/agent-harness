@@ -520,20 +520,46 @@ impl LspClient {
             .send(json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }
 
+    /// Sends a request and waits for its answer. A server that is still
+    /// loading the project answers "content modified" (-32801), which the
+    /// protocol says to retry; that is done a few times before giving up.
     async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        const CONTENT_MODIFIED: i64 = -32801;
+        let mut attempt = 0u64;
+        loop {
+            match self.request_once(method, params.clone()).await {
+                Err((_, Some(CONTENT_MODIFIED))) if attempt < 5 => {
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
+                }
+                answer => return answer.map_err(|(why, _)| why),
+            }
+        }
+    }
+
+    /// One request: its result, or why it failed and the error code the
+    /// server gave, if it gave one.
+    async fn request_once(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, (String, Option<i64>)> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (answer, answered) = oneshot::channel();
         self.waiting.lock().expect("lsp lock").insert(id, answer);
         self.outbox
             .send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
-            .map_err(|_| "the language server stopped".to_string())?;
+            .map_err(|_| ("the language server stopped".to_string(), None))?;
         match tokio::time::timeout(STARTUP_TIMEOUT, answered).await {
             Ok(Ok(response)) => match response.get("error") {
-                Some(error) => Err(format!("the language server refused {method}: {error}")),
+                Some(error) => Err((
+                    format!("the language server refused {method}: {error}"),
+                    error["code"].as_i64(),
+                )),
                 None => Ok(response["result"].clone()),
             },
-            Ok(Err(_)) => Err("the language server stopped".into()),
-            Err(_) => Err(format!("the language server did not answer {method}")),
+            Ok(Err(_)) => Err(("the language server stopped".into(), None)),
+            Err(_) => Err((format!("the language server did not answer {method}"), None)),
         }
     }
     /// Whether the server announced a capability such as `renameProvider`.
