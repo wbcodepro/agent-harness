@@ -216,6 +216,8 @@ Leo thang vừa tăng tỷ lệ đạt vừa giảm tổng token, vì model rẻ
 
 Đọc log các lần hỏng trên tác vụ mới cho thấy chủ yếu là giới hạn của model: viết lại cả file ở mỗi vòng nên hết 300 giây (đã thêm gợi ý dùng `edit` khi chỉ vài dòng đổi), xoay vòng giữa hai lỗi, và một lần ghi đè bài test tự viết bằng một dòng để cho "đạt". Lần chạy 4.440 giây này dùng 6,3 triệu token, 94% đọc từ cache.
 
+Cùng bộ 20 tác vụ với leo thang sang `gpt-4.1` (commit `daaf729`): lượt một đạt 16/20, so với trung bình 12/20 mỗi lượt khi không leo thang. Lượt hai không dùng được: tài khoản OpenAI hết tín dụng giữa chừng (sau đó `zcode eval` được sửa để dừng hẳn khi nhà cung cấp từ chối tài khoản, thay vì ghi các tác vụ còn lại là hỏng). Trong lượt một, có tác vụ mà model mạnh chỉ được gọi vào ở ba bước cuối, vì dấu hiệu kẹt chỉ đếm ghi chú của harness; từ commit `5e35ada`, cứ năm lời gọi tool lỗi cũng tính là một dấu hiệu. Thay đổi này chưa được đo, vì hết tín dụng.
+
 Điều chưa làm được: không có leo thang, `rust-tokenizer` và `three-bugs` chỉ đạt 1/3, và `spec-hidden-tests` 0/3 trong mọi cấu hình; ở các lần hỏng đó tôi không thấy thêm nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
 
 **Đợt 2: mức mặc định của thị trường**

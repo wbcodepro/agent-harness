@@ -241,6 +241,24 @@ async fn run_task(
     Ok(outcome)
 }
 
+/// What in an agent's error says the provider turned the account away:
+/// no credit, no valid key, no permission. `None` for anything that could
+/// be the task's or the model's doing.
+fn account_problem(note: &str) -> Option<&'static str> {
+    [
+        ("insufficient_quota", "the account is out of quota"),
+        ("credit_balance", "the account is out of credit"),
+        ("billing", "a billing problem"),
+        ("invalid_api_key", "the API key is not valid"),
+        ("HTTP 401", "the API key was not accepted"),
+        ("HTTP 402", "payment is required"),
+        ("HTTP 403", "the account may not use this model"),
+    ]
+    .into_iter()
+    .find(|(marker, _)| note.contains(marker))
+    .map(|(_, problem)| problem)
+}
+
 /// The tasks of a suite, by name.
 fn tasks_in(suite: &Path, filter: Option<&str>) -> Result<Vec<(String, PathBuf)>, String> {
     let mut tasks: Vec<(String, PathBuf)> = std::fs::read_dir(suite)
@@ -313,6 +331,15 @@ async fn run_suite(
     for (name, dir) in tasks {
         eprint!("{name} ... ");
         let outcome = run_task(name, dir, &scratch, args, &keys, config).await?;
+        // A refusal about the account says nothing about the task. Going on
+        // would count every remaining task as failed.
+        if let Some(problem) = account_problem(&outcome.note) {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return Err(format!(
+                "stopped at {name}: the provider refused the request ({problem}). The results \
+                 so far are incomplete; nothing after this point was measured."
+            ));
+        }
         if let (false, Some(keep)) = (outcome.passed, keep) {
             let kept = keep.join(name);
             let _ = std::fs::remove_dir_all(&kept);
@@ -580,6 +607,22 @@ mod tests {
         ];
         assert_eq!(best(&trials).edit_format, "apply-patch");
         // A tie on both keeps the earlier, more ordinary setting.
+        // An account refused is not a task failed.
+        assert_eq!(
+            account_problem(
+                "zcode: unexpected provider response: {\"code\":\"credit_balance_exhausted\"}"
+            ),
+            Some("the account is out of credit")
+        );
+        assert_eq!(
+            account_problem("zcode: the provider answered HTTP 401: nope"),
+            Some("the API key was not accepted")
+        );
+        assert_eq!(account_problem("check failed"), None);
+        assert_eq!(
+            account_problem("zcode: the turn was stopped after 50 steps without finishing"),
+            None
+        );
         let tied = [
             trial("search-replace", 7, 3000),
             trial("apply-patch", 7, 3000),
