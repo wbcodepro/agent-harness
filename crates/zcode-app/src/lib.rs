@@ -325,7 +325,8 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                 .zip(config.secrets.substitute.keys())
                 .map(|(substitution, name)| (name.clone(), substitution.placeholder.clone())),
         );
-        granted.extend(trust_authority(pem)?);
+        let bundle = proxy.as_ref().and_then(|proxy| proxy.trust_bundle_pem());
+        granted.extend(trust_authority(pem, bundle)?);
     } else if !substitutions.is_empty() {
         return Err(
             "[secrets] substitute needs the network in allowlist mode: the proxy is what puts \
@@ -949,10 +950,11 @@ impl Prompter for Terminal {
 /// set for them.
 ///
 /// Most clients take one file of trusted authorities in place of the
-/// system's, so the file written is the system's list with the proxy's
-/// authority added. Where no system list is found, only clients that take
-/// an additional authority (Node) are covered.
-fn trust_authority(pem: &str) -> Result<Vec<(String, String)>, String> {
+/// system's, so the file written is the system's own list, as the
+/// operating system gives it, with the proxy's authority added. If the
+/// system gives none, only clients that take an additional authority
+/// (Node) are covered.
+fn trust_authority(pem: &str, bundle_pem: Option<String>) -> Result<Vec<(String, String)>, String> {
     let dir = std::env::temp_dir();
     let own = dir.join(format!("zcode-ca-{}.pem", std::process::id()));
     let problem = |e: std::io::Error| format!("cannot write the proxy's certificate: {e}");
@@ -961,16 +963,9 @@ fn trust_authority(pem: &str) -> Result<Vec<(String, String)>, String> {
         "NODE_EXTRA_CA_CERTS".to_string(),
         own.to_string_lossy().into_owned(),
     )];
-    let system = [
-        "/etc/ssl/cert.pem",
-        "/etc/ssl/certs/ca-certificates.crt",
-        "/etc/pki/tls/certs/ca-bundle.crt",
-    ]
-    .iter()
-    .find_map(|path| std::fs::read_to_string(path).ok());
-    if let Some(system) = system {
+    if let Some(bundle_pem) = bundle_pem {
         let bundle = dir.join(format!("zcode-ca-bundle-{}.pem", std::process::id()));
-        std::fs::write(&bundle, format!("{system}\n{pem}")).map_err(problem)?;
+        std::fs::write(&bundle, bundle_pem).map_err(problem)?;
         let bundle = bundle.to_string_lossy().into_owned();
         for name in [
             "SSL_CERT_FILE",
@@ -986,9 +981,9 @@ fn trust_authority(pem: &str) -> Result<Vec<(String, String)>, String> {
     Ok(variables)
 }
 
-/// The address of the HTTP MCP server called `name`, from the
-/// configuration or from a plugin.
-pub fn mcp_server_url(home: &Path, name: &str) -> Result<String, String> {
+/// The HTTP MCP server called `name`, from the configuration or from a
+/// plugin.
+pub fn mcp_http_server(home: &Path, name: &str) -> Result<zcode_ext::mcp::McpServerConfig, String> {
     let config = load_config(home)?;
     let mut servers: Vec<(String, zcode_ext::mcp::McpServerConfig)> = config
         .mcp
@@ -1010,9 +1005,12 @@ pub fn mcp_server_url(home: &Path, name: &str) -> Result<String, String> {
                 known.join(", ")
             )
         })?;
-    server.1.url.clone().ok_or_else(|| {
-        format!("{name} is started as a command; only servers reached by `url` are signed in to")
-    })
+    if server.1.url.is_none() {
+        return Err(format!(
+            "{name} is started as a command; only servers reached by `url` are signed in to"
+        ));
+    }
+    Ok(server.1.clone())
 }
 
 /// Plugins installed with `zcode plugin install`, by directory name.

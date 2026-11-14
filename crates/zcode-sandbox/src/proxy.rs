@@ -123,6 +123,14 @@ impl EgressProxy {
         self.authority_pem.as_deref()
     }
 
+    /// Everything a tool should trust when connections are read: the
+    /// system's authorities and this proxy's, as one PEM text. `None` when
+    /// nothing is intercepted or the system gives no authorities.
+    pub fn trust_bundle_pem(&self) -> Option<String> {
+        let own = self.authority_pem.as_deref()?;
+        Some(format!("{}{own}", crate::intercept::system_roots_pem()?))
+    }
+
     pub fn port(&self) -> u16 {
         self.port
     }

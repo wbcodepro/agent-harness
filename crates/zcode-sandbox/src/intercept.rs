@@ -123,6 +123,26 @@ impl Authority {
     }
 }
 
+/// The system's trusted authorities as one PEM text, or `None` if the
+/// system gives none.
+pub(crate) fn system_roots_pem() -> Option<String> {
+    let certificates = rustls_native_certs::load_native_certs().certs;
+    if certificates.is_empty() {
+        return None;
+    }
+    let mut pem = String::new();
+    for certificate in certificates {
+        pem.push_str("-----BEGIN CERTIFICATE-----\n");
+        let encoded = STANDARD.encode(&certificate);
+        for line in encoded.as_bytes().chunks(64) {
+            pem.push_str(&String::from_utf8_lossy(line));
+            pem.push('\n');
+        }
+        pem.push_str("-----END CERTIFICATE-----\n");
+    }
+    Some(pem)
+}
+
 /// The substitutions that apply to a connection to `host:port`.
 pub(crate) fn applying<'a>(
     substitutions: &'a [Substitution],

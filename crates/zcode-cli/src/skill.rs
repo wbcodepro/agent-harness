@@ -180,8 +180,13 @@ pub enum McpCommand {
 pub async fn run_mcp(home: &Path, command: McpCommand) -> Result<ExitCode, String> {
     match command {
         McpCommand::Login { server } => {
-            let url = zcode_app::mcp_server_url(home, &server)?;
-            let tokens = zcode_ext::mcp_auth::login(&url, |address| {
+            let config = zcode_app::mcp_http_server(home, &server)?;
+            let url = config.url.clone().unwrap_or_default();
+            let client = config
+                .oauth_client_id
+                .as_deref()
+                .map(|id| (id, config.oauth_redirect_port));
+            let tokens = zcode_ext::mcp_auth::login(&url, client, |address| {
                 eprintln!("Open this address to sign in to {server}:\n\n{address}\n");
                 // Best effort: the address above works by hand too.
                 let opener = if cfg!(target_os = "macos") {

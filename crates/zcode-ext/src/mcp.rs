@@ -43,6 +43,14 @@ pub struct McpServerConfig {
     /// an environment variable or secret of that name.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// For `zcode mcp login` with a provider where clients cannot register
+    /// themselves: the client id the provider issued.
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    /// The local port of the redirect address registered with that client
+    /// id (`http://127.0.0.1:<port>/callback`).
+    #[serde(default)]
+    pub oauth_redirect_port: Option<u16>,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
@@ -63,6 +71,8 @@ impl Default for McpServerConfig {
             command: String::new(),
             url: None,
             headers: BTreeMap::new(),
+            oauth_client_id: None,
+            oauth_redirect_port: None,
             args: Vec::new(),
             env: BTreeMap::new(),
             sandbox: true,

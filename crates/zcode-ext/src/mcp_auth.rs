@@ -287,7 +287,15 @@ fn tokens_from(
 ///
 /// `show` is handed the address the user has to open; it should open a
 /// browser, or at least print it.
-pub async fn login(server_url: &str, show: impl FnOnce(&str)) -> Result<Tokens, String> {
+///
+/// `client` is for authorization servers where clients cannot register
+/// themselves: a client id obtained from the provider beforehand, and the
+/// local port its redirect address was registered with.
+pub async fn login(
+    server_url: &str,
+    client: Option<(&str, Option<u16>)>,
+    show: impl FnOnce(&str),
+) -> Result<Tokens, String> {
     let http = reqwest::Client::new();
     let server =
         Url::parse(server_url).map_err(|e| format!("bad server address {server_url}: {e}"))?;
@@ -304,45 +312,50 @@ pub async fn login(server_url: &str, show: impl FnOnce(&str)) -> Result<Tokens, 
         );
     }
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let wanted_port = client.and_then(|(_, port)| port).unwrap_or(0);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", wanted_port))
         .await
         .map_err(|e| format!("cannot listen for the sign-in to come back: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect = format!("http://127.0.0.1:{port}/callback");
 
-    // The client introduces itself to the authorization server.
-    let registration = endpoint("registration_endpoint");
-    if registration.is_empty() {
-        return Err(
-            "the authorization server does not let clients register themselves, and \
-                    zcode has no client id for it"
-                .into(),
-        );
-    }
-    let registered: Value = {
-        let request = json!({
-            "client_name": "zcode",
-            "redirect_uris": [redirect],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-        });
-        let response = http
-            .post(&registration)
-            .header("content-type", "application/json")
-            .body(request.to_string())
-            .send()
-            .await
-            .map_err(|e| format!("cannot register with the authorization server: {e}"))?;
-        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-        serde_json::from_slice(&bytes).map_err(|e| {
-            format!("the authorization server's registration answer is unreadable: {e}")
-        })?
+    let client_id = match client {
+        Some((id, _)) => id.to_string(),
+        None => {
+            // The client introduces itself to the authorization server.
+            let registration = endpoint("registration_endpoint");
+            if registration.is_empty() {
+                return Err(
+                    "the authorization server does not let clients register themselves; \
+                     register zcode with the provider and set `oauth_client_id` (and \
+                     `oauth_redirect_port`) for this server"
+                        .into(),
+                );
+            }
+            let request = json!({
+                "client_name": "zcode",
+                "redirect_uris": [redirect],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            });
+            let response = http
+                .post(&registration)
+                .header("content-type", "application/json")
+                .body(request.to_string())
+                .send()
+                .await
+                .map_err(|e| format!("cannot register with the authorization server: {e}"))?;
+            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+            let registered: Value = serde_json::from_slice(&bytes).map_err(|e| {
+                format!("the authorization server's registration answer is unreadable: {e}")
+            })?;
+            registered["client_id"]
+                .as_str()
+                .ok_or("the authorization server did not register this client")?
+                .to_string()
+        }
     };
-    let client_id = registered["client_id"]
-        .as_str()
-        .ok_or("the authorization server did not register this client")?
-        .to_string();
 
     let (verifier, state) = (random(), random());
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -605,6 +618,7 @@ mod tests {
 
         let tokens = login(
             &server,
+            None,
             browser(challenge.clone(), seen.clone(), "code-9", false),
         )
         .await
@@ -664,6 +678,7 @@ mod tests {
 
         let forged = login(
             &server,
+            None,
             browser(challenge.clone(), seen.clone(), "code-9", true),
         )
         .await
@@ -675,11 +690,41 @@ mod tests {
 
         let refused = login(
             &server,
+            None,
             browser(challenge.clone(), seen.clone(), "stolen", false),
         )
         .await
         .unwrap_err();
         assert!(refused.contains("gave no access token"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_client_id_from_the_provider_skips_registration() {
+        let challenge = Arc::new(Mutex::new(String::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let server = format!("{}/mcp", serve(challenge.clone()).await);
+        // The fake server's token endpoint only accepts client c-1, which
+        // here is given, not registered; the redirect uses the fixed port.
+        let port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        let tokens = login(
+            &server,
+            Some(("c-1", Some(port))),
+            browser(challenge.clone(), seen.clone(), "code-9", false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(tokens.client_id, "c-1");
+        let asked = seen.lock().unwrap().clone();
+        let redirect = asked
+            .iter()
+            .find(|(key, _)| key == "redirect_uri")
+            .unwrap()
+            .1
+            .clone();
+        assert_eq!(redirect, format!("http://127.0.0.1:{port}/callback"));
     }
 
     #[test]

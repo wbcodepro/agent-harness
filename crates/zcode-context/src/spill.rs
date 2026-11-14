@@ -53,8 +53,12 @@ impl Layer<ToolRequest, ToolOutput> for SpillLayer {
                 })
                 .take(80)
                 .collect();
+            // A call a script made answers to the script, which wants the
+            // data, not a preview; what the script prints is spilled when
+            // the script's own call comes back through here.
+            let for_script = request.call_id.starts_with("script-");
             let mut output = next.run(request).await;
-            if output.text.len() <= self.threshold {
+            if for_script || output.text.len() <= self.threshold {
                 return output;
             }
 
