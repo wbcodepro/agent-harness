@@ -218,6 +218,8 @@ Leo thang vừa tăng tỷ lệ đạt vừa giảm tổng token, vì model rẻ
 
 Cùng bộ 20 tác vụ với leo thang sang `gpt-4.1` (commit `daaf729`): lượt một đạt 16/20, so với trung bình 12/20 mỗi lượt khi không leo thang. Lượt hai không dùng được: tài khoản OpenAI hết tín dụng giữa chừng (sau đó `zcode eval` được sửa để dừng hẳn khi nhà cung cấp từ chối tài khoản, thay vì ghi các tác vụ còn lại là hỏng). Trong lượt một, có tác vụ mà model mạnh chỉ được gọi vào ở ba bước cuối, vì dấu hiệu kẹt chỉ đếm ghi chú của harness; từ commit `5e35ada`, cứ năm lời gọi tool lỗi cũng tính là một dấu hiệu. Thay đổi này chưa được đo, vì hết tín dụng.
 
+**Model cũ của Anthropic.** `claude-haiku-5-5` đạt 20/20. `claude-haiku-4-5` lúc đầu không chạy được qua zcode: adapter gửi tham số `effort` mà model này không nhận, mọi request trả HTTP 400. Sau khi adapter biết bỏ những phần model cũ từ chối (commit `9b32539`), nó đạt 19/20; tác vụ hỏng là `doc-state-machine`, và nguyên nhân là đề bài: quy tắc về `return` viết mơ hồ (model hiểu là áp dụng cả cho trạng thái `shipped`). Viết lại quy tắc xong, model đạt 3/3. Vì vậy kết quả 0/2 của `gpt-4o-mini` ở tác vụ này (bảng trên) được đo với đề mơ hồ và chưa đo lại được, do tài khoản OpenAI hết tín dụng.
+
 Điều chưa làm được: không có leo thang, `rust-tokenizer` và `three-bugs` chỉ đạt 1/3, và `spec-hidden-tests` 0/3 trong mọi cấu hình; ở các lần hỏng đó tôi không thấy thêm nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
 
 **Đợt 2: mức mặc định của thị trường**
