@@ -78,7 +78,9 @@ Cách đọc các con số này:
 | `search-replace` (mặc định) | 20/20 | 127 | 585.791 | 49.943 | 352 giây |
 | `hashline` | 20/20 | 114 | 495.849 | 42.601 | 298 giây |
 
-Một lần chạy mỗi bên nên chênh lệch (khoảng 10% request, 15% token) nằm trong mức dao động đã thấy giữa các lần chạy; mặc định chưa đổi. Lợi ích được kỳ vọng nhất là với model yếu, và chưa đo ở đó. Ba ký tự băm nghĩa là một dòng đã đổi vẫn giữ neo cũ với xác suất khoảng 1/4096.
+Một lần chạy mỗi bên nên chênh lệch (khoảng 10% request, 15% token) nằm trong mức dao động đã thấy giữa các lần chạy; mặc định chưa đổi.
+
+Một lượt `hame probe` sau đó trên 14 trong 20 tác vụ (cùng model) cho kết quả ngược lại: mọi định dạng đạt 14/14, nhưng `hashline` dùng 545.905 token so với 288.312 của `search-replace`. Hai lần đo trái chiều nghĩa là với `deepseek-flash` chưa có bằng chứng hashline rẻ hơn; nó ở lại như một lựa chọn, không phải khuyến nghị. Lợi ích được kỳ vọng nhất là với model yếu, và chưa đo ở đó. Ba ký tự băm nghĩa là một dòng đã đổi vẫn giữ neo cũ với xác suất khoảng 1/4096.
 
 ### Tool theo ký hiệu qua LSP (mục 7 trong bảng)
 
@@ -88,7 +90,11 @@ Một lần chạy mỗi bên nên chênh lệch (khoảng 10% request, 15% toke
 
 Thử thật với `deepseek-flash` trên một dự án Python nhỏ, hai phiên liên tiếp: phiên đầu tìm ra lệnh kiểm tra (`python3 -m pytest test_calc.py -q`) sau một lần thử lệnh sai, và file dữ kiện ghi lại lệnh đó; phiên sau dùng đúng lệnh ấy ngay trong lời gọi sửa file (4 request so với 5). Một cặp phiên, chỉ xác nhận cơ chế.
 
-Cũng từ lượt thử này, bảng ngữ cảnh theo nguồn cho thấy ở phiên ngắn phần lớn nhất là khai báo tool (khoảng 1.470 token ước tính, so với 344 của prompt hệ thống): với việc nhỏ, bộ tool rút gọn (`[model] tools = "minimal"`) là chỗ tiết kiệm rõ nhất.
+Cũng từ lượt thử này, bảng ngữ cảnh theo nguồn cho thấy ở phiên ngắn phần lớn nhất là khai báo tool (khoảng 1.470 token ước tính, so với 344 của prompt hệ thống). Tuy vậy lượt `hame probe` trên 14 tác vụ không cho thấy bộ tool rút gọn rẻ hơn (295.771 token so với 288.312 với bộ đầy đủ, một lần chạy), nên đây chỉ là chỗ đáng đo thêm.
+
+### `probe` với phần tác vụ giữ lại
+
+`hame probe evals/harder` với `deepseek-flash`: chọn cấu hình trên 14 tác vụ, giữ lại 6. Cả năm cấu hình đạt 14/14; cấu hình được chọn (`search-replace`, bộ tool đầy đủ) đạt 6/6 trên phần giữ lại.
 
 Hai kỹ thuật nữa lấy từ khảo sát đã cài nhưng chưa đo riêng: liệt kê nơi dùng khi chữ ký hàm đổi (mục 4, phần "nơi gọi"), và trạng thái bằng chứng của mỗi lượt (`passed`, `failing`, `unchecked`, `no-change`) trong kết quả của `hame run` và `hame eval`.
 
