@@ -1,147 +1,168 @@
 # hame
 
-`hame` là một agent harness viết bằng Rust: một binary duy nhất chạy mô hình ngôn ngữ như một agent lập trình trong terminal, trong editor (ACP) hoặc trong trình duyệt.
+English · [Tiếng Việt](README.vi.md)
 
-Ba ý chính của thiết kế:
+`hame` is a coding-agent harness written in Rust: one binary that runs a language model as a coding agent in your terminal, in your editor (over ACP) or in a browser.
 
-- **Log là nguồn sự thật.** Mỗi session là một file JSONL chỉ ghi thêm. Mọi thứ model nhìn thấy (prompt hệ thống, danh sách tool, tin nhắn) đều được dựng lại từ log, nên resume, fork, rewind, nén ngữ cảnh và phát lại đều dùng chung một cơ chế.
-- **Tool không chạy trong tiến trình của harness.** Mỗi lần gọi tool chạy trong một tiến trình worker bị hệ điều hành giam (Seatbelt trên macOS, Landlock trên Linux). Không giam được thì từ chối chạy.
-- **Mở rộng mà không nới quyền.** Plugin là WebAssembly và chỉ đọc được nơi bạn cấp; server MCP chạy trong cùng sandbox với tool.
+Three ideas shape the design:
 
-## Cài đặt
+- **The log is the source of truth.** Each session is an append-only JSONL file. Everything the model sees (system prompt, tool list, messages) is rebuilt from the log, so resume, fork, rewind, context compaction and replay all share one mechanism.
+- **Tools do not run inside the harness.** Every tool call runs in a worker process confined by the operating system (Seatbelt on macOS, Landlock on Linux). If hame cannot confine it, it refuses to run it.
+- **Extensions without extra privileges.** Plugins are WebAssembly and can read only what you grant; MCP servers run in the same sandbox as tools.
 
-Cần Rust 1.89 trở lên và `git`.
+What sets it apart from other harnesses:
+
+- **"Done" needs evidence.** Before a turn that changed code may end, the project's check commands must pass. If the model tries to stop with a failing test, or after changing code without running anything, it is sent back (`stop_on_red`). An optional independent reviewer can look for rules the change missed.
+- **It escalates when stuck.** After repeated failing checks or repeated calls, hame raises the reasoning effort or hands the rest of the turn to a stronger model, possibly from another provider.
+- **Edits are checked as they land.** A syntax check runs after every edit, LSP diagnostics are reported, and callers and tests of a changed signature are named.
+- **Secrets stay out of the model's reach.** Tools get stand-in values, and the egress proxy puts the real secret into requests to the hosts you name. Network access is limited to an allowlist.
+- **Cost-aware context.** The prompt keeps a stable, cached prefix. Passing tests and build progress are dropped from command output before they are logged. When the summary model is the main model, compaction reuses the conversation's cached prefix.
+- **Built-in evaluation.** `hame eval` runs task suites with hidden checks, and can run other agents on the same tasks.
+
+## Install
+
+hame needs Rust 1.89 or later, and `git`.
 
 ```sh
-cargo build --release -p hame-cli      # tạo target/release/hame
+cargo install --git https://github.com/wbcodepro/agent-harness hame-cli
+# or, from a clone:
+cargo build --release -p hame-cli      # builds target/release/hame
 ```
 
-Đặt API key vào biến môi trường hoặc file `~/.hame/.env` (hoặc `.env` trong thư mục làm việc):
+Then run `hame setup`. It asks which provider to use and for an API key; the key is not shown on screen and is saved in `~/.hame/.env`, readable only by you. It then checks the key, the sandbox, `bash` and `git`, and can send one test request that costs a few tokens. `hame doctor` runs the same checks at any time (`--ping` sends the test request).
+
+You can also put the key in the environment or in `~/.hame/.env` (or `.env` in the working directory) yourself:
 
 ```sh
-DEEPSEEK_API_KEY=...     # hoặc ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API_KEY
+DEEPSEEK_API_KEY=...     # or ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API_KEY
 ```
 
-## Dùng
+## Use
 
 ```sh
-hame                                  # giao diện terminal
-hame run "sửa lỗi làm test_stats.py thất bại"     # một lượt, không tương tác
-hame run --session <id> "tiếp tục"    # nối tiếp một session
-hame run --plan "..."                 # chỉ khảo sát và đề xuất kế hoạch, không sửa gì
-hame run --output json "..."          # một đối tượng JSON khi xong (stream-json: thêm từng sự kiện một dòng)
-hame web                              # giao diện web trên 127.0.0.1
-hame acp                              # máy chủ Agent Client Protocol cho editor
+hame setup                            # choose a provider, save its key, check everything
+hame doctor [--ping]                  # check configuration, key, sandbox and required programs
+hame                                  # terminal interface
+hame run "fix the bug that makes test_stats.py fail"   # one turn, non-interactive
+hame run --session <id> "carry on"    # continue a session
+hame run --plan "..."                 # investigate and propose a plan; change nothing
+hame run --output json "..."          # one JSON object when done (stream-json: also one event per line)
+hame web                              # web interface on 127.0.0.1
+hame acp                              # Agent Client Protocol server for editors
 hame sessions | show <id> | fork <id> | rewind <id> | recover <id>
-hame import dsh <session.jsonl>       # nhập session của DeepSeek Harness (v2–v4)
-hame eval evals/harder                # chạy bộ tác vụ, báo tỷ lệ đạt, thời gian, token (--keep <thư mục>: giữ log của tác vụ hỏng; --runs N: chạy N lần, báo tỷ lệ đạt từng tác vụ)
-hame eval evals/harder --command 'codex exec "$HAME_EVAL_PROMPT"'   # đo một agent khác trên cùng bộ
-hame eval evals/expert                # mười tác vụ khó hơn, có bộ chấm ẩn (Python, Rust, Go, Node)
-hame skill install <thư mục | URL git> [--path thư/mục/con]   # quét rồi cài một skill vào ~/.hame/skills
+hame import dsh <session.jsonl>       # import a DeepSeek Harness session (v2–v4)
+hame eval evals/harder                # run a task suite; report pass rate, time and tokens
+                                      # (--keep <dir>: keep logs of failed tasks; --runs N: N runs, per-task pass rate)
+hame eval evals/harder --command 'codex exec "$HAME_EVAL_PROMPT"'   # measure another agent on the same suite
+hame eval evals/expert                # ten harder tasks with hidden checks (Python, Rust, Go, Node)
+hame skill install <dir | git URL> [--path sub/dir]    # scan, then install a skill into ~/.hame/skills
 hame skill list
-hame plugin install <thư mục | URL git> [--path thư/mục/con]  # quét rồi cài một plugin kiểu Claude Code vào ~/.hame/plugins
-hame plugin install <marketplace> --plugin <tên>               # cài một plugin từ danh mục của một marketplace
-hame plugin update [tên]                                       # lấy lại từ nguồn, quét lại, thay bản đã cài
+hame plugin install <dir | git URL> [--path sub/dir]   # scan, then install a Claude Code style plugin into ~/.hame/plugins
+hame plugin install <marketplace> --plugin <name>      # install one plugin from a marketplace catalogue
+hame plugin update [name]                              # fetch again, rescan, replace the installed copy
 hame plugin list
-hame mcp login <server> | logout <server>   # đăng nhập OAuth vào một server MCP qua HTTP
-hame probe evals/harder --model <tên> # thử model với từng định dạng sửa file và bộ tool, in cấu hình tốt nhất
+hame mcp login <server> | logout <server>   # OAuth sign-in to an MCP server over HTTP
+hame probe evals/harder --model <name> # try a model with each edit format and tool set; print the best configuration
 ```
 
-Chọn model bằng `--provider deepseek|openai|anthropic` và `--model <tên>`, hoặc `HAME_PROVIDER` / `HAME_MODEL`. Mặc định: `deepseek-flash` với DeepSeek, `claude-opus-5-5` với Anthropic; OpenAI cần chỉ rõ model.
+Choose the model with `--provider deepseek|openai|anthropic` and `--model <name>`, or `HAME_PROVIDER` / `HAME_MODEL`. Defaults: `deepseek-flash` with DeepSeek, `claude-opus-5-5` with Anthropic; OpenAI needs a model name. Any server that speaks OpenAI's chat completions (OpenRouter, Gemini's OpenAI endpoint, Ollama, vLLM) works with `provider = "openai"`, `base_url` and `api = "chat-completions"`; `hame setup` writes this for you when you pick "another server".
 
-Cuối mỗi lần `hame run`, một dòng tổng kết in ra stderr: số token gửi đi, bao nhiêu phần trăm được đọc từ cache của nhà cung cấp, số token nhận về và số request. Nếu phần lớn prompt không được dùng lại giữa các request, hame cảnh báo.
+At the end of each `hame run`, a summary line goes to stderr: tokens sent, the share read from the provider's cache, tokens received and the number of requests. hame warns when most of the prompt was not reused between requests.
 
-Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lượt đang chạy. Gõ rồi Enter trong lúc một lượt đang chạy sẽ gửi lời nhắn đó cho chính lượt ấy: model nhận nó ở request kế tiếp, không phải đợi lượt kết thúc (qua ACP là thông báo mở rộng `_hame/steer`).
+In the terminal interface: `/plan`, `/rewind`, `/new`, `/quit`; Esc stops the running turn. Typing a message and pressing Enter while a turn runs sends it to that turn: the model gets it with its next request instead of after the turn (over ACP this is the `_hame/steer` extension notification).
 
-### Trong editor (ACP)
+### In an editor (ACP)
 
-`hame acp` nói Agent Client Protocol qua stdin/stdout.
+`hame acp` speaks the Agent Client Protocol over stdin/stdout.
 
-**IntelliJ IDEA** (AI Assistant): tạo `~/.jetbrains/acp.json` khai báo agent, rồi khởi động lại IDE và chọn `hame (local ACP)` trong AI Chat:
+**IntelliJ IDEA** (AI Assistant): create `~/.jetbrains/acp.json` declaring the agent, restart the IDE and choose `hame (local ACP)` in AI Chat:
 
 ```json
-{ "command": "/đường/dẫn/tới/hame", "args": ["acp"], "env": {} }
+{ "command": "/path/to/hame", "args": ["acp"], "env": {} }
 ```
 
-Đã kiểm trong IntelliJ IDEA 2026.1 ngày 2026-11-14, cả năm việc đều đạt: câu trả lời hiện dần và lời gọi tool hiện thành mục riêng; tạo file; dừng giữa chừng rồi hỏi tiếp; mở lại hội thoại cũ; IDE hỏi xin phép trước khi chạy lệnh shell ở chế độ `danger-full-access`.
+Tested in IntelliJ IDEA 2026.1 on 2026-11-14; all five checks passed: the answer streams in and tool calls show as their own items; creating a file; stopping midway and asking again; reopening an earlier conversation; the IDE asking for permission before a shell command in `danger-full-access` mode.
 
-**Zed:** thêm vào `~/.config/zed/settings.json`, rồi chọn `hame` trong menu External Agents:
+**Zed:** add this to `~/.config/zed/settings.json`, then choose `hame` in the External Agents menu:
 
 ```json
-{ "agent_servers": { "hame": { "type": "custom", "command": "/đường/dẫn/tới/hame", "args": ["acp"] } } }
+{ "agent_servers": { "hame": { "type": "custom", "command": "/path/to/hame", "args": ["acp"] } } }
 ```
 
-Đã kiểm trong Zed 1.28.1 ngày 2026-11-14, cũng năm việc đó đều đạt (dừng giữa chừng được kiểm bằng phím Esc; nút Stop bấm bằng chuột chưa xác nhận được). Thiếu `"type": "custom"` thì Zed không nhận agent.
+Tested in Zed 1.28.1 on 2026-11-14 with the same five checks, all passed (stopping midway was tested with Esc; the Stop button was not confirmed). Without `"type": "custom"` Zed does not pick up the agent.
 
-Máy chủ cũng được kiểm thử tự động bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
+The server is also tested automatically with the protocol's official client runtime (`agent-client-protocol`), including the permission flow.
 
-## Tool có sẵn
+## Built-in tools
 
-`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill; khi có cấu hình language server thì thêm `diagnostics`, `references` và `rename_symbol`. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
+`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
 
-`write` từ chối ghi đè một file đã tồn tại mà model chưa đọc trong phiên (nó phải đọc trước, vì nội dung file thường là thứ đề bài phụ thuộc vào); khi ghi làm file nhỏ đi quá nửa, kết quả nói rõ là cả file đã bị thay. `edit` không tìm thấy đoạn cần thay thì chỉ ra khớp tới dòng nào và khác ở đâu. `grep` ghi kèm tên hàm hoặc lớp bao quanh mỗi dòng khớp. Sau mỗi lần `edit`, `write` hay `apply_patch`, nếu file nguồn đang hợp lệ trở nên sai cú pháp thì kết quả báo ngay dòng lỗi (Python được kiểm bằng `python3` khi có; Rust, JS, TS, Go bằng tree-sitter).
+`write` refuses to overwrite an existing file the model has not read in the session (a file's content is usually what the task depends on); when a write shrinks a file by more than half, the result says the whole file was replaced. When `edit` cannot find the text to replace, it shows how far it matched and where it differs. `grep` names the function or class around each match. After every `edit`, `write` or `apply_patch`, if a valid source file has become syntactically invalid, the result points at the error (Python is checked with `python3` when present; Rust, JS, TS and Go with tree-sitter).
 
-Lệnh `bash` chưa xong khi hết `timeout_ms` (mặc định 120 giây) không bị giết mà chuyển thành tác vụ nền, vẫn trong sandbox: kết quả trả ngay phần đầu ra đã có cùng mã tác vụ, và model gọi `job_output` để chờ tiếp và đọc phần còn lại, hoặc dừng nó bằng `kill: true`. Build hay bộ test dài vì thế không phải chạy lại từ đầu. Tác vụ bị dừng khi hame thoát, hoặc sau một giờ. Lệnh test còn đang chạy nền không được tính là bằng chứng đã qua: lớp kiểm tra hoàn thành nhắc model chờ kết quả trước khi kết thúc.
+A `bash` command still running at `timeout_ms` (120 seconds by default) is not killed: it becomes a background job, still in the sandbox. The result returns the output so far and a job id; the model calls `job_output` to wait and read the rest, or stops the job with `kill: true`. A long build or test run therefore does not start over. Jobs end when hame exits, or after an hour. A test command still running in the background does not count as passing: the completion check tells the model to wait for its result before finishing.
 
-Gọi model: khi nhà cung cấp trả về `Retry-After`, hame chờ đúng thời gian đó (tối đa 60 giây, lâu hơn thì báo lỗi ngay thay vì chờ im lặng). Khi request bị từ chối vì vượt cửa sổ ngữ cảnh, hame nén lịch sử ngay (giữ nguyên khoảng một phần tư cuối) rồi gửi lại một lần.
+Model calls: when the provider sends `Retry-After`, hame waits that long (up to 60 seconds; a longer wait is reported at once instead of waited out in silence). When a request is refused because the prompt exceeds the context window, hame compacts the history at once (keeping about the last quarter verbatim) and sends it again, once.
 
-`references` và `rename_symbol` hỏi thẳng language server thay cho một chuỗi `grep` rồi `edit`: model chỉ ra symbol bằng file, số dòng và tên (không phải đếm cột). `references` liệt kê mọi nơi dùng symbol dưới dạng `path:line: nội dung dòng`, tối đa 100 dòng. `rename_symbol` đổi tên ở mọi file trong một lần gọi và trả về số chỗ sửa theo từng file; mọi chỗ sửa được tính xong trước khi ghi, và nếu có chỗ nằm ngoài thư mục làm việc hoặc server đòi đổi tên, tạo hay xoá file thì không file nào bị đổi. Khi không có server cho loại file đó, hoặc server không hỗ trợ, kết quả bảo model quay về `grep` và `edit`.
+`references` and `rename_symbol` ask the language server directly instead of a chain of `grep` and `edit`: the model names a symbol by file, line and name (no column counting). `references` lists every use as `path:line: line text`, up to 100 lines. `rename_symbol` renames across all files in one call and reports the edits per file; every edit is computed before anything is written, and if any edit falls outside the working directory, or the server asks to rename, create or delete files, no file is changed. When there is no server for the file type, or the server lacks the feature, the result tells the model to fall back to `grep` and `edit`.
 
-`edit` và `apply_patch` chấp nhận sai lệch về khoảng trắng, thụt lề và kiểu xuống dòng khi chỉ có đúng một chỗ khớp; dòng không đổi luôn giữ nguyên như trong file. Tham số gọi tool bị bọc trong code fence hoặc lẫn chữ được gỡ ra trước khi chạy.
+`edit` and `apply_patch` tolerate differences in whitespace, indentation and line endings when there is exactly one match; unchanged lines are kept exactly as they are in the file. Tool arguments wrapped in a code fence or mixed with prose are unwrapped before running.
 
-Khi tool từ server MCP và plugin nhiều hơn `defer_tools_over`, chúng không nằm trong danh sách tool gửi cho model (mỗi tool khai báo tốn token ở mọi request). Model tìm bằng `tool_search` và chạy bằng `tool_call`; luật quyền và hook vẫn thấy tên thật của tool được gọi. Khi đó còn có tool `script`: model viết một đoạn Python gọi các tool ấy như hàm (`call(tên, **tham_số)`), nên một chuỗi lời gọi chỉ tốn một bước và chỉ những gì đoạn mã in ra mới vào ngữ cảnh. Đoạn mã chạy trong sandbox như lệnh shell; từng lời gọi bên trong vẫn qua luật quyền và hook; đoạn mã nhận kết quả đầy đủ của từng lời gọi, chỉ phần nó in ra mới chịu giới hạn `spill_at_bytes`. Cần `python3` (hoặc `python`); tắt bằng `[context] scripts = false`.
+When MCP servers and plugins provide more tools than `defer_tools_over`, those tools are left out of the tool list sent to the model (each declared tool costs tokens on every request). The model finds them with `tool_search` and runs them with `tool_call`; permission rules and hooks still see the real tool name. In that case there is also a `script` tool: the model writes a short Python program that calls those tools as functions (`call(name, **args)`), so a chain of calls costs one step and only what the program prints enters the context. The program runs in the sandbox like a shell command; each call inside it still goes through permission rules and hooks; the program gets each call's full result, and only what it prints is subject to `spill_at_bytes`. Needs `python3` (or `python`); turn it off with `[context] scripts = false`.
 
-Các lời gọi chỉ đọc mà model đưa ra cùng lúc được chạy song song. `subagent` giao việc cho một agent mới có ngữ cảnh riêng; với `isolate` nó làm trên một git worktree và nhánh riêng.
+Read-only calls the model issues together run in parallel. `subagent` hands a task to a new agent with its own context; with `isolate` it works on a separate git worktree and branch.
 
-## An toàn
+## Safety
 
-Mặc định (`workspace-write`):
+By default (`workspace-write`):
 
-- Chỉ ghi được trong thư mục làm việc và thư mục tạm.
-- Không đọc được `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`…, dữ liệu riêng của hame, và các file `.env`.
-- Mạng chỉ đi qua proxy cục bộ tới danh sách tên miền cho phép.
-- Biến môi trường của harness không tới được tool; secret chỉ tới khi bạn cấp (`[secrets] grant`), và giá trị của mọi secret bị thay bằng `[secret:TÊN]` trong đầu ra tool trước khi ghi log.
-- Trước mỗi lượt và sau mỗi bước có thay đổi, workspace được lưu vào một kho git riêng ngoài dự án; `hame rewind` khôi phục file và tạo session mới dừng ngay trước lượt đó.
-- Thay đổi mà một lần gọi tool gây ra cho `.git/hooks` và `.git/config` của repo ở thư mục làm việc bị hoàn tác ngay sau lần gọi đó và model được báo (`[sandbox] protect_git = false` để tắt). Đây là phát hiện rồi hoàn tác, không phải ngăn chặn: hook vẫn tồn tại trong lúc lệnh đang chạy. Repo do chính lần gọi đó tạo ra (`git init`) không được bảo vệ.
-- Luật quyền cho `bash` được so với từng lệnh trong dòng (các phần ngăn bởi `;`, `&&`, `||`, `|`, phần trong `$(...)` và backtick, lệnh sau `sudo`/`env`…): luật `deny`/`ask` có hiệu lực dù lệnh nằm ở đâu trong dòng, còn luật `allow` chỉ áp dụng khi mọi lệnh trong dòng đều được cho phép. Bộ tách lệnh không phải là một trình phân tích shell đầy đủ.
-- Với `[approval] reviewer = true`, một model thứ hai xem từng lời gọi cần xin phép (chỉ thấy tên tool, tham số và thư mục làm việc, không thấy hội thoại) và chỉ tự đồng ý khi lời gọi rõ ràng vô hại; mọi trường hợp khác, kể cả khi nó trả lời không rõ, vẫn được hỏi bạn. Mọi phán quyết được ghi vào `~/.hame/approvals.jsonl`. Đây là một model, có thể phán sai: nó giảm số lần bị hỏi, không thay cho sandbox.
+- Tools can write only in the working directory and the temp directories.
+- They cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`..., hame's own data, or `.env` files.
+- The network goes only through a local proxy, to an allowlist of domains.
+- The harness's environment variables do not reach tools; a secret reaches them only when you grant it (`[secrets] grant`), and the value of every secret is replaced by `[secret:NAME]` in tool output before it is logged.
+- Before each turn and after each step that changed something, the workspace is saved to a separate git store outside the project; `hame rewind` restores the files and starts a new session that ends just before that turn.
+- Changes a tool call makes to `.git/hooks` and `.git/config` of the repository in the working directory are undone right after that call, and the model is told (`[sandbox] protect_git = false` turns this off). This is detection and undo, not prevention: a hook exists while the command runs. A repository the call itself created (`git init`) is not protected.
+- Permission rules for `bash` are matched against each command in the line (the parts separated by `;`, `&&`, `||`, `|`, the contents of `$(...)` and backticks, the command after `sudo`/`env`...): a `deny`/`ask` rule applies wherever the command appears, and an `allow` rule applies only when every command in the line is allowed. The splitter is not a full shell parser.
+- With `[approval] reviewer = true`, a second model looks at each call that needs permission (it sees only the tool name, arguments and working directory, not the conversation) and approves on its own only calls that are clearly harmless; everything else, including unclear answers, is still asked of you. Every verdict is logged to `~/.hame/approvals.jsonl`. It is a model and can be wrong: it reduces how often you are asked; it does not replace the sandbox.
+- With `[secrets] substitute`, a secret never enters the sandbox: the tool's environment holds a stand-in, and the network proxy replaces it with the real secret in the request head (request line and headers, including `Authorization: Basic`) sent to the hosts you name. For HTTPS the proxy must read the request, so it terminates the tool's TLS connection for those hosts only, with a root certificate generated for this run, and opens its own verified TLS connection to the real host; other hosts are passed through untouched. Tools are pointed at that root certificate through `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` and `NODE_EXTRA_CA_CERTS`; programs that read none of them refuse to connect to that host. A request body is also substituted when it declares `Content-Length` and is at most 1 MiB (the length is corrected). Limits: chunked or larger bodies pass through untouched; over plain HTTP only the head is substituted; HTTP/1.1 only; one request per connection; a host you name that echoes headers back would return the secret in output (where it is masked like every secret). The certificate list given to tools is the operating system's store plus the proxy's certificate.
 
-- Với `[secrets] substitute`, secret không vào sandbox: biến môi trường của tool chứa một giá trị giả, và proxy mạng thay nó bằng secret thật trong phần đầu của request (dòng request và header, kể cả `Authorization: Basic`) gửi tới đúng các host bạn nêu. Với HTTPS, proxy phải đọc được request nên nó tự kết thúc kết nối TLS của tool cho riêng các host đó, bằng một chứng chỉ gốc sinh ra cho lần chạy này, rồi mở kết nối TLS đã xác thực của nó tới host thật; các host khác vẫn được chuyển tiếp nguyên vẹn. Tool được trỏ tới chứng chỉ gốc ấy qua `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` và `NODE_EXTRA_CA_CERTS`; chương trình không đọc các biến này sẽ từ chối kết nối tới host đó. Thân request cũng được thay khi nó khai báo `Content-Length` và không quá 1 MiB (độ dài được sửa lại cho khớp). Giới hạn: thân gửi kiểu chunked hoặc lớn hơn thì đi qua nguyên vẹn; với HTTP không mã hóa chỉ phần đầu được thay; chỉ HTTP/1.1; mỗi kết nối một request; một host bạn nêu mà lại gửi trả header thì secret sẽ quay về đầu ra (và bị che như mọi secret). Danh sách chứng chỉ trao cho tool được lấy từ kho chứng chỉ của hệ điều hành, cộng thêm chứng chỉ của proxy.
+`--sandbox read-only` forbids writes; `--sandbox danger-full-access` removes confinement, and then every tool that is not read-only needs your approval.
 
-`--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
+Known limits:
 
-Giới hạn cần biết:
+- The temp directories are writable by default (`[sandbox] writable_tmp = false` turns that off). A project inside `/tmp` can write to its sibling directories.
+- On Linux, Landlock cannot hide files by name: a `.env` inside the workspace stays readable (its values are still masked in the log); the parent directory of a hidden path cannot be listed; the network is limited by TCP port, and UDP is not blocked. Needs Linux 6.7 or later.
+- On Windows only **writes** are confined: the process running tools is lowered to Low integrity, so it can write only in the project directory and a private temp directory (`AppData\LocalLow\hame-tmp`). Tools can still read every file you can and reach the network, so this must be accepted explicitly with `allow_partial = true` under `[sandbox]` (`hame setup` asks); otherwise the confined modes refuse to start. The project directory is labelled Low permanently (other Low programs of the same user can write to it too). `AppData\LocalLow` is writable as well, since Windows labels it Low. Files or directories **moved** (not copied) into the project after the first run keep their old label and cannot be changed by tools; relabel with `icacls <project dir> /setintegritylevel "(OI)(CI)L" /T`. The `bash` tool uses Git for Windows' bash, found through `git` on PATH. That bash keeps state shared per installation: while another Git Bash is open outside the sandbox, bash inside it cannot start (the tool says so); close it, or set `HAME_BASH` to the `bash.exe` of a second Git installation used only by hame. The network proxy cannot be enforced on Windows; it starts only with `[secrets] substitute`, and only programs that honour the proxy variables use it (Python, Node, git; the curl shipped with Git for Windows rejects the proxy's certificate). A program that bypasses the proxy can reach any host but only holds the stand-in. Tested on GitHub Actions and on a real Windows 11 machine; results and what is untested are in `docs/WINDOWS-RESULTS.md`.
+- This software has not had a security audit. For untrusted code, run it in a virtual machine or container. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-- Thư mục tạm ghi được theo mặc định (`[sandbox] writable_tmp = false` để tắt). Dự án nằm trong `/tmp` sẽ ghi được sang các thư mục anh em.
-- Trên Linux, Landlock không ẩn được file theo tên: `.env` trong workspace vẫn đọc được (giá trị vẫn bị che trong log); thư mục cha của một đường dẫn bị ẩn không liệt kê được; giới hạn mạng theo cổng TCP, UDP không bị chặn. Cần Linux 6.7 trở lên.
-- Windows chỉ giam được việc **ghi**: tiến trình chạy tool bị hạ xuống mức toàn vẹn Low nên chỉ ghi được trong thư mục dự án và một thư mục tạm riêng (`AppData\LocalLow\hame-tmp`). Tool vẫn đọc được mọi file bạn đọc được và vẫn ra mạng được, nên phải bật rõ ràng bằng `allow_partial = true` trong `[sandbox]`; không bật thì các chế độ giam từ chối khởi động. Thư mục dự án được gắn nhãn Low vĩnh viễn (chương trình Low khác của cùng người dùng cũng ghi được vào đó). Cả `AppData\LocalLow` cũng ghi được, vì Windows gắn sẵn nhãn Low cho nó. File hoặc thư mục được **chuyển** (không phải chép) vào dự án sau lần chạy đầu giữ nhãn cũ nên tool không sửa được; gắn lại bằng `icacls <thư mục dự án> /setintegritylevel "(OI)(CI)L" /T`. Tool `bash` dùng bash của Git for Windows, tìm theo `git` trên PATH. Bash đó giữ trạng thái dùng chung theo từng bản cài: khi một Git Bash khác đang mở ngoài sandbox, bash trong sandbox không khởi động được (tool sẽ báo rõ); đóng nó lại, hoặc đặt biến môi trường `HAME_BASH` trỏ tới `bash.exe` của một bản Git thứ hai chỉ dành cho hame. Proxy mạng không ép được trên Windows; nó chỉ được bật khi có `[secrets] substitute`, và chỉ có tác dụng với chương trình tuân theo biến proxy (Python, Node, git; curl đi kèm Git for Windows từ chối chứng chỉ của proxy). Chương trình đi vòng proxy tới được mọi host nhưng chỉ cầm giá trị giả. Đã kiểm trên GitHub Actions và trên một máy Windows 11 thật; kết quả và những gì chưa kiểm ở `docs/WINDOWS-RESULTS.md`.
-- Phần mềm này chưa qua kiểm toán bảo mật. Với mã không tin cậy, hãy chạy trong máy ảo hoặc container.
+## Configuration
 
-## Cấu hình
-
-`~/.hame/config.toml`. Mọi mục đều tùy chọn; khóa lạ là lỗi.
+`~/.hame/config.toml`. Every entry is optional; unknown keys are errors.
 
 ```toml
 [model]
 provider = "anthropic"          # deepseek | openai | anthropic
 name = "claude-opus-5-5"
-effort = "high"                 # mức suy luận (Anthropic, OpenAI)
-api = "responses"               # với openai: responses (mặc định) | chat-completions
-summary_model = "claude-haiku-5-5"   # model rẻ hơn để tóm tắt lịch sử
-tools = "full"                  # full | minimal (chỉ file, tìm kiếm, shell; cho model nhỏ)
-edit_format = "search-replace"  # search-replace | whole-file | apply-patch | hashline (read gắn mã băm ngắn vào từng dòng; edit_lines sửa theo mã đó, và từ chối khi file đã đổi)
-max_tool_calls = 32             # số lời gọi tool tối đa trong một phản hồi
-fuse_actions = true             # edit/edit_lines/write/apply_patch nhận tham số then_run: lệnh chạy ngay sau khi sửa, kết quả trả về cùng lời gọi
-temperature = 0.0               # chỉ với API chat-completions (DeepSeek, máy chủ tương thích, model chạy tại chỗ)
-escalate_to = "claude-fable-5-2"     # model mạnh hơn tiếp quản phần còn lại của lượt khi model chính kẹt
-escalate_provider = "anthropic"      # tùy chọn: model mạnh thuộc nhà cung cấp khác (ví dụ model chính chạy tại chỗ)
-escalate_effort = "high"             # không kèm escalate_to: vẫn model đó nhưng suy luận kỹ hơn khi lượt bị kẹt, nên có thể đặt effort thấp cho việc thường ngày
-escalate_after = 2              # sau bấy nhiêu lần kiểm tra hỏng hoặc gọi lặp trong một lượt
+effort = "high"                 # reasoning effort (Anthropic, OpenAI)
+api = "responses"               # with openai: responses (default) | chat-completions
+base_url = "https://openrouter.ai/api/v1"   # a compatible server instead of the provider's own
+summary_model = "claude-haiku-5-5"   # a cheaper model for summarizing history
+tools = "full"                  # full | minimal (files, search and shell only; for small models)
+edit_format = "search-replace"  # search-replace | whole-file | apply-patch | hashline (read tags each line with a short
+                                # hash; edit_lines edits by those tags and refuses when the file has changed)
+max_tool_calls = 32             # most tool calls in one response
+fuse_actions = true             # edit/edit_lines/write/apply_patch take then_run: a command run right after the
+                                # change, its result returned with the same call
+temperature = 0.0               # chat-completions API only (DeepSeek, compatible servers, local models)
+escalate_to = "claude-fable-5-2"     # a stronger model takes over the rest of the turn when the main one is stuck
+escalate_provider = "anthropic"      # optional: the stronger model is at another provider (e.g. the main one is local)
+escalate_effort = "high"             # without escalate_to: same model, more reasoning when the turn is stuck,
+                                     # so everyday effort can be set low
+escalate_after = 2              # after this many failing checks or repeated calls in a turn
 
 [sandbox]
 mode = "workspace-write"        # read-only | workspace-write | danger-full-access
-allow_partial = false           # Windows: chấp nhận chỉ giam việc ghi
-protect_git = true              # hoàn tác thay đổi của tool vào .git/hooks và .git/config
+allow_partial = false           # Windows: accept confining writes only
+protect_git = true              # undo tool changes to .git/hooks and .git/config
 writable = ["/data/cache"]
 unreadable = ["/data/private"]
 
@@ -149,113 +170,120 @@ unreadable = ["/data/private"]
 mode = "allowlist"              # off | allowlist | open
 allow = ["github.com", "*.crates.io"]
 
-[[rule]]                        # luật đầu tiên khớp sẽ thắng
+[[rule]]                        # the first matching rule wins
 tool = "bash"
 pattern = "git push*"
 action = "ask"                  # allow | ask | deny
 
 [approval]
-default = "ask"                 # với lời gọi không luật nào khớp: allow | ask | deny
-reviewer = false                # true: một model (summary_model) trả lời câu hỏi xin phép trước;
-                                # nó chỉ có thể đồng ý với lệnh rõ ràng vô hại, còn lại vẫn hỏi bạn
+default = "ask"                 # for calls no rule matches: allow | ask | deny
+reviewer = false                # true: a model (summary_model) answers permission questions first;
+                                # it can only approve clearly harmless commands, the rest still ask you
 
 [secrets]
-grant = ["GITHUB_TOKEN"]        # trao thẳng secret cho tool
-substitute = { NPM_TOKEN = ["registry.npmjs.org"] }   # tool chỉ nhận giá trị giả; proxy thay bằng secret thật
-                                # trong request tới các host này (cần [network] mode = "allowlist")
+grant = ["GITHUB_TOKEN"]        # give a secret to tools as is
+substitute = { NPM_TOKEN = ["registry.npmjs.org"] }   # tools get a stand-in; the proxy puts the real secret
+                                # into requests to these hosts (needs [network] mode = "allowlist")
 
 [context]
-compact_at_tokens = 100000      # tóm tắt phần lịch sử cũ khi vượt ngưỡng
-clear_tool_results = false      # true: vượt ngưỡng thì xóa kết quả tool cũ trước, chưa đủ mới tóm tắt
-spill_at_bytes = 16000          # đầu ra dài hơn thì lưu ra file, chỉ xem trước
-project_facts = true            # nhớ theo từng dự án lệnh kiểm tra đã đạt lần trước và lệnh không có trên máy, báo cho phiên sau (~/.hame/facts/)
-dedupe_results = true           # kết quả tool giống hệt một kết quả trước còn trong ngữ cảnh thì chỉ ghi một dòng trỏ tới kết quả đó
-condense_output = true          # bỏ dòng test đạt và tiến trình build khỏi đầu ra lệnh; dòng lỗi và tổng kết giữ nguyên văn, bản đầy đủ lưu ra file
-defer_tools_over = 20           # nhiều tool MCP/plugin hơn số này thì không khai báo cho model;
-                                # model tìm bằng tool_search và chạy bằng tool_call
+compact_at_tokens = 100000      # summarize older history past this size
+clear_tool_results = false      # true: past the threshold, clear old tool results first, summarize only if not enough
+spill_at_bytes = 16000          # longer output is saved to a file and only previewed
+project_facts = true            # remember per project which check passed last time and which commands are
+                                # missing, and tell the next session (~/.hame/facts/)
+dedupe_results = true           # a tool result identical to one still in context is replaced by a pointer to it
+condense_output = true          # drop passing-test and build-progress lines from command output; errors and
+                                # summaries stay verbatim, the full output is saved to a file
+defer_tools_over = 20           # with more MCP/plugin tools than this, they are not declared to the model;
+                                # it finds them with tool_search and runs them with tool_call
 
 [verify]
-commands = ["cargo test -q"]    # phải đạt trước khi một lượt có sửa file được kết thúc
-checklist = false               # true: trước khi kết thúc, yêu cầu model rà lại từng điểm của đề bài
-stop_on_red = true              # model định dừng khi lệnh test/build cuối cùng còn hỏng, hoặc khi vừa sửa mã nguồn
-                                # mà chưa chạy gì: nhắc nó làm tiếp (tối đa 2 lần mỗi lượt)
-review = false                  # true: trước khi kết thúc, một agent mới (chỉ thấy đề bài và file) dò những luật
-                                # dễ sót rồi báo vi phạm cho model sửa; một lần mỗi lượt, tốn thêm token của agent đó
+commands = ["cargo test -q"]    # must pass before a turn that changed files may end
+checklist = false               # true: before finishing, the model goes through each point of the request
+stop_on_red = true              # when the model means to stop with the last test/build still failing, or right
+                                # after changing source without running anything: send it back (twice per turn at most)
+review = false                  # true: before finishing, a fresh agent (seeing only the request and the files)
+                                # looks for easily missed rules and reports violations to the model; once per turn,
+                                # costs that agent's tokens
 
 [limits]
-tree_tokens = 2000000           # ngân sách token cho agent và mọi subagent; 0 = không giới hạn
+tree_tokens = 2000000           # token budget for the agent and all its subagents; 0 = unlimited
 subagent_depth = 1
-max_steps = 100                 # số request tối đa trong một lượt (hame run --max-steps ghi đè)
+max_steps = 100                 # most requests in one turn (hame run --max-steps overrides)
 
-[mcp.docs]                      # server MCP (stdio); mặc định chạy trong sandbox
+[mcp.docs]                      # an MCP server (stdio); runs in the sandbox by default
 command = "docs-server"
 args = ["--stdio"]
 
-[mcp.tracker]                   # server MCP qua HTTP (streamable HTTP)
+[mcp.tracker]                   # an MCP server over HTTP (streamable HTTP)
 url = "https://mcp.example.com/mcp"
-headers = { Authorization = "Bearer $TRACKER_TOKEN" }   # $TÊN lấy từ biến môi trường hoặc file .env
+headers = { Authorization = "Bearer $TRACKER_TOKEN" }   # $NAME comes from the environment or a .env file
 
-[lsp.rust]                      # language server cho `diagnostics`, `references`, `rename_symbol`
+[lsp.rust]                      # language server for `diagnostics`, `references`, `rename_symbol`
 command = "rust-analyzer"
 extensions = ["rs"]
 
-[[hook]]                        # lệnh chạy quanh mỗi lần gọi tool; thoát mã 2 = phản đối
+[[hook]]                        # a command run around each tool call; exit code 2 = objection
 event = "pre_tool"
 tool = "bash"
 command = "./scripts/check-command.sh"
 
 [compat]
-claude_hooks = ["user"]         # chạy hooks viết cho Claude Code: "user" = ~/.claude/settings.json,
-                                # "project" = .claude/settings(.local).json của dự án; mặc định không chạy
-claude_plugins = ["/đường/dẫn/tới/plugin"]   # plugin đóng gói cho Claude Code: nạp skills, hooks và server MCP của nó
+claude_hooks = ["user"]         # run hooks written for Claude Code: "user" = ~/.claude/settings.json,
+                                # "project" = the project's .claude/settings(.local).json; off by default
+claude_plugins = ["/path/to/plugin"]   # plugins packaged for Claude Code: load their skills, hooks and MCP servers
 
-[plugin.wc]                     # plugin WebAssembly và nơi nó được đọc
+[plugin.wc]                     # a WebAssembly plugin and what it may read
 path = "plugins/wordcount.wasm"
 read = ["docs"]
 ```
 
-Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, hoặc cùng một lời gọi thất bại bốn lần mà chưa lần nào đạt, kết quả kèm một ghi chú báo cho model biết nó đang kẹt (ghi chú này cũng được tính khi quyết định leo thang). Từ lần thứ năm liên tiếp giống hệt, lời gọi không được chạy nữa (kể cả lệnh thăm dò trạng thái lặp lại y nguyên). Ba request trước khi lượt hết số bước, model được báo để kịp tổng kết. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
+When a tool call repeats exactly and returns the same result three times in a row, or the same call fails four times without ever succeeding, its result carries a note telling the model it is stuck (the note also counts toward escalation). From the fifth identical call in a row, the call is no longer run (polling commands repeated verbatim included). Three requests before a turn runs out of steps, the model is told so it can wrap up. Every model switch (escalation, and the return at the next turn) is logged.
 
-MCP: server stdio chạy trong sandbox; server HTTP được gọi từ tiến trình hame, xác thực bằng header tĩnh. Client nói được cả các bản có bắt tay (`initialize`, tới `2025-06-18`) lẫn bản không trạng thái `2026-07-28`: nó bắt tay kiểu cũ trước, và khi server từ chối thì hỏi `server/discover` rồi gửi phiên bản, danh tính cùng các header `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` trên từng request. Server dùng OAuth: `hame mcp login <tên>` tìm máy chủ cấp quyền từ chính server, tự đăng ký client, mở trình duyệt để bạn đăng nhập (authorization code với PKCE) và lưu token vào `~/.hame/mcp-auth/` (chỉ bạn đọc được); token được làm mới khi một phiên bắt đầu, không làm mới giữa phiên. Luồng này đã chạy trọn với một nhà cung cấp thật (server MCP của Notion, ngày 2026-11-14): đăng ký client, đăng nhập, dùng token, làm mới token hết hạn và đăng xuất. Với máy chủ cấp quyền không cho client tự đăng ký, đăng ký hame với nhà cung cấp rồi đặt `oauth_client_id` (và `oauth_redirect_port`, cổng của địa chỉ chuyển hướng `http://127.0.0.1:<cổng>/callback`) trong mục `[mcp.<tên>]`. Chưa hỗ trợ: những gì server muốn hỏi ngược lại (sampling, elicitation, roots) hay chạy thành tác vụ nền; gặp các trường hợp đó tool báo lỗi rõ ràng. Cả hai đường đã được kiểm với server dựng bằng SDK MCP chính thức (gói `mcp` 2.3.0), qua stdio và qua HTTP. Đặt `protocol = "2026-07-28"` trong mục `[mcp.<tên>]` để đi thẳng tới bản không trạng thái mà không thử bắt tay cũ.
+MCP: stdio servers run in the sandbox; HTTP servers are called from the hame process and authenticated with static headers. The client speaks both the handshake versions (`initialize`, up to `2025-06-18`) and the stateless `2026-07-28` version: it tries the old handshake first, and when the server refuses, asks `server/discover` and then sends the version, identity and the `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*` headers on each request. For servers that use OAuth, `hame mcp login <name>` finds the authorization server from the server itself, registers a client, opens the browser for you to sign in (authorization code with PKCE) and stores the token in `~/.hame/mcp-auth/` (readable only by you); tokens are refreshed when a session starts, not during one. This flow ran end to end with a real provider (Notion's MCP server, 2026-11-14): client registration, sign-in, token use, refresh of an expired token, and sign-out. For an authorization server that does not allow dynamic registration, register hame with the provider and set `oauth_client_id` (and `oauth_redirect_port`, the port of the redirect address `http://127.0.0.1:<port>/callback`) under `[mcp.<name>]`. Not supported yet: requests from the server back to the client (sampling, elicitation, roots) and running as background tasks; tools report these clearly. Both transports were tested against a server built with the official MCP SDK (`mcp` package 2.3.0), over stdio and over HTTP. Set `protocol = "2026-07-28"` under `[mcp.<name>]` to go straight to the stateless version without trying the old handshake.
 
-Hooks của Claude Code: hame đọc cùng file `settings.json` và nói cùng giao thức (JSON qua stdin, mã thoát 2 để chặn, JSON trên stdout) cho các sự kiện `PreToolUse`, `PostToolUse`, `UserPromptSubmit` và `Stop`, với hook loại `command`, `matcher` và `if`. Tên tool và tham số được đổi sang dạng Claude Code (`Bash`, `Edit`, `file_path`…). Sự kiện và loại hook khác được báo một lần lúc khởi động rồi bỏ qua. Khác biệt cần biết: hook chạy lần lượt chứ không song song; `permissionDecision: "ask"` bị coi là chặn; `"allow"` không bỏ qua luật quyền của hame; `tool_response` chỉ có trường `output`; `transcript_path` trỏ tới log của hame, không cùng định dạng với Claude Code. Hook chạy ngoài sandbox, nên chỉ bật `"project"` với repo bạn tin.
+Claude Code hooks: hame reads the same `settings.json` files and speaks the same protocol (JSON on stdin, exit code 2 to block, JSON on stdout) for the `PreToolUse`, `PostToolUse`, `UserPromptSubmit` and `Stop` events, with `command` hooks, `matcher` and `if`. Tool names and arguments are translated to Claude Code's (`Bash`, `Edit`, `file_path`...). Other events and hook types are reported once at startup and then ignored. Differences to know: hooks run one after another, not in parallel; `permissionDecision: "ask"` is treated as a block; `"allow"` does not bypass hame's permission rules; `tool_response` has only an `output` field; `transcript_path` points at hame's log, which is not in Claude Code's format. Hooks run outside the sandbox, so enable `"project"` only for repositories you trust.
 
-Plugin của Claude Code: với mỗi plugin đã cài bằng `hame plugin install` (nằm trong `~/.hame/plugins`) và mỗi thư mục trong `claude_plugins`, hame nạp `skills/`, `commands/`, `agents/`, `hooks/hooks.json` (kể cả biến `${CLAUDE_PLUGIN_ROOT}`) và các server trong `.mcp.json` (stdio và HTTP; tool mang tên `mcp__<plugin>_<server>__<tool>`). Trình cài quét toàn bộ plugin như với skill và nói rõ khi plugin có hook hoặc server MCP. Nguồn cài có thể là một marketplace (thư mục hoặc kho git có `.claude-plugin/marketplace.json`): chọn plugin bằng `--plugin`; mục trỏ sang kho git khác được lấy đúng commit mà danh mục ghim. `hame plugin update` lấy lại từ nguồn đã ghi nhớ và quét lại trước khi thay; không có cập nhật tự động. Chưa hỗ trợ: các phần khác của plugin (output style, theme, LSP) và plugin phân phối bằng lệnh cài riêng.
+Claude Code plugins: for each plugin installed with `hame plugin install` (in `~/.hame/plugins`) and each directory in `claude_plugins`, hame loads `skills/`, `commands/`, `agents/`, `hooks/hooks.json` (including `${CLAUDE_PLUGIN_ROOT}`) and the servers in `.mcp.json` (stdio and HTTP; tools are named `mcp__<plugin>_<server>__<tool>`). The installer scans the whole plugin as it does skills, and says when a plugin has hooks or MCP servers. The source can be a marketplace (a directory or git repository with `.claude-plugin/marketplace.json`): choose the plugin with `--plugin`; entries that point at another git repository are fetched at the commit the catalogue pins. `hame plugin update` fetches again from the remembered source and rescans before replacing; there are no automatic updates. Not supported: other plugin parts (output styles, themes, LSP) and plugins distributed through their own installers.
 
-Lệnh và loại subagent: file `commands/<tên>.md` trong `.hame/`, `.claude/`, `~/.hame/` hoặc trong plugin là một prompt gọi bằng `/<tên> tham số` (hỗ trợ `$ARGUMENTS`, `$1`…`$9`), dùng được với `hame run`, giao diện terminal và ACP. File `agents/<tên>.md` (front matter `name`, `description`, `tools`) định nghĩa một loại subagent mà model chọn qua tham số `agent` của tool `subagent`; nó chạy với chỉ dẫn trong file và, nếu có `tools`, chỉ với các tool đó.
+Commands and subagent kinds: a file `commands/<name>.md` in `.hame/`, `.claude/`, `~/.hame/` or a plugin is a prompt invoked as `/<name> args` (with `$ARGUMENTS`, `$1`...`$9`), usable from `hame run`, the terminal interface and ACP. A file `agents/<name>.md` (front matter `name`, `description`, `tools`) defines a kind of subagent the model picks through the `agent` argument of the `subagent` tool; it runs with the file's instructions and, if `tools` is given, only those tools.
 
-Dự án có thể tự khai báo lệnh kiểm tra trong `.hame/config.toml` (chỉ mục `[verify]`; một repo không được phép nới sandbox). `AGENTS.md` và `CLAUDE.md` của dự án, cùng `~/.hame/AGENTS.md`, được nối vào prompt hệ thống. Skill đặt ở `.hame/skills/<tên>/SKILL.md`, `.claude/skills/` hoặc `~/.hame/skills/`.
+A project can declare its own check commands in `.hame/config.toml` (the `[verify]` section only; a repository cannot loosen the sandbox). The project's `AGENTS.md` and `CLAUDE.md`, and `~/.hame/AGENTS.md`, are appended to the system prompt. Skills live in `.hame/skills/<name>/SKILL.md`, `.claude/skills/` or `~/.hame/skills/`.
 
-`hame skill install` đọc mọi file của skill trước khi chép: ký tự vô hình, câu bảo model bỏ chỉ dẫn hoặc giấu người dùng, lệnh tải về rồi đưa thẳng vào shell, mã ẩn trong base64, đường dẫn tới khóa và file bí mật, symlink. Thấy dấu hiệu nguy hiểm thì không cài, trừ khi bạn thêm `--force`. Đây là so mẫu, không phải chứng minh: quét sạch nghĩa là không thấy các mánh đã biết, không có nghĩa skill an toàn.
+`hame skill install` reads every file of a skill before copying it: invisible characters, sentences telling the model to ignore instructions or hide things from the user, commands that download and pipe straight into a shell, code hidden in base64, paths to keys and secret files, symlinks. When it sees danger signs it does not install unless you add `--force`. This is pattern matching, not proof: a clean scan means no known trick was found, not that the skill is safe.
 
-Plugin mẫu và mô tả ABI: `plugins/wordcount`.
+Example plugin and ABI description: `plugins/wordcount`.
 
-## Cấu trúc mã
+## Code layout
 
-| Crate | Việc |
+| Crate | Job |
 |---|---|
-| `hame-kernel` | Registry service, bus sự kiện, chuỗi middleware |
-| `hame-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection |
-| `hame-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích) |
-| `hame-tools` | Tool có sẵn và trait `Tool` |
-| `hame-agent` | Vòng turn/step, hook, checkpoint |
-| `hame-sandbox` | Chính sách, Seatbelt (macOS), Landlock (Linux), mức toàn vẹn (Windows), worker, proxy egress |
-| `hame-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
-| `hame-checkpoint` | Checkpoint workspace bằng kho git riêng |
-| `hame-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
-| `hame-verify` | Cổng kiểm chứng trước khi kết thúc lượt; phát hiện lặp; leo thang model |
-| `hame-ext` | MCP, LSP (chẩn đoán, tìm nơi dùng, đổi tên symbol), skills, hooks, plugin WebAssembly |
-| `hame-multi` | Subagent, worktree, bảng việc, ngân sách chung |
-| `hame-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
-| `hame-acp` | Máy chủ Agent Client Protocol; giao diện terminal cũng là một client của nó |
-| `hame-tui`, `hame-web`, `hame-cli` | Các giao diện |
-| `hame-eval` | Model giả phát lại bản ghi, cho test và eval |
+| `hame-kernel` | Service registry, event bus, middleware chain |
+| `hame-session` | Event schema, JSONL store, crash recovery, fork, projection |
+| `hame-llm` | Adapters for OpenAI Responses, Anthropic Messages and chat completions (DeepSeek, compatible servers) |
+| `hame-tools` | Built-in tools and the `Tool` trait |
+| `hame-agent` | Turn/step loop, hooks, checkpoints |
+| `hame-sandbox` | Policy, Seatbelt (macOS), Landlock (Linux), integrity levels (Windows), worker, egress proxy |
+| `hame-policy` | Configuration, permission rules, approval, secret masking |
+| `hame-checkpoint` | Workspace checkpoints in a separate git store |
+| `hame-context` | Output spilling, context compaction, project instructions |
+| `hame-verify` | Completion gate before a turn ends; loop detection; model escalation |
+| `hame-ext` | MCP, LSP (diagnostics, references, symbol rename), skills, hooks, WebAssembly plugins |
+| `hame-multi` | Subagents, worktrees, task board, shared budget |
+| `hame-app` | Assembles a complete agent from configuration; session import |
+| `hame-acp` | Agent Client Protocol server; the terminal interface is also a client of it |
+| `hame-tui`, `hame-web`, `hame-cli` | The interfaces |
+| `hame-eval` | Scripted model that replays recordings, for tests and evals |
 
-## Phát triển
+## Development
 
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Test của plugin cần `rustup target add wasm32-unknown-unknown`; một số test cần `python3` và `git`. Đặt `HAME_SCRIPT=<file.jsonl>` để `hame` phát lại phản hồi đã ghi thay vì gọi nhà cung cấp.
+Plugin tests need `rustup target add wasm32-unknown-unknown`; some tests need `python3` and `git`. Set `HAME_SCRIPT=<file.jsonl>` to make `hame` replay recorded responses instead of calling a provider. See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+MIT; see [LICENSE](LICENSE).

@@ -57,11 +57,19 @@ impl Provider {
     }
 
     /// Environment variables (or secrets) searched for the key, in order.
-    fn key_names(self) -> &'static [&'static str] {
+    pub fn key_names(self) -> &'static [&'static str] {
         match self {
             Self::Deepseek => &["DEEPSEEK_API_KEY"],
             Self::Openai => &["OPENAI_API_KEY"],
             Self::Anthropic => &["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Deepseek => "deepseek",
+            Self::Openai => "openai",
+            Self::Anthropic => "anthropic",
         }
     }
 
@@ -940,6 +948,142 @@ struct Stronger {
     llm: Arc<dyn Llm>,
 }
 
+/// The provider, model and key a session would use, before anything is
+/// sent.
+pub struct ChosenModel {
+    pub provider: Provider,
+    /// Where the provider was decided: a flag, the environment, the
+    /// configuration, or the first key found.
+    pub provider_from: &'static str,
+    /// The variable the key was found under; never the key itself.
+    pub key_name: String,
+    api_key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+/// Every name hame looks for a key under, for messages.
+pub const KEY_NAMES: &str =
+    "DEEPSEEK_API_KEY, ANTHROPIC_API_KEY (or CLAUDE_API_KEY), OPENAI_API_KEY";
+
+/// Decides the provider, model and key from flags, environment,
+/// configuration and the keys that exist.
+pub fn choose_model(
+    config: &Config,
+    secrets: &Secrets,
+    options: &Options,
+) -> Result<ChosenModel, String> {
+    let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let lookup = |name: &str| env(name).or_else(|| secrets.get(name).map(String::from));
+
+    let (named, provider_from) = match (&options.provider, env("HAME_PROVIDER")) {
+        (Some(name), _) => (Some(name.clone()), "--provider"),
+        (None, Some(name)) => (Some(name), "HAME_PROVIDER"),
+        (None, None) => (
+            config.model.provider.clone(),
+            "[model] provider in config.toml",
+        ),
+    };
+    let (provider, provider_from) = match named {
+        Some(name) => (Provider::parse(&name)?, provider_from),
+        // Whichever provider there is a key for.
+        None => {
+            let found = [Provider::Deepseek, Provider::Anthropic, Provider::Openai]
+                .into_iter()
+                .find(|provider| {
+                    provider
+                        .key_names()
+                        .iter()
+                        .any(|name| lookup(name).is_some())
+                });
+            match found {
+                Some(provider) => (provider, "the first provider with a key"),
+                None if config.model.api_key_env.is_none() && env("HAME_API_KEY").is_none() => {
+                    return Err(format!(
+                        "no API key found. Put one of {KEY_NAMES} in the environment or in \
+                         ~/.hame/.env (or $HAME_HOME/.env), or run `hame setup`, which asks \
+                         for one and saves it there"
+                    ));
+                }
+                None => (Provider::Deepseek, "the default"),
+            }
+        }
+    };
+
+    let key_names: Vec<&str> = match &config.model.api_key_env {
+        Some(name) => vec![name.as_str()],
+        None => std::iter::once("HAME_API_KEY")
+            .chain(provider.key_names().iter().copied())
+            .collect(),
+    };
+    let (key_name, api_key) = key_names
+        .iter()
+        .find_map(|name| lookup(name).map(|key| ((*name).to_string(), key)))
+        .ok_or_else(|| {
+            format!(
+                "no API key for {}: set {} in the environment or in ~/.hame/.env, or run \
+                 `hame setup`",
+                provider.name(),
+                key_names.join(" or ")
+            )
+        })?;
+    let base_url = options
+        .base_url
+        .clone()
+        .or_else(|| env("HAME_BASE_URL"))
+        .or_else(|| config.model.base_url.clone())
+        .unwrap_or_else(|| provider.base_url().into());
+    let model = options
+        .model
+        .clone()
+        .or_else(|| env("HAME_MODEL"))
+        .or_else(|| config.model.name.clone())
+        .or_else(|| provider.default_model().map(String::from))
+        .ok_or("no model chosen: pass --model, or set HAME_MODEL or [model] name")?;
+    Ok(ChosenModel {
+        provider,
+        provider_from,
+        key_name,
+        api_key,
+        base_url,
+        model,
+    })
+}
+
+/// Sends the chosen model one tiny request and returns what came back:
+/// proof that the key, address and model name all work.
+pub async fn ping_model(
+    config: &Config,
+    secrets: &Secrets,
+    options: &Options,
+) -> Result<(String, hame_session::Usage), String> {
+    let llm = llm(config, secrets, options)?.main;
+    let request = hame_llm::Request {
+        system: None,
+        tools: Vec::new(),
+        messages: vec![hame_session::Message {
+            role: hame_session::Role::User,
+            content: vec![hame_session::Block::text(
+                "Reply with the single word: ready",
+            )],
+        }],
+        max_tokens: Some(64),
+        cache_key: None,
+    };
+    let mut text = String::new();
+    let mut collect = |delta: hame_session::Delta| -> Result<(), hame_llm::SinkError> {
+        if let hame_session::Delta::Text { text: piece } = delta {
+            text.push_str(&piece);
+        }
+        Ok(())
+    };
+    let completion = llm
+        .stream(&request, &mut collect)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((text.trim().to_string(), completion.usage))
+}
+
 fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, String> {
     // Replays recorded responses instead of calling a provider; for tests
     // and evals.
@@ -963,48 +1107,13 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let lookup = |name: &str| env(name).or_else(|| secrets.get(name).map(String::from));
 
-    let named = options
-        .provider
-        .clone()
-        .or_else(|| env("HAME_PROVIDER"))
-        .or_else(|| config.model.provider.clone());
-    let provider = match named {
-        Some(name) => Provider::parse(&name)?,
-        // Whichever provider there is a key for.
-        None => [Provider::Deepseek, Provider::Anthropic, Provider::Openai]
-            .into_iter()
-            .find(|provider| {
-                provider
-                    .key_names()
-                    .iter()
-                    .any(|name| lookup(name).is_some())
-            })
-            .unwrap_or(Provider::Deepseek),
-    };
-
-    let key_names: Vec<&str> = match &config.model.api_key_env {
-        Some(name) => vec![name.as_str()],
-        None => std::iter::once("HAME_API_KEY")
-            .chain(provider.key_names().iter().copied())
-            .collect(),
-    };
-    let api_key = key_names
-        .iter()
-        .find_map(|name| lookup(name))
-        .ok_or_else(|| format!("no API key: set {}", key_names.join(" or ")))?;
-    let base_url = options
-        .base_url
-        .clone()
-        .or_else(|| env("HAME_BASE_URL"))
-        .or_else(|| config.model.base_url.clone())
-        .unwrap_or_else(|| provider.base_url().into());
-    let model = options
-        .model
-        .clone()
-        .or_else(|| env("HAME_MODEL"))
-        .or_else(|| config.model.name.clone())
-        .or_else(|| provider.default_model().map(String::from))
-        .ok_or("no model chosen: pass --model, or set HAME_MODEL or [model] name")?;
+    let ChosenModel {
+        provider,
+        api_key,
+        base_url,
+        model,
+        ..
+    } = choose_model(config, secrets, options)?;
     let summary_model = config.model.summary_model.clone().unwrap_or(model.clone());
 
     // OpenAI's own API is spoken through Responses; a compatible server at

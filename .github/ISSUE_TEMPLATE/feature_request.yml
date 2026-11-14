@@ -1,0 +1,20 @@
+name: Feature request
+description: Something hame should do, or do better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task or workflow, and where hame gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+  - type: textarea
+    id: elsewhere
+    attributes:
+      label: How do other tools handle it?
+      description: Claude Code, Codex, OpenCode, DeepSeek Harness, Aider... if you know.

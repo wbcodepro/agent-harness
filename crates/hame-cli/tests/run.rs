@@ -395,6 +395,84 @@ fn a_missing_api_key_is_reported_before_any_session_is_created() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(text(&output.stderr).contains("no API key"));
+    let said = text(&output.stderr);
+    assert!(said.contains("no API key"));
+    // Every provider's key, where to put it, and the command that helps.
+    for named in [
+        "DEEPSEEK_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "hame setup",
+    ] {
+        assert!(said.contains(named), "{said}");
+    }
     assert!(fx.store().list().unwrap().is_empty());
+}
+
+#[test]
+fn setup_saves_a_key_that_doctor_then_finds() {
+    let fx = Fixture::new();
+    let hame = |args: &[&str], input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_hame"))
+            .arg("--home")
+            .arg(&fx.home)
+            .args(args)
+            .current_dir(&fx.work)
+            .env_remove("HAME_SCRIPT")
+            .env_remove("HAME_PROVIDER")
+            .env_remove("HAME_API_KEY")
+            .env_remove("DEEPSEEK_API_KEY")
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("CLAUDE_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    let before = hame(&["doctor"], "");
+    assert!(!before.status.success());
+    assert!(
+        text(&before.stdout).contains("FAIL model"),
+        "{}",
+        text(&before.stdout)
+    );
+
+    let setup = hame(&["setup", "--provider", "anthropic"], "test-key-not-real\n");
+    let shown = text(&setup.stdout);
+    // On Windows the closing checks fail until confining writes only is
+    // accepted, which only the interactive setup asks about.
+    assert!(
+        setup.status.success() || cfg!(windows),
+        "{shown}{}",
+        text(&setup.stderr)
+    );
+    assert!(shown.contains("Saved ANTHROPIC_API_KEY"), "{shown}");
+    assert!(
+        !shown.contains("test-key-not-real"),
+        "the key is never printed"
+    );
+    assert!(
+        fs::read_to_string(fx.home.join(".env"))
+            .unwrap()
+            .contains("ANTHROPIC_API_KEY=test-key-not-real")
+    );
+
+    let after = hame(&["doctor"], "");
+    let report = text(&after.stdout);
+    assert!(report.contains("ok   model     anthropic"), "{report}");
+    assert!(
+        report.contains("key ANTHROPIC_API_KEY from .env"),
+        "{report}"
+    );
 }

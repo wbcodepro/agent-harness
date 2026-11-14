@@ -1,5 +1,6 @@
 mod eval;
 mod run;
+mod setup;
 mod skill;
 
 use std::path::PathBuf;
@@ -23,6 +24,10 @@ struct Cli {
 enum Command {
     /// Run one turn: send a prompt and let the agent work until it answers.
     Run(run::RunArgs),
+    /// Choose a model provider, save its key and check that everything works.
+    Setup(setup::SetupArgs),
+    /// Check the configuration, key, sandbox and tools hame needs.
+    Doctor(setup::DoctorArgs),
     /// Open the interactive interface (the default).
     Tui {
         /// Continue this session instead of starting a new one.
@@ -184,6 +189,8 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             hame_tui::run(home, cwd, options, resume).await?;
         }
         Command::Run(args) => return run::run(&home, &store, args).await,
+        Command::Setup(args) => return setup::setup(&home, args).await,
+        Command::Doctor(args) => return setup::doctor(&home, args).await,
         Command::ToolWorker | Command::SandboxExec { .. } => unreachable!("handled above"),
         Command::Web { port } => {
             let cwd = std::env::current_dir()
