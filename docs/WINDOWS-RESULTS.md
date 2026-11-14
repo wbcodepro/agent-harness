@@ -180,6 +180,47 @@ Cấu hình: `[network] mode = "allowlist"`, `allow = ["httpbin.org", "example.c
 
 ## Chưa kiểm
 
-- Tool `diagnostics`: máy không có language server nào (`rust-analyzer` chỉ là proxy của rustup, chưa cài component). Lỗi 5 sửa cùng một lỗi ở phần khởi động language server, nhưng chưa có lần chạy nào xác nhận.
+- Tool `diagnostics`: máy không có language server nào (`rust-analyzer` chỉ là proxy của rustup, chưa cài component). Lỗi 5 sửa cùng một lỗi ở phần khởi động language server, nhưng chưa có lần chạy nào xác nhận. (Đã kiểm ở lượt ba, xem bên dưới.)
 - `hame mcp login` với nhà cung cấp thật, `hame acp` trong một editor: cần người làm theo `docs/KIEM-THU-TAY.md`.
 - Các mục còn lại của lượt đầu: subagent với `isolate`, `[approval] reviewer`, `hame web` qua giao diện, ổ không phải NTFS.
+
+# Lượt ba
+
+Thực hiện ngày 2026-11-14 trên cùng máy, theo khối lệnh "Lượt ba" trong `docs/WINDOWS.md`, sau khi dự án đổi tên từ zcode thành hame. Các lần kiểm phát lại phản hồi viết sẵn qua `HAME_SCRIPT` trên binary thật, trừ chỗ ghi "model thật". Để kiểm mục 8, máy được cài thêm component `rust-analyzer` của rustup.
+
+## Build và test
+
+| | đạt | hỏng |
+|---|---|---|
+| Sau `git pull` (commit `fdb2916`), `cargo build --release -p hame-cli` đạt | 166 | 0 |
+| Sau các bản sửa của lượt này | 171 | 0 |
+
+Một test bị bỏ qua theo thiết kế (cần server OAuth thật). Năm test thêm là mô-đun test LSP (server giả và cách viết URI), trước đây chỉ chạy trên Unix (xem lỗi 2). `cargo clippy --workspace --all-targets -- -D warnings` sạch.
+
+## Các lỗi đã sửa
+
+Mỗi lỗi một commit, tên commit ghi trong ngoặc.
+
+1. **Language server không dùng được trên Windows** ("Language servers work on Windows"). Với rust-analyzer thật, `diagnostics` luôn hết giờ chờ: báo cáo được lưu theo URI server gửi (`file:///c:/...`) và tìm theo URI hame tự viết (`file:///C%3A/...`), hai cách viết của cùng một file không bao giờ khớp. Giờ báo cáo được lưu theo file. Ký tự ổ đĩa server gửi chữ thường được đổi thành chữ hoa như đường dẫn trên máy, để `references` và `rename_symbol` so và hiển thị đúng. Thư mục làm việc được giữ ở dạng `C:\...`: ở dạng `\\?\C:\...` (dạng `canonicalize` trả về) nó tới server thành một URI không chỉ tới file nào. Đường dẫn trong kết quả các tool này dùng `/`, như `grep` và `glob`.
+2. **Test LSP chỉ chạy trên Unix** (cùng commit). Server giả viết URI kiểu Unix (`"file://" + path`); giờ nó dùng dạng Windows khi chạy trên Windows, và cả mười test đạt trên máy này.
+3. **`references` hỏng ngay sau khi server khởi động** ("Retry a language server request answered with content modified"). rust-analyzer trả lỗi `-32801 content modified` trong lúc còn đọc dự án; giao thức nói client nên gửi lại, hame thì đưa thẳng lỗi cho model. Giờ yêu cầu được gửi lại tối đa năm lần, mỗi lần đợi lâu hơn. Không riêng Windows.
+4. **`edit_lines` báo một neo cũ hai lần** ("edit_lines reports a stale one-line anchor once"). Thiếu `to` thì `from` được dùng cho cả hai đầu và bị kiểm hai lần. Không riêng Windows.
+
+## Từng mục
+
+| Mục | Kết quả |
+|---|---|
+| 1. Đổi tên | Đạt. `hame --version` in `hame 0.0.1`. Khi chỉ có `%USERPROFILE%\.zcode`, hame dùng nó và in "hame: using C:\Users\ADMIN\.zcode, the data directory from when this was zcode. Rename it to C:\Users\ADMIN\.hame when convenient."; thư mục đã được đổi tên thành `.hame` và dòng nhắc không còn, session và cấu hình cũ vẫn đọc được. Không có cấu hình editor nào trên máy trỏ tới `zcode.exe` (đã tìm trong thư mục cấu hình của Zed, JetBrains và VS Code) |
+| 2. pipefail | Đạt. `(echo boom; exit 3) \| tail -n 5` là lỗi, có "exit code 3" và chữ "pipefail". `seq 1 200000 \| head -n 2` và `yes \| head -n 1` không báo lỗi. `grep … \| wc -l` không khớp gì thì báo lỗi kèm giải thích grep thoát 1 khi không có dòng khớp |
+| 3. Ghi file nguyên khối | Đạt. Giữ file bằng `CreateFileW` theo ba cách. Chia sẻ đọc+ghi+xóa: đổi tên đè thành công. Chia sẻ đọc+ghi nhưng không cho xóa (cách nhiều editor và trình xem giữ file): đổi tên bị từ chối, hame ghi thẳng vào file, thành công. Chỉ chia sẻ đọc (như Excel): `write` và `edit` đều báo "The process cannot access the file because it is being used by another process. (os error 32)", nội dung cũ còn nguyên. Không còn sót file `.tmp` nào. Notepad và VS Code không giữ file mở nên không gây ra trường hợp này |
+| 4. then_run | Đạt. Kết quả `edit` có "[then_run] $ python test_calc.py" và đầu ra `ok`. Lệnh bị luật `deny` chặn thì không chạy ("Denied by the user's permission rules"), lệnh ghi ra ngoài dự án bị sandbox chặn ("Permission denied"); cả hai trường hợp đều ghi rõ là thay đổi đã được áp dụng còn lệnh sau đó thất bại |
+| 5. Lọc đầu ra | Đạt. `cargo test` với 60 test: kết quả có "[60 lines omitted: passing tests or build progress]", giữ cả hai dòng "test result:", và ghi đường dẫn bản đầy đủ (trong `<home>\spill\`); tool `read` đọc được file đó |
+| 6. evidence | Đạt. Có sửa mà không chạy gì: "evidence: none; code was changed and nothing was run afterwards"; chạy được: "evidence: passed after the last change: python m.py"; hỏng: "evidence: FAILING; …". `--output json` có `evidence` (`unchecked`, `passed`, `failing`) và `evidence_command` |
+| 7. hashline | Đạt. `read` in `1:d39\|def f():`. `edit_lines` sửa file CRLF và file vẫn là CRLF (`b'def f():\r\n    return 2\r\n\r\nprint(f())\r\n'`). Sửa file bằng tay rồi dùng neo cũ: bị từ chối, "Nothing was written … it has changed since you read it", file không đổi. Dòng ngắn (dòng trống) mang hash của dòng đầy đủ phía trên: đúng thiết kế |
+| 8. Tool LSP | Hỏng lúc đầu (lỗi 1 và 3), đạt sau khi sửa. Với rust-analyzer thật chạy trong sandbox (mặc định), trên một dự án hai file: `diagnostics` báo "No problems found", rồi sau một sửa đổi báo `src/main.rs:7:24: error: cannot find value …`; `references` liệt kê 4 chỗ dùng trong 2 file; `rename_symbol` đổi `total` thành `sum_all` với 4 sửa đổi trong 2 file và `cargo build` vẫn đạt. Đã thử gửi URI cả hai dạng `file:///C%3A/...` và `file:///C:/...` thẳng tới rust-analyzer: nó nhận cả hai, nên chỗ hỏng là ở chiều trả về |
+
+## Chưa kiểm
+
+- Một editor thật giữ file trong lúc hame ghi: mục 3 được mô phỏng bằng cách giữ file qua `CreateFileW`, không phải bằng một editor cụ thể.
+- Language server khác rust-analyzer (pyright, typescript-language-server…): máy không có.
+- `hame acp` trong editor và `hame mcp login` với nhà cung cấp thật: vẫn cần người làm theo `docs/KIEM-THU-TAY.md`.
