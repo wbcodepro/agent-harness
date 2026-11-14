@@ -9,12 +9,26 @@ use tokio::net::TcpListener;
 /// Serves one canned HTTP response per connection, in order, and records
 /// each request body.
 pub(crate) async fn serve(responses: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<Value>>>) {
+    serve_with_headers(
+        responses
+            .into_iter()
+            .map(|(status, body)| (status, body, ""))
+            .collect(),
+    )
+    .await
+}
+
+/// Like [`serve`], with extra header lines (each ending in `\r\n`) on
+/// each response.
+pub(crate) async fn serve_with_headers(
+    responses: Vec<(u16, String, &'static str)>,
+) -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&bodies);
     tokio::spawn(async move {
-        for (status, body) in responses {
+        for (status, body, headers) in responses {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut raw = Vec::new();
             let request_body = loop {
@@ -38,7 +52,7 @@ pub(crate) async fn serve(responses: Vec<(u16, String)>) -> (String, Arc<Mutex<V
                 .unwrap()
                 .push(serde_json::from_slice(&request_body).unwrap());
             let head = format!(
-                "HTTP/1.1 {status} X\r\ncontent-type: text/event-stream\r\n\
+                "HTTP/1.1 {status} X\r\ncontent-type: text/event-stream\r\n{headers}\
                  content-length: {}\r\nconnection: close\r\n\r\n",
                 body.len()
             );

@@ -155,6 +155,16 @@ pub trait TurnHook: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Runs when the provider refused a request because the prompt does
+    /// not fit the model's context window. Returns whether it made the
+    /// history smaller, in which case the request is built and sent again.
+    fn on_overflow<'a>(
+        &'a self,
+        _session: &'a mut Session,
+    ) -> BoxFuture<'a, Result<bool, AgentError>> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Runs right after a model response is logged, before its tool calls
     /// run. The response is the last record.
     fn after_response(&self, _records: &[Record]) {}
@@ -377,6 +387,7 @@ impl Agent {
 
             let mut deltas: Vec<Delta> = Vec::new();
             let mut dropped = 0;
+            let mut shrunk = false;
             let completion = loop {
                 deltas.clear();
                 // Pieces that arrive close together are journalled as one
@@ -419,6 +430,23 @@ impl Agent {
                             })?;
                         }
                         tokio::time::sleep(STREAM_RETRY_DELAY * 2u32.pow(dropped - 1)).await;
+                    }
+                    // Too long for the model's window: made smaller once
+                    // and sent again, instead of failing a turn that a
+                    // compaction would have saved.
+                    Err(e) if e.is_context_overflow() && !shrunk => {
+                        shrunk = true;
+                        let mut smaller = false;
+                        for hook in &self.hooks {
+                            smaller |= hook.on_overflow(session).await?;
+                        }
+                        if !smaller {
+                            return Err(e.into());
+                        }
+                        let cache_key = request.cache_key.take();
+                        request = Request::from(session.history());
+                        request.max_tokens = self.max_tokens;
+                        request.cache_key = cache_key;
                     }
                     Err(e) => return Err(e.into()),
                 }

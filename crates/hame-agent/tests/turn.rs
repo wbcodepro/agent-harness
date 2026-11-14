@@ -565,6 +565,95 @@ async fn a_response_cut_off_midway_is_asked_for_again() {
     );
 }
 
+/// Refuses the first request as too long for its window, then answers.
+struct TooLongOnce {
+    refused: std::sync::atomic::AtomicBool,
+    requests: Mutex<Vec<Request>>,
+}
+
+impl Llm for TooLongOnce {
+    fn stream<'a>(
+        &'a self,
+        request: &'a Request,
+        sink: &'a mut dyn DeltaSink,
+    ) -> BoxFuture<'a, Result<Completion, LlmError>> {
+        self.requests.lock().unwrap().push(request.clone());
+        Box::pin(async move {
+            if !self.refused.swap(true, Ordering::Relaxed) {
+                return Err(LlmError::Http {
+                    status: 400,
+                    body: "prompt is too long: 210000 tokens > 200000 maximum".into(),
+                    retry_after: None,
+                });
+            }
+            sink.delta(Delta::Text {
+                text: "Done.".into(),
+            })
+            .map_err(LlmError::Sink)?;
+            Ok(Completion {
+                stop: StopReason::EndTurn,
+                usage: Usage::default(),
+            })
+        })
+    }
+}
+
+/// Stands in for a compactor: shortens the history when asked to.
+struct Shrinks(bool);
+
+impl hame_agent::TurnHook for Shrinks {
+    fn on_overflow<'a>(
+        &'a self,
+        session: &'a mut Session,
+    ) -> BoxFuture<'a, Result<bool, AgentError>> {
+        Box::pin(async move {
+            if !self.0 {
+                return Ok(false);
+            }
+            let up_to_seq = session.records().last().unwrap().seq;
+            session.append(Event::Compaction {
+                summary: "Earlier: greeted.".into(),
+                up_to_seq,
+                usage: Usage::default(),
+            })?;
+            Ok(true)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_prompt_too_long_for_the_window_is_compacted_and_sent_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(TooLongOnce {
+        refused: Default::default(),
+        requests: Default::default(),
+    });
+    let mut session = new_session(&dir.path().join("sessions"));
+    let mut shrinking = agent(llm.clone(), dir.path());
+    shrinking.hooks = vec![Arc::new(Shrinks(true))];
+    shrinking.run_turn(&mut session, user("Hi")).await.unwrap();
+    let sent = llm.requests.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    assert_ne!(sent[0].messages, sent[1].messages, "sent again smaller");
+    assert_eq!(sent[0].cache_key, sent[1].cache_key);
+    let last = session.history().messages.last().unwrap().clone();
+    assert_eq!(last.content, vec![Block::text("Done.")]);
+
+    // Nothing could be made smaller: the provider's error ends the turn.
+    let llm = Arc::new(TooLongOnce {
+        refused: Default::default(),
+        requests: Default::default(),
+    });
+    let mut stuck = agent(llm.clone(), dir.path());
+    stuck.hooks = vec![Arc::new(Shrinks(false))];
+    let error = stuck
+        .run_turn(&mut session, user("Again"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, AgentError::Llm(ref e) if e.is_context_overflow()));
+    assert_eq!(llm.requests.lock().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn truncated_tool_calls_are_not_run_and_step_limits_end_the_turn() {
     let dir = tempfile::tempdir().unwrap();

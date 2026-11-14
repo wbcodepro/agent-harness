@@ -42,7 +42,10 @@ impl Unsupported {
     /// whether it named something that was being sent, which is the only
     /// case worth another attempt.
     fn learn(&self, error: &LlmError) -> bool {
-        let LlmError::Http { status: 400, body } = error else {
+        let LlmError::Http {
+            status: 400, body, ..
+        } = error
+        else {
             return false;
         };
         [
@@ -131,22 +134,10 @@ impl Anthropic {
             .send()
             .await
             .map_err(|e| LlmError::Transport(e.to_string()))?;
-        let status = response.status();
-        if status.is_success() {
+        if response.status().is_success() {
             return Ok(response);
         }
-        let mut body = response.text().await.unwrap_or_default();
-        if body.len() > 2000 {
-            let mut end = 2000;
-            while !body.is_char_boundary(end) {
-                end -= 1;
-            }
-            body.truncate(end);
-        }
-        Err(LlmError::Http {
-            status: status.as_u16(),
-            body,
-        })
+        Err(crate::http_error(response).await)
     }
 
     async fn open_with_retry(&self, body: &Value) -> Result<reqwest::Response, LlmError> {
@@ -154,11 +145,13 @@ impl Anthropic {
         loop {
             match self.open(body).await {
                 Ok(response) => return Ok(response),
-                Err(e) if e.is_retryable() && attempt < self.retry.max_retries => {
-                    tokio::time::sleep(self.retry.base_delay * 2u32.pow(attempt)).await;
-                    attempt += 1;
-                }
-                Err(e) => return Err(e),
+                Err(e) => match self.retry.delay(attempt, &e) {
+                    Some(wait) => {
+                        tokio::time::sleep(wait).await;
+                        attempt += 1;
+                    }
+                    None => return Err(e),
+                },
             }
         }
     }
@@ -166,7 +159,7 @@ impl Anthropic {
 
 /// Whether an error says a replayed thinking block was not accepted.
 fn rejects_thinking(error: &LlmError) -> bool {
-    matches!(error, LlmError::Http { status: 400, body }
+    matches!(error, LlmError::Http { status: 400, body, .. }
         if body.contains("thinking") && body.contains("signature"))
 }
 

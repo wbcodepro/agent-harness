@@ -72,24 +72,13 @@ impl Responses {
                 .map_err(|e| LlmError::Transport(e.to_string()));
             let error = match sent {
                 Ok(response) if response.status().is_success() => return Ok(response),
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    let mut body = response.text().await.unwrap_or_default();
-                    if body.len() > 2000 {
-                        let mut end = 2000;
-                        while !body.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        body.truncate(end);
-                    }
-                    LlmError::Http { status, body }
-                }
+                Ok(response) => crate::http_error(response).await,
                 Err(e) => e,
             };
-            if !error.is_retryable() || attempt >= self.retry.max_retries {
+            let Some(wait) = self.retry.delay(attempt, &error) else {
                 return Err(error);
-            }
-            tokio::time::sleep(self.retry.base_delay * 2u32.pow(attempt)).await;
+            };
+            tokio::time::sleep(wait).await;
             attempt += 1;
         }
     }
@@ -204,7 +193,7 @@ fn build_body(model: &str, effort: Option<&str>, request: &Request, with_reasoni
 
 /// Whether an error says replayed reasoning was not accepted.
 fn rejects_reasoning(error: &LlmError) -> bool {
-    matches!(error, LlmError::Http { status: 400, body }
+    matches!(error, LlmError::Http { status: 400, body, .. }
         if body.contains("reasoning") || body.contains("encrypted_content"))
 }
 

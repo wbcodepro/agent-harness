@@ -66,22 +66,10 @@ impl ChatCompletions {
             .send()
             .await
             .map_err(|e| LlmError::Transport(e.to_string()))?;
-        let status = response.status();
-        if status.is_success() {
+        if response.status().is_success() {
             return Ok(response);
         }
-        let mut body = response.text().await.unwrap_or_default();
-        if body.len() > 2000 {
-            let mut end = 2000;
-            while !body.is_char_boundary(end) {
-                end -= 1;
-            }
-            body.truncate(end);
-        }
-        Err(LlmError::Http {
-            status: status.as_u16(),
-            body,
-        })
+        Err(crate::http_error(response).await)
     }
 }
 
@@ -102,11 +90,13 @@ impl Llm for ChatCompletions {
             let mut response = loop {
                 match self.open(&body).await {
                     Ok(response) => break response,
-                    Err(e) if e.is_retryable() && attempt < self.retry.max_retries => {
-                        tokio::time::sleep(self.retry.base_delay * 2u32.pow(attempt)).await;
-                        attempt += 1;
-                    }
-                    Err(e) => return Err(e),
+                    Err(e) => match self.retry.delay(attempt, &e) {
+                        Some(wait) => {
+                            tokio::time::sleep(wait).await;
+                            attempt += 1;
+                        }
+                        None => return Err(e),
+                    },
                 }
             };
 
@@ -693,7 +683,41 @@ mod tests {
         let (_, result) = collect(&adapter(&base_url), &request()).await;
         assert!(matches!(
             result,
-            Err(LlmError::Http { status: 401, body }) if body == "bad key"
+            Err(LlmError::Http { status: 401, body, .. }) if body == "bad key"
+        ));
+        assert_eq!(bodies.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_wait_asked_for_by_the_provider_is_kept_or_reported() {
+        let ok = sse(&[
+            json!({"choices": [{"delta": {"content": "hi"}}]}),
+            json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]);
+        let (base_url, bodies) = crate::testing::serve_with_headers(vec![
+            (429, "slow down".into(), "retry-after-ms: 150\r\n"),
+            (200, ok, ""),
+        ])
+        .await;
+        let started = std::time::Instant::now();
+        let (_, result) = collect(&adapter(&base_url), &request()).await;
+        assert_eq!(result.unwrap().stop, StopReason::EndTurn);
+        // The adapter's own backoff is 1 ms; only the header explains this.
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert_eq!(bodies.lock().unwrap().len(), 2);
+
+        // A limit that lifts in an hour is reported at once.
+        let (base_url, bodies) = crate::testing::serve_with_headers(vec![(
+            429,
+            "daily limit".into(),
+            "retry-after: 3600\r\n",
+        )])
+        .await;
+        let (_, result) = collect(&adapter(&base_url), &request()).await;
+        assert!(matches!(
+            result,
+            Err(LlmError::Http { status: 429, retry_after: Some(wait), .. })
+                if wait == Duration::from_secs(3600)
         ));
         assert_eq!(bodies.lock().unwrap().len(), 1);
     }

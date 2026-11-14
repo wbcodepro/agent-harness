@@ -262,12 +262,19 @@ impl Compactor {
     /// a summary: without that guard, a threshold below the fixed cost of
     /// the system prompt and tool list would compact on every step.
     fn cut_point(&self, records: &[Record]) -> Option<usize> {
+        cut_point(records, self.threshold_tokens)
+    }
+}
+
+/// [`Compactor::cut_point`] for a given threshold.
+fn cut_point(records: &[Record], threshold_tokens: u64) -> Option<usize> {
+    {
         let first = records
             .iter()
             .rposition(|record| matches!(record.event, Event::Compaction { .. }))
             .map_or(0, |index| index + 1);
-        let keep = self.threshold_tokens / 3;
-        let worthwhile = self.threshold_tokens / 4;
+        let keep = threshold_tokens / 3;
+        let worthwhile = threshold_tokens / 4;
 
         let mut tail = 0u64;
         let mut cut = None;
@@ -282,7 +289,9 @@ impl Compactor {
         let covered: u64 = records[first..cut].iter().map(record_tokens).sum();
         (covered >= worthwhile).then_some(cut)
     }
+}
 
+impl Compactor {
     /// Clears old tool results from what the model sees, keeping every
     /// message. Returns whether there was enough to clear to be worth it.
     ///
@@ -329,11 +338,33 @@ impl Compactor {
         let Some(cut) = self.cut_point(session.records()) else {
             return Ok(false);
         };
+        self.compact_at(session, cut, self.reuse_prefix).await
+    }
+
+    /// Compacts after the provider said the prompt does not fit, whatever
+    /// the configured threshold: the threshold was evidently set above the
+    /// model's real window. About the last quarter of what the model sees
+    /// is kept verbatim, and the summary is asked for over a transcript,
+    /// since resending the conversation itself would not fit either.
+    pub async fn compact_overflow(&self, session: &mut Session) -> Result<bool, AgentError> {
+        let seen = context_tokens(session.records());
+        let Some(cut) = cut_point(session.records(), seen.saturating_mul(3) / 4) else {
+            return Ok(false);
+        };
+        self.compact_at(session, cut, false).await
+    }
+
+    async fn compact_at(
+        &self,
+        session: &mut Session,
+        cut: usize,
+        reuse_prefix: bool,
+    ) -> Result<bool, AgentError> {
         let covered = derive_history(&session.records()[..cut]);
         if covered.messages.is_empty() {
             return Ok(false);
         }
-        if self.reuse_prefix
+        if reuse_prefix
             && let Some((summary, usage)) = self.summarize_in_place(in_place_request(session)).await
         {
             return self.record(session, cut, &summary, usage).map(|()| true);
@@ -447,6 +478,13 @@ impl TurnHook for Compactor {
             }
             Ok(())
         })
+    }
+
+    fn on_overflow<'a>(
+        &'a self,
+        session: &'a mut Session,
+    ) -> BoxFuture<'a, Result<bool, AgentError>> {
+        Box::pin(self.compact_overflow(session))
     }
 }
 
@@ -630,6 +668,39 @@ mod tests {
                 .iter()
                 .any(|record| matches!(&record.event,
             Event::Compaction { summary, .. } if summary.contains("Read steps 1 to 5.")))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overflow_compacts_below_the_threshold_from_a_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = long_session(dir.path());
+        let spy = Arc::new(Spy {
+            inner: ScriptedLlm::new(Recording {
+                responses: vec![ScriptedResponse::text("Read steps 1 to 4.")],
+            }),
+            requests: Default::default(),
+        });
+        let compactor = Compactor {
+            llm: spy.clone(),
+            // Far above this session: only the provider's refusal compacts.
+            threshold_tokens: 1_000_000,
+            clear_tool_results: true,
+            reuse_prefix: true,
+        };
+        compactor.before_step(&mut session).await.unwrap();
+        assert!(spy.requests.lock().unwrap().is_empty());
+
+        assert!(compactor.on_overflow(&mut session).await.unwrap());
+        let sent = spy.requests.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        // The conversation itself did not fit, so it is not resent.
+        assert_eq!(sent[0].system.as_deref(), Some(SUMMARY_SYSTEM));
+        assert!(
+            session
+                .records()
+                .iter()
+                .any(|record| matches!(&record.event, Event::Compaction { .. }))
         );
     }
 
