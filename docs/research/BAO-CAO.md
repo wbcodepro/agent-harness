@@ -199,6 +199,23 @@ Leo thang vừa tăng tỷ lệ đạt vừa giảm tổng token, vì model rẻ
 
 `spec-hidden-tests` không được cứu vì model viết xong rồi dừng, không phát tín hiệu kẹt nào. Chốt thêm sau đó (sửa mã nguồn mà chưa chạy gì thì nhắc kiểm tra một lần) khiến model tự viết test và sửa cho tới khi test của nó đạt, nhưng vẫn 0/4 có và không có leo thang: test nó tự viết không phủ quy tắc bị sót.
 
+**Bộ 20 tác vụ.** `evals/harder` sau đó được mở rộng lên 20 tác vụ (thêm JavaScript, Go, Rust, shell, hiệu năng, import vòng, đổi tên khóa cấu hình, máy trạng thái theo bảng đặc tả). Một lượt `deepseek-flash`: 20/20. Hai lượt `gpt-4o-mini` không leo thang (commit `dee95c3`): 24/40.
+
+| Tác vụ | `gpt-4o-mini` | Tác vụ | `gpt-4o-mini` |
+|---|---|---|---|
+| api-change | 1/2 | large-file-fix | 2/2 |
+| config-rename | 1/2 | lru-cache | 2/2 |
+| csv-report | 2/2 | pagination-bug | 2/2 |
+| doc-state-machine | 0/2 | py-circular-import | 2/2 |
+| find-in-many-files | 2/2 | py-perf | 2/2 |
+| go-rate-limiter | 1/2 | refactor-module | 2/2 |
+| js-async-queue | 2/2 | rust-duration | 0/2 |
+| js-event-emitter | 0/2 | rust-tokenizer | 1/2 |
+| schema-validator | 0/2 | sh-log-summary | 1/2 |
+| spec-hidden-tests | 0/2 | three-bugs | 1/2 |
+
+Đọc log các lần hỏng trên tác vụ mới cho thấy chủ yếu là giới hạn của model: viết lại cả file ở mỗi vòng nên hết 300 giây (đã thêm gợi ý dùng `edit` khi chỉ vài dòng đổi), xoay vòng giữa hai lỗi, và một lần ghi đè bài test tự viết bằng một dòng để cho "đạt". Lần chạy 4.440 giây này dùng 6,3 triệu token, 94% đọc từ cache.
+
 Điều chưa làm được: không có leo thang, `rust-tokenizer` và `three-bugs` chỉ đạt 1/3, và `spec-hidden-tests` 0/3 trong mọi cấu hình; ở các lần hỏng đó tôi không thấy thêm nguyên nhân phía harness. Mọi con số ở mục này là một hoặc vài lần chạy; để kết luận chắc cần chạy lặp nhiều lần hơn.
 
 **Đợt 2: mức mặc định của thị trường**
