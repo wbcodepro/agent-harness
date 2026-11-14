@@ -568,6 +568,103 @@ fn scopes(extension: &str, text: &str) -> Vec<Scope> {
     found
 }
 
+/// How many uses of a changed definition are listed.
+const SHOWN_USES: usize = 8;
+/// Longer than this is not spent looking for uses after an edit.
+const USES_TIME_LIMIT: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Says where else a definition is used when a change altered its first
+/// line (its name or signature) or removed it: those are the places the
+/// change can break, and the model has usually not looked at them. Empty
+/// when no definition's first line changed.
+pub(crate) fn uses_note(path: &Path, before: &str, after: &str, root: &Path) -> String {
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let old = scopes(extension, before);
+    if old.is_empty() {
+        return String::new();
+    }
+    let new = scopes(extension, after);
+    let header = |text: &str, scope: &Scope| {
+        text.lines()
+            .nth(scope.start)
+            .map(|line| line.trim().to_string())
+    };
+    let mut changed: Vec<&str> = Vec::new();
+    for scope in &old {
+        // Short names turn up everywhere and say little.
+        if scope.name.len() < 4 || changed.contains(&scope.name.as_str()) {
+            continue;
+        }
+        let was = header(before, scope);
+        let still = new
+            .iter()
+            .any(|now| now.name == scope.name && header(after, now) == was);
+        if !still {
+            changed.push(&scope.name);
+        }
+    }
+    // A rewrite of the whole file changes everything; a list of every use
+    // of every name would be noise.
+    if changed.is_empty() || changed.len() > 4 {
+        return String::new();
+    }
+    let pattern = changed
+        .iter()
+        .map(|name| regex::escape(name))
+        .collect::<Vec<_>>()
+        .join("|");
+    let Ok(regex) = Regex::new(&format!(r"\b(?:{pattern})\b")) else {
+        return String::new();
+    };
+    let started = std::time::Instant::now();
+    let own = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut uses: Vec<(String, String)> = Vec::new();
+    for file in walk(root) {
+        if started.elapsed() > USES_TIME_LIMIT {
+            break;
+        }
+        if file.canonicalize().is_ok_and(|file| file == own) {
+            continue;
+        }
+        let Some(text) = searchable_text(&file) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            if let Some(found) = regex.find(line) {
+                uses.push((
+                    found.as_str().to_string(),
+                    format!("{}:{}", display_path(relative(&file, root)), index + 1),
+                ));
+            }
+        }
+    }
+    let mut note = String::new();
+    for name in changed {
+        let mut places: Vec<&str> = uses
+            .iter()
+            .filter(|(used, _)| used == name)
+            .map(|(_, place)| place.as_str())
+            .collect();
+        if places.is_empty() {
+            continue;
+        }
+        // Tests first: they are what will fail.
+        places.sort_by_key(|place| !place.contains("test"));
+        let more = places.len().saturating_sub(SHOWN_USES);
+        note.push_str(&format!(
+            "\n[The first line of `{name}` changed or it is gone. It is also used in: {}{}. \
+             Make sure those still fit.]",
+            places[..places.len().min(SHOWN_USES)].join(", "),
+            if more > 0 {
+                format!(" and {more} more places")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    note
+}
+
 /// The innermost definition that `row` is inside of, not counting one that
 /// starts on that very line.
 fn enclosing(scopes: &[Scope], row: usize) -> Option<&Scope> {

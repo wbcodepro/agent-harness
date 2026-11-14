@@ -83,13 +83,26 @@ impl TurnHook for Verifier {
                 let input = json!({ "command": command, "timeout_ms": self.timeout_ms });
                 let output = self.runner.run(&self.shell, &input, &self.context).await;
                 if output.is_error {
-                    let mut end = output.text.len().min(MAX_OUTPUT_BYTES);
-                    while !output.text.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    failures.push_str(&format!("\n$ {command}\n{}\n", &output.text[..end]));
-                    if end < output.text.len() {
-                        failures.push_str("[output truncated]\n");
+                    // Both ends of a long run: what failed is usually said
+                    // last, and what was run first.
+                    let text = &output.text;
+                    if text.len() <= MAX_OUTPUT_BYTES {
+                        failures.push_str(&format!("\n$ {command}\n{text}\n"));
+                    } else {
+                        let mut head = MAX_OUTPUT_BYTES / 3;
+                        while !text.is_char_boundary(head) {
+                            head -= 1;
+                        }
+                        let mut tail = text.len() - MAX_OUTPUT_BYTES * 2 / 3;
+                        while !text.is_char_boundary(tail) {
+                            tail += 1;
+                        }
+                        failures.push_str(&format!(
+                            "\n$ {command}\n{}\n[... {} bytes omitted ...]\n{}\n",
+                            &text[..head],
+                            tail - head,
+                            &text[tail..]
+                        ));
                     }
                 }
             }

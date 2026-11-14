@@ -415,7 +415,10 @@ fn plan(ops: &[Op], ctx: &ToolContext) -> Result<(Vec<Outcome>, Vec<String>), St
                 let text =
                     fs::read_to_string(&source).map_err(|e| format!("Cannot read {path}: {e}"))?;
                 let updated = apply_hunks(path, &text, hunks)?;
-                let warning = crate::search::syntax_warning(&source, Some(&text), &updated);
+                let mut warning = crate::search::syntax_warning(&source, Some(&text), &updated);
+                warning.push_str(&crate::search::uses_note(
+                    &source, &text, &updated, &ctx.cwd,
+                ));
                 if !warning.is_empty() {
                     summary.push(format!("  {path}:{warning}"));
                 }

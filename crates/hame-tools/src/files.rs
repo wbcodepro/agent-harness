@@ -204,6 +204,14 @@ impl Tool for Write {
                         before.as_deref(),
                         &input.content,
                     ));
+                    if let Some(before) = &before {
+                        said.push_str(&crate::search::uses_note(
+                            &path,
+                            before,
+                            &input.content,
+                            &ctx.cwd,
+                        ));
+                    }
                     // Rewriting a long file to change a few lines costs the
                     // whole file in output each time; say so once it shows.
                     if let Some(before) = &before {
@@ -519,7 +527,8 @@ impl Tool for Edit {
                     ));
                 }
             };
-            let warning = crate::search::syntax_warning(&path, Some(&text), &updated);
+            let mut warning = crate::search::syntax_warning(&path, Some(&text), &updated);
+            warning.push_str(&crate::search::uses_note(&path, &text, &updated, &ctx.cwd));
             match write_atomic(&path, updated.as_bytes()) {
                 Ok(()) => ToolOutput::ok(format!("{note} in {}.{warning}", path.display())),
                 Err(e) => ToolOutput::error(format!("Cannot write {}: {e}", path.display())),
@@ -832,5 +841,48 @@ mod tests {
             fs::read_to_string(&path).unwrap(),
             "const a = 2;\nconst b = 1;\n"
         );
+    }
+
+    #[tokio::test]
+    async fn changing_a_signature_says_where_else_it_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tests")).unwrap();
+        fs::write(
+            dir.path().join("price.py"),
+            "def total_price(items):\n    return sum(items)\n\n\ndef other_thing(x):\n    return x\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("app.py"),
+            "from price import total_price\nprint(total_price([1]))\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/test_price.py"),
+            "from price import total_price\n\ndef test_it():\n    assert total_price([1]) == 1\n",
+        )
+        .unwrap();
+        let ctx = ToolContext::new(dir.path());
+        let edit = |old: &str, new: &str| {
+            let input = json!({"path": "price.py", "old_string": old, "new_string": new});
+            let ctx = &ctx;
+            async move { Edit.call(&input, ctx).await }
+        };
+
+        // A change inside the body says nothing.
+        let body = edit("return sum(items)", "return float(sum(items))").await;
+        assert!(!body.text.contains("also used"), "{}", body.text);
+
+        let signature = edit("def total_price(items):", "def total_price(items, tax):").await;
+        assert!(!signature.is_error, "{}", signature.text);
+        assert!(
+            signature.text.contains("`total_price`"),
+            "{}",
+            signature.text
+        );
+        let tests = signature.text.find("tests/test_price.py:1").unwrap();
+        let app = signature.text.find("app.py:1").unwrap();
+        assert!(tests < app, "tests come first");
+        assert!(!signature.text.contains("other_thing"));
     }
 }
