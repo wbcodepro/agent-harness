@@ -105,13 +105,31 @@ sửa một commit. Trước khi push luôn git fetch và rebase.
    yêu cầu agent dùng references và rename_symbol trên một dự án nhỏ. Phần đổi URI file sang
    đường dẫn Windows (file:///C%3A/...) mới chỉ qua test đơn vị chạy trên macOS; các test với
    server giả trong crates/hame-ext/src/lsp.rs đang giới hạn cho Unix, hãy thử bỏ giới hạn đó.
-9. [verify] review = true: yêu cầu agent sửa một hàm Python theo một đặc tả ngắn có một luật dễ
-   sót. Trước khi lượt kết thúc phải có một tin nhắn "[hame review]" (hoặc người chấm trả
-   NO FINDINGS), người chấm ghi script vào %TEMP% chứ không vào thư mục dự án, và không file nào
-   trong dự án bị người chấm đổi.
-10. Đổi chữ ký một hàm có test gọi tới (Python, Rust hoặc Go): kết quả edit phải có dòng
+Không chạy CI trên GitHub trừ khi cần (gh workflow run ci).
+```
+
+Kết quả lượt ba (8/8 mục đạt sau bốn bản sửa) nằm trong `docs/WINDOWS-RESULTS.md`.
+
+## Lượt bốn: người chấm độc lập, chọn test, gửi lại khi stream đứt (2026-11-15)
+
+```text
+Hãy git pull, build lại (cargo build --release -p hame-cli), chạy cargo test --workspace
+--no-fail-fast, rồi kiểm các phần dưới đây và ghi kết quả vào một mục mới "Lượt bốn" trong
+docs/WINDOWS-RESULTS.md. Sửa trong mã sản phẩm những gì hỏng, mỗi bản sửa một commit. Trước khi
+push luôn git fetch và rebase.
+
+1. [verify] review = true: yêu cầu agent (model thật, một lần là đủ) sửa một hàm Python theo một
+   đặc tả ngắn có một luật dễ sót. Trước khi lượt kết thúc phải có một tin nhắn "[hame review]"
+   (hoặc người chấm trả NO FINDINGS); người chấm ghi script vào %TEMP% chứ không vào thư mục dự
+   án, không file nào trong dự án bị người chấm đổi, và không có tin nhắn "[hame check]" nào gửi
+   cho người chấm (nó chạy không có các lớp giữ lượt).
+2. Đổi chữ ký một hàm có test gọi tới (Python, Rust hoặc Go): kết quả edit phải có dòng
    "Tests that call ..." kèm lệnh chạy riêng các test đó, đường dẫn dùng dấu "/", và lệnh đó
    chạy được trong Git Bash.
+3. Lệnh dài bị trích lại trong tin nhắn "[hame check]" phải dừng ở dòng đầu và có chữ
+   "shortened here" khi đã bị rút gọn (thử bằng một lệnh nhiều dòng có heredoc và thất bại).
+4. Stream đứt giữa chừng: test a_response_cut_off_midway_is_asked_for_again trong
+   crates/hame-agent/tests/turn.rs phải đạt.
 
 Không chạy CI trên GitHub trừ khi cần (gh workflow run ci).
 ```
