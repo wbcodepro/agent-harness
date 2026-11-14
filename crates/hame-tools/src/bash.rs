@@ -33,8 +33,9 @@ impl Tool for Bash {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "bash".into(),
-            description: "Run a bash command in the working directory and return its stdout, \
-                          stderr and exit code. Each call starts a new shell, with pipefail \
+            description: "Run a bash command and return its stdout, \
+                          stderr and exit code. Each call starts a new shell in the working \
+                          directory (no need to cd into it), with pipefail \
                           set: a pipeline fails when any command in it fails. The command is \
                           killed after timeout_ms (default 120000, max 600000)."
                 .into(),
