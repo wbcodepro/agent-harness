@@ -52,7 +52,9 @@ Nếu hỏng: chạy editor từ terminal để thấy stderr của `zcode`, và
 
 ## 2. Đăng nhập OAuth vào một server MCP thật
 
-Phần dò tìm máy chủ cấp quyền đã được đối chiếu với ba server thật; phần còn lại (đăng ký client, đăng nhập, đổi mã lấy token, làm mới) mới chạy với máy chủ giả lập. Cần một tài khoản ở một dịch vụ có server MCP dùng OAuth, ví dụ Linear hoặc Notion.
+**Đã làm ngày 2026-11-14 với Notion** (`https://mcp.notion.com/mcp`), trong một thư mục dữ liệu thử nghiệm: đăng ký client, đăng nhập (người dùng bấm đồng ý trong trình duyệt), server trả 77 tool khi dùng token, token bị đánh dấu hết hạn được làm mới, rồi đăng xuất. Token thử nghiệm đã xóa; quyền cấp cho client `zcode` vẫn còn ở phía Notion cho tới khi bạn thu hồi trong phần kết nối của tài khoản.
+
+Các bước dưới đây để bạn đăng nhập cho thư mục dữ liệu thật của mình, hoặc thử với nhà cung cấp khác như Linear.
 
 1. Thêm vào `~/.zcode/config.toml` (ví dụ với Linear):
 
