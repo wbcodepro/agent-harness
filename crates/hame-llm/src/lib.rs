@@ -76,7 +76,7 @@ pub trait Llm: Send + Sync {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    #[error("the provider answered HTTP {status}: {body}")]
+    #[error("the provider answered HTTP {status}: {body}{}", out_of_credit_hint(*status, body))]
     Http { status: u16, body: String },
     #[error("could not reach the provider: {0}")]
     Transport(String),
@@ -84,6 +84,29 @@ pub enum LlmError {
     Protocol(String),
     #[error("could not record the response: {0}")]
     Sink(SinkError),
+}
+
+/// What to do when the provider says the account cannot pay: without it,
+/// an editor shows a bare HTTP error and the user does not know that hame
+/// picked this provider only because its key was the first one found.
+fn out_of_credit_hint(status: u16, body: &str) -> &'static str {
+    let body = body.to_ascii_lowercase();
+    let broke = status == 402
+        || [
+            "insufficient balance",
+            "insufficient_quota",
+            "credit balance",
+            "billing",
+        ]
+        .iter()
+        .any(|marker| body.contains(marker));
+    if broke {
+        " (the account has no credit left: top it up, or use another provider with \
+         `[model] provider = \"anthropic\"` or `\"openai\"` in ~/.hame/config.toml, or \
+         --provider)"
+    } else {
+        ""
+    }
 }
 
 impl LlmError {
@@ -115,5 +138,24 @@ impl Default for Retry {
             max_retries: 5,
             base_delay: Duration::from_millis(500),
         }
+    }
+}
+
+#[cfg(test)]
+mod credit_tests {
+    use super::*;
+
+    #[test]
+    fn an_account_out_of_credit_says_what_to_do() {
+        let error = LlmError::Http {
+            status: 402,
+            body: r#"{"error":{"message":"Insufficient Balance"}}"#.into(),
+        };
+        assert!(error.to_string().contains("[model] provider"));
+        let error = LlmError::Http {
+            status: 400,
+            body: "bad request".into(),
+        };
+        assert!(!error.to_string().contains("[model] provider"));
     }
 }
