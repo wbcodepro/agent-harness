@@ -30,7 +30,10 @@ pub fn low_temp_dir() -> Option<PathBuf> {
 
 /// Whether this backend can enforce everything `policy` asks for.
 pub(crate) fn check(policy: &SandboxPolicy) -> Result<(), SandboxError> {
-    if policy.network != Network::Open || !policy.unreadable.is_empty() || policy.hide_env_files {
+    // A proxy can be offered to tools (the variables are set) but nothing
+    // makes them use it; cutting the network off cannot be done at all.
+    if policy.network == Network::Blocked || !policy.unreadable.is_empty() || policy.hide_env_files
+    {
         return Err(SandboxError::Unavailable(
             "on Windows only writes can be confined; hiding files from tools and limiting \
              their network access are not available"

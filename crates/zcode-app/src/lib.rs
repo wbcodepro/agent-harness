@@ -278,6 +278,34 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         policy.unreadable.clear();
         policy.hide_env_files = false;
         policy.network = Network::Open;
+        // Nothing here can force a tool through the proxy. It is still
+        // started when a secret is to be substituted: tools that honour the
+        // proxy variables get the secret put into their requests, and one
+        // that goes around the proxy only ever holds the stand-in.
+        if !substitutions.is_empty()
+            && matches!(
+                options.network.unwrap_or(config.network.mode),
+                NetworkMode::Allowlist
+            )
+        {
+            let mut allowed = config.network.allow.clone();
+            allowed.extend(substitutions.iter().flat_map(|s| s.hosts.iter().cloned()));
+            let started =
+                EgressProxy::start_with(Allowlist::new(allowed), substitutions.clone(), Vec::new())
+                    .await
+                    .map_err(|e| format!("cannot start the egress proxy: {e}"))?;
+            policy.network = Network::Proxy {
+                port: started.port(),
+            };
+            proxy = Some(started);
+            static SAID: std::sync::Once = std::sync::Once::new();
+            SAID.call_once(|| {
+                notice(
+                    "the network proxy is offered to tools, not enforced: a program that \
+                     ignores the proxy variables reaches any host, without the secrets",
+                );
+            });
+        }
         zcode_sandbox::prepare(&policy).map_err(|e| e.to_string())?;
     } else if policy.is_confined() {
         policy.unreadable.extend(config.sandbox.unreadable.clone());
@@ -754,6 +782,8 @@ fn system_prompt(cwd: &Path, policy: &SandboxPolicy) -> String {
             },
             match network {
                 Network::Blocked => "There is no network access.",
+                Network::Proxy { .. } if cfg!(windows) =>
+                    "Network access is open; an HTTP proxy is set in the environment.",
                 Network::Proxy { .. } =>
                     "Network access is limited to an allowlist of hosts through an HTTP proxy.",
                 Network::Open => "Network access is open.",
@@ -993,6 +1023,18 @@ fn trust_authority(pem: &str, bundle_pem: Option<String>) -> Result<Vec<(String,
             "CARGO_HTTP_CAINFO",
         ] {
             variables.push((name.to_string(), bundle.clone()));
+        }
+        // Git for Windows is set up to verify with the Windows certificate
+        // store, which knows nothing of this file; its other TLS library
+        // reads it.
+        if cfg!(windows) {
+            for (name, value) in [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "http.sslBackend"),
+                ("GIT_CONFIG_VALUE_0", "openssl"),
+            ] {
+                variables.push((name.to_string(), value.to_string()));
+            }
         }
     }
     Ok(variables)
