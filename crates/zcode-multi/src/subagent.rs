@@ -43,6 +43,18 @@ pub struct SubagentTool {
     pub worktrees: PathBuf,
     /// Depth of the agent that owns this tool.
     pub depth: u32,
+    /// Kinds of subagent the model can ask for by name.
+    pub kinds: Vec<SubagentKind>,
+}
+
+/// A named kind of subagent: extra instructions, and optionally the only
+/// tools it gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentKind {
+    pub name: String,
+    pub description: String,
+    pub instructions: String,
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +65,7 @@ struct Input {
     mode: Mode,
     #[serde(default)]
     isolate: bool,
+    agent: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone, Copy, PartialEq)]
@@ -152,9 +165,26 @@ impl Worktree {
 
 impl Tool for SubagentTool {
     fn spec(&self) -> ToolSpec {
+        let mut properties = json!({
+            "task": {"type": "string", "description": "Complete instructions, including what to report back."},
+            "mode": {"type": "string", "enum": ["explore", "work"], "description": "Default work."},
+            "isolate": {"type": "boolean", "description": "Work in a separate git worktree and branch. Default false."}
+        });
+        let mut kinds = String::new();
+        if !self.kinds.is_empty() {
+            let names: Vec<&str> = self.kinds.iter().map(|kind| kind.name.as_str()).collect();
+            properties["agent"] = json!({"type": "string", "enum": names,
+                "description": "A specialised kind of subagent to use. Omit for a general one."});
+            kinds.push_str(" Specialised kinds, chosen with agent:");
+            for kind in &self.kinds {
+                kinds.push_str(&format!(" {} ({});", kind.name, kind.description));
+            }
+        }
         ToolSpec {
             name: "subagent".into(),
-            description: "Delegate a self-contained task to a fresh agent and get back its final \
+            description: format!(
+                "{}{kinds}",
+                "Delegate a self-contained task to a fresh agent and get back its final \
                           answer. The subagent starts with an empty context: it sees none of this \
                           conversation, so put everything it needs in the task. Use it to keep \
                           long investigations out of your own context, and to do independent \
@@ -163,14 +193,10 @@ impl Tool for SubagentTool {
                           files. Set isolate to give a worker its own git worktree and branch, so \
                           parallel workers cannot overwrite each other; you then merge the branch \
                           it reports."
-                .into(),
+            ),
             input_schema: json!({
                 "type": "object",
-                "properties": {
-                    "task": {"type": "string", "description": "Complete instructions, including what to report back."},
-                    "mode": {"type": "string", "enum": ["explore", "work"], "description": "Default work."},
-                    "isolate": {"type": "boolean", "description": "Work in a separate git worktree and branch. Default false."}
-                },
+                "properties": properties,
                 "required": ["task"],
                 "additionalProperties": false
             }),
@@ -205,6 +231,15 @@ impl Tool for SubagentTool {
 
 impl SubagentTool {
     async fn run(&self, input: Input) -> Result<String, String> {
+        let kind = match &input.agent {
+            Some(name) => Some(
+                self.kinds
+                    .iter()
+                    .find(|kind| kind.name == *name)
+                    .ok_or_else(|| format!("There is no kind of subagent named {name:?}."))?,
+            ),
+            None => None,
+        };
         let id = SessionId::generate();
         let read_only = input.mode == Mode::Explore;
         let worktree = if input.isolate && !read_only {
@@ -216,12 +251,23 @@ impl SubagentTool {
             .as_ref()
             .map_or_else(|| self.cwd.clone(), |worktree| worktree.path.clone());
 
-        let child = (self.factory)(ChildSpec {
+        let mut child = (self.factory)(ChildSpec {
             cwd: cwd.clone(),
             read_only,
             depth: self.depth + 1,
         })
         .await?;
+        if let Some(kind) = kind {
+            child.agent.system.push_str("\n\n");
+            child.agent.system.push_str(&kind.instructions);
+            // A kind can narrow the child's tools, never widen them.
+            if let Some(allowed) = &kind.tools {
+                child
+                    .agent
+                    .tools
+                    .retain(|tool| allowed.contains(&tool.spec().name));
+            }
+        }
         let writer = self
             .store
             .create(CreateOptions {

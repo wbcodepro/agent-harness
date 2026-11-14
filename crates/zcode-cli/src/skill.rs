@@ -48,67 +48,119 @@ pub fn run(home: &Path, command: SkillCommand) -> Result<ExitCode, String> {
             source,
             path,
             force,
-        } => {
-            // A local directory is used where it is; anything else is
-            // fetched with git into a directory that is removed afterwards.
-            let local = PathBuf::from(&source);
-            let fetched = if local.is_dir() {
-                None
-            } else {
-                let dir = std::env::temp_dir().join(format!("zcode-skill-{}", std::process::id()));
-                let _ = std::fs::remove_dir_all(&dir);
-                let cloned = std::process::Command::new("git")
-                    .args(["clone", "--quiet", "--depth", "1", "--"])
-                    .arg(&source)
-                    .arg(&dir)
-                    .status()
-                    .map_err(|e| format!("cannot run git: {e}"))?;
-                if !cloned.success() {
-                    return Err(format!(
-                        "{source} is neither a directory nor a repository git can clone"
-                    ));
-                }
-                Some(dir)
-            };
-            let base = fetched.clone().unwrap_or(local);
-            let skill_dir = match &path {
-                Some(path) => base.join(path),
-                None => base,
-            };
-            let outcome = install(&skill_dir, &home.join("skills"), force);
-            if let Some(dir) = fetched {
-                let _ = std::fs::remove_dir_all(dir);
-            }
-            let (installed, findings) = outcome?;
+        } => install_from(&source, path.as_deref(), |dir| {
+            install(dir, &home.join("skills"), force)
+        }),
+    }
+}
 
-            for finding in &findings {
-                let place = match finding.line {
-                    0 => finding.file.clone(),
-                    line => format!("{}:{line}", finding.file),
-                };
-                let label = match finding.severity {
-                    Severity::Danger => "DANGER",
-                    Severity::Notice => "notice",
-                };
-                eprintln!("{label}  {place}  {}", finding.what);
+#[derive(Subcommand)]
+pub enum PluginCommand {
+    /// Copy a plugin packaged for Claude Code into your plugins directory
+    /// after scanning it. Installed plugins are loaded in every session.
+    Install {
+        /// A plugin directory, or a git repository URL.
+        source: String,
+        /// Where the plugin is inside the repository or directory.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Install even though the scan found something dangerous, and
+        /// replace a plugin of the same name.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List installed plugins.
+    List,
+}
+
+pub fn run_plugin(home: &Path, command: PluginCommand) -> Result<ExitCode, String> {
+    match command {
+        PluginCommand::List => {
+            for plugin in zcode_app::installed_plugins(home) {
+                println!("{}\t{}", plugin.name, plugin.root.display());
             }
-            match installed {
-                Some(installed) => {
-                    println!(
-                        "installed {} in {}",
-                        installed.name,
-                        installed.dir.display()
-                    );
-                    Ok(ExitCode::SUCCESS)
-                }
-                None => {
-                    eprintln!(
-                        "zcode: not installed. Read the lines marked DANGER above; if you have \
-                         checked them and still want the skill, run again with --force."
-                    );
-                    Ok(ExitCode::FAILURE)
-                }
-            }
+            Ok(ExitCode::SUCCESS)
+        }
+        PluginCommand::Install {
+            source,
+            path,
+            force,
+        } => install_from(&source, path.as_deref(), |dir| {
+            zcode_ext::skill_install::install_plugin(dir, &home.join("plugins"), force)
+        }),
+    }
+}
+
+type Outcome = (
+    Option<zcode_ext::skill_install::Installed>,
+    Vec<zcode_ext::skill_install::Finding>,
+);
+
+/// Fetches `source` if it is not a local directory, hands the directory to
+/// `install`, and reports what the scan found.
+fn install_from(
+    source: &str,
+    path: Option<&Path>,
+    install: impl FnOnce(&Path) -> Result<Outcome, String>,
+) -> Result<ExitCode, String> {
+    // A local directory is used where it is; anything else is fetched with
+    // git into a directory that is removed afterwards.
+    let local = PathBuf::from(source);
+    let fetched = if local.is_dir() {
+        None
+    } else {
+        let dir = std::env::temp_dir().join(format!("zcode-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cloned = std::process::Command::new("git")
+            .args(["clone", "--quiet", "--depth", "1", "--"])
+            .arg(source)
+            .arg(&dir)
+            .status()
+            .map_err(|e| format!("cannot run git: {e}"))?;
+        if !cloned.success() {
+            return Err(format!(
+                "{source} is neither a directory nor a repository git can clone"
+            ));
+        }
+        Some(dir)
+    };
+    let base = fetched.clone().unwrap_or(local);
+    let target = match path {
+        Some(path) => base.join(path),
+        None => base,
+    };
+    let outcome = install(&target);
+    if let Some(dir) = fetched {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    let (installed, findings) = outcome?;
+
+    for finding in &findings {
+        let place = match finding.line {
+            0 => finding.file.clone(),
+            line => format!("{}:{line}", finding.file),
+        };
+        let label = match finding.severity {
+            Severity::Danger => "DANGER",
+            Severity::Notice => "notice",
+        };
+        eprintln!("{label}  {place}  {}", finding.what);
+    }
+    match installed {
+        Some(installed) => {
+            println!(
+                "installed {} in {}",
+                installed.name,
+                installed.dir.display()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        None => {
+            eprintln!(
+                "zcode: not installed. Read the lines marked DANGER above; if you have checked \
+                 them and still want it, run again with --force."
+            );
+            Ok(ExitCode::FAILURE)
         }
     }
 }

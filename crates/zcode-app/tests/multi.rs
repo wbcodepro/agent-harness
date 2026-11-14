@@ -513,6 +513,18 @@ for line in sys.stdin:
             .to_string(),
     )
     .unwrap();
+    std::fs::create_dir_all(plugin.join("commands")).unwrap();
+    std::fs::create_dir_all(plugin.join("agents")).unwrap();
+    std::fs::write(
+        plugin.join("commands/release.md"),
+        "---\ndescription: Cut a release\n---\nCut release $1 and write its notes.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("agents/checker.md"),
+        "---\nname: checker\ndescription: Checks a release for missing notes.\ntools: Read, Grep\n---\nYou only check; never change a file.\n",
+    )
+    .unwrap();
     std::fs::write(
         home.join("config.toml"),
         format!(
@@ -522,10 +534,27 @@ for line in sys.stdin:
     )
     .unwrap();
 
+    // The plugin's command expands by name; other text is left alone.
+    assert_eq!(
+        zcode_app::expand_command(&home, &work, "/release 2.4.0"),
+        "Cut release 2.4.0 and write its notes."
+    );
+    assert_eq!(
+        zcode_app::expand_command(&home, &work, "/tmp/x is what?"),
+        "/tmp/x is what?"
+    );
+
     let options = options(vec![
         call("c1", "skill", json!({"name": "changelog"})),
         call("c2", "mcp__relkit_versions__next_version", json!({})),
         call("c3", "bash", json!({"command": "git tag v2.4.0"})),
+        call(
+            "c4",
+            "subagent",
+            json!({"task": "Check the notes.", "agent": "checker"}),
+        ),
+        // The checker's own answer, then the parent's.
+        ScriptedResponse::text("Nothing is missing."),
         ScriptedResponse::text("Done."),
     ]);
     let runtime = zcode_app::build(&home, &work, &options).await.unwrap();
@@ -549,8 +578,43 @@ for line in sys.stdin:
         "{}",
         results[0].0
     );
+    assert!(
+        results[3].0.starts_with("Nothing is missing."),
+        "{}",
+        results[3].0
+    );
+
+    // The checker ran under the plugin's instructions with only the tools
+    // its definition names.
+    let child = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|header| header.id != *session.id())
+        .unwrap();
+    let child_records = store.read(&child.id).unwrap();
+    let child_system = child_records
+        .iter()
+        .find_map(|record| match &record.event {
+            Event::SystemMessage { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        child_system.ends_with("You only check; never change a file."),
+        "{child_system}"
+    );
+    let child_tools: Vec<String> = child_records
+        .iter()
+        .find_map(|record| match &record.event {
+            Event::ToolsDeclared { tools } => Some(tools.iter().map(|t| t.name.clone()).collect()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(child_tools, ["read", "grep"]);
+
     assert_eq!(
-        results[1..],
+        results[1..3],
         [
             ("2.4.0".to_string(), false),
             (

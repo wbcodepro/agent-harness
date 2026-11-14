@@ -272,6 +272,11 @@ where
     let mut agent_options = options;
     agent_options.plan = false;
 
+    let prompt_commands: Vec<String> = zcode_app::commands(&home, &cwd)
+        .into_iter()
+        .map(|command| command.name)
+        .collect();
+
     let (ours, theirs) = tokio::io::duplex(1 << 20);
     let (agent_read, agent_write) = tokio::io::split(theirs);
     let agent = tokio::spawn(zcode_acp::serve(
@@ -412,7 +417,14 @@ where
                     {
                         let line = std::mem::take(&mut app.input);
                         app.scroll = 0;
-                        if line.starts_with('/') {
+                        // A prompt command defined in a file goes to the
+                        // agent like any prompt; the rest are ours.
+                        let named = line[1.min(line.len())..].split_whitespace().next();
+                        let is_prompt_command = line.starts_with('/')
+                            && named.is_some_and(|name| {
+                                prompt_commands.iter().any(|known| known == name)
+                            });
+                        if line.starts_with('/') && !is_prompt_command {
                             if !driver.command(&mut app, &line) {
                                 break Ok(());
                             }

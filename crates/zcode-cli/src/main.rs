@@ -50,6 +50,11 @@ enum Command {
         #[command(subcommand)]
         command: skill::SkillCommand,
     },
+    /// Install and list plugins packaged for Claude Code.
+    Plugin {
+        #[command(subcommand)]
+        command: skill::PluginCommand,
+    },
     /// List sessions.
     Sessions,
     /// Import a session recorded by another harness.
@@ -202,6 +207,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Eval(args) => return eval::run(&home, args).await,
         Command::Probe(args) => return eval::probe(&home, args).await,
         Command::Skill { command } => return skill::run(&home, command),
+        Command::Plugin { command } => return skill::run_plugin(&home, command),
         Command::Sessions => {
             for header in store.list().map_err(display)? {
                 println!("{}\t{}", header.id, header.cwd);

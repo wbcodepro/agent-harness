@@ -12,4 +12,4 @@ mod subagent;
 
 pub use board::{TaskBoard, board_tools};
 pub use budget::{BudgetHook, TreeBudget};
-pub use subagent::{Child, ChildFactory, ChildSpec, SubagentTool};
+pub use subagent::{Child, ChildFactory, ChildSpec, SubagentKind, SubagentTool};

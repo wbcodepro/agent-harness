@@ -381,8 +381,8 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
     // Plugins packaged for Claude Code that the user listed.
     let mut claude_plugins = Vec::new();
-    for path in &config.compat.claude_plugins {
-        match zcode_ext::claude_plugin::ClaudePlugin::open(path) {
+    for path in plugin_dirs(home, &config) {
+        match zcode_ext::claude_plugin::ClaudePlugin::open(&path) {
             Ok(plugin) => {
                 settings_files.push(zcode_ext::claude_hooks::HookFile {
                     path: plugin.hooks_file(),
@@ -593,6 +593,23 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             cwd: cwd.to_path_buf(),
             worktrees: home.join("worktrees"),
             depth: lineage.depth,
+            kinds: {
+                let mut roots = zcode_ext::commands::standard_roots(home, cwd, "agents");
+                roots.extend(
+                    claude_plugins
+                        .iter()
+                        .map(|plugin| plugin.root.join("agents")),
+                );
+                zcode_ext::commands::discover_agents(&roots)
+                    .into_iter()
+                    .map(|agent| zcode_multi::SubagentKind {
+                        name: agent.name,
+                        description: agent.description,
+                        instructions: agent.instructions,
+                        tools: agent.tools,
+                    })
+                    .collect()
+            },
         }));
     }
     if config.model.tools == ToolProfile::Minimal {
@@ -863,6 +880,54 @@ impl Prompter for Terminal {
             .unwrap_or(None)
         })
     }
+}
+
+/// Plugins installed with `zcode plugin install`, by directory name.
+pub fn installed_plugins(home: &Path) -> Vec<zcode_ext::claude_plugin::ClaudePlugin> {
+    let Ok(entries) = std::fs::read_dir(home.join("plugins")) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    dirs.sort();
+    dirs.iter()
+        .filter(|dir| dir.is_dir())
+        .filter_map(|dir| zcode_ext::claude_plugin::ClaudePlugin::open(dir).ok())
+        .collect()
+}
+
+/// Every plugin directory in use: the ones the configuration lists, then
+/// the installed ones.
+fn plugin_dirs(home: &Path, config: &Config) -> Vec<PathBuf> {
+    let mut dirs = config.compat.claude_plugins.clone();
+    for plugin in installed_plugins(home) {
+        if !dirs.contains(&plugin.root) {
+            dirs.push(plugin.root);
+        }
+    }
+    dirs
+}
+
+/// The prompt commands available in `cwd`: the project's, the user's, and
+/// those of the plugins the configuration lists.
+pub fn commands(home: &Path, cwd: &Path) -> Vec<zcode_ext::commands::Command> {
+    let mut roots = zcode_ext::commands::standard_roots(home, cwd, "commands");
+    if let Ok(config) = load_config(home) {
+        roots.extend(
+            plugin_dirs(home, &config)
+                .iter()
+                .map(|plugin| plugin.join("commands")),
+        );
+    }
+    zcode_ext::commands::discover_commands(&roots)
+}
+
+/// `prompt` with a leading `/command` replaced by that command's text.
+/// Anything that is not a known command comes back unchanged.
+pub fn expand_command(home: &Path, cwd: &Path, prompt: &str) -> String {
+    if !prompt.trim_start().starts_with('/') {
+        return prompt.to_string();
+    }
+    zcode_ext::commands::expand(&commands(home, cwd), prompt).unwrap_or_else(|| prompt.to_string())
 }
 
 pub fn session_store(home: &Path) -> SessionStore {

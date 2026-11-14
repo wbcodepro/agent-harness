@@ -368,6 +368,7 @@ impl Server {
         if text.trim().is_empty() {
             return Err(RpcError::invalid("the prompt has no text"));
         }
+        let text = zcode_app::expand_command(&self.home, &entry.cwd, &text);
 
         let mut state = entry.state.lock().await;
         let (session, runtime) = &mut *state;

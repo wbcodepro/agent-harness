@@ -153,7 +153,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
     let logged_before = session.records().len();
 
     let outcome = tokio::select! {
-        result = runtime.agent.run_turn(&mut session, vec![Block::text(args.prompt)]) => Some(result),
+        result = runtime.agent.run_turn(&mut session, vec![Block::text(zcode_app::expand_command(home, &cwd, &args.prompt))]) => Some(result),
         _ = tokio::signal::ctrl_c() => None,
     };
     if let Some(proxy) = &runtime.proxy {

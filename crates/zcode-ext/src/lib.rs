@@ -9,6 +9,7 @@
 
 pub mod claude_hooks;
 pub mod claude_plugin;
+pub mod commands;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;
