@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde_json::{Value, json};
 use zcode_session::{Block, Delta, Message, Role, StopReason, Usage};
 
@@ -17,6 +19,39 @@ pub struct Anthropic {
     /// Ask the API to continue on another model when this one declines.
     fallbacks: bool,
     retry: Retry,
+    /// Request features this model turned out not to accept.
+    unsupported: Unsupported,
+}
+
+/// Parts of a request that newer models take and older ones reject. Each
+/// is sent until the API says the model does not support it, and left out
+/// from then on, so an older model works without being listed anywhere.
+#[derive(Default)]
+struct Unsupported {
+    effort: AtomicBool,
+    eager_input: AtomicBool,
+    request_cache: AtomicBool,
+    fallbacks: AtomicBool,
+}
+
+impl Unsupported {
+    /// Records what a 400 answer says the model does not take. Returns
+    /// whether it named something that was being sent, which is the only
+    /// case worth another attempt.
+    fn learn(&self, error: &LlmError) -> bool {
+        let LlmError::Http { status: 400, body } = error else {
+            return false;
+        };
+        [
+            ("effort", &self.effort),
+            ("output_config", &self.effort),
+            ("eager_input_streaming", &self.eager_input),
+            ("cache_control", &self.request_cache),
+            ("fallbacks", &self.fallbacks),
+        ]
+        .into_iter()
+        .any(|(named, flag)| body.contains(named) && !flag.swap(true, Ordering::Relaxed))
+    }
 }
 
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
@@ -44,6 +79,7 @@ impl Anthropic {
             effort: None,
             fallbacks: true,
             retry: Retry::default(),
+            unsupported: Unsupported::default(),
         }
     }
 
@@ -137,28 +173,31 @@ impl Llm for Anthropic {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let body = build_body(
-                &self.model,
-                self.effort.as_deref(),
-                self.uses_fallbacks(),
-                request,
-                true,
-            );
-            let mut response = match self.open_with_retry(&body).await {
-                // The history carries reasoning this conversation can no
-                // longer vouch for. Send it once more without any; the
-                // model answers this step without that reasoning.
-                Err(e) if rejects_thinking(&e) => {
-                    let body = build_body(
-                        &self.model,
-                        self.effort.as_deref(),
-                        self.uses_fallbacks(),
-                        request,
-                        false,
-                    );
-                    self.open_with_retry(&body).await?
+            let mut with_thinking = true;
+            let mut response = loop {
+                let off = |flag: &AtomicBool| flag.load(Ordering::Relaxed);
+                let body = build_body(
+                    &self.model,
+                    self.effort
+                        .as_deref()
+                        .filter(|_| !off(&self.unsupported.effort)),
+                    self.uses_fallbacks() && !off(&self.unsupported.fallbacks),
+                    request,
+                    with_thinking,
+                    !off(&self.unsupported.eager_input),
+                    !off(&self.unsupported.request_cache),
+                );
+                match self.open_with_retry(&body).await {
+                    Ok(response) => break response,
+                    // The history carries reasoning this conversation can
+                    // no longer vouch for. Send it once more without any;
+                    // the model answers this step without that reasoning.
+                    Err(e) if with_thinking && rejects_thinking(&e) => with_thinking = false,
+                    // An older model refused part of the request: leave
+                    // that part out, now and for the rest of the session.
+                    Err(e) if self.unsupported.learn(&e) => {}
+                    Err(e) => return Err(e),
                 }
-                other => other?,
             };
 
             let mut lines = SseData::default();
@@ -248,6 +287,8 @@ fn build_body(
     fallbacks: bool,
     request: &Request,
     with_thinking: bool,
+    eager_input: bool,
+    request_cache: bool,
 ) -> Value {
     // Tool results travel in user turns, and adjacent turns of one role
     // are merged, so every tool result for an assistant turn lands in the
@@ -272,30 +313,51 @@ fn build_body(
         "model": model,
         "max_tokens": request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         "stream": true,
-        // Caches the whole prefix up to the last block. Each request reads
-        // the entry the previous one wrote, because history only grows.
-        "cache_control": {"type": "ephemeral"},
         "messages": messages
             .into_iter()
             .map(|(role, content)| json!({"role": role, "content": content}))
             .collect::<Vec<_>>(),
     });
+    if request_cache {
+        // Caches the whole prefix up to the last block. Each request reads
+        // the entry the previous one wrote, because history only grows.
+        body["cache_control"] = json!({"type": "ephemeral"});
+    } else if let Some(last) = body["messages"]
+        .as_array_mut()
+        .and_then(|messages| messages.last_mut())
+        .and_then(|message| message["content"].as_array_mut())
+        .and_then(|blocks| blocks.last_mut())
+        .filter(|block| block["type"] != "thinking")
+    {
+        // The same thing said the older way: a mark on the last block of
+        // the conversation, which moves forward with every request.
+        last["cache_control"] = json!({"type": "ephemeral"});
+    }
     if let Some(system) = &request.system {
         body["system"] = json!([{"type": "text", "text": system}]);
+        // A model without request-level caching still caches up to a
+        // marked block: the tools and the system prompt, which never
+        // change within a session.
+        if !request_cache {
+            body["system"][0]["cache_control"] = json!({"type": "ephemeral"});
+        }
     }
     if !request.tools.is_empty() {
         body["tools"] = request
             .tools
             .iter()
             .map(|tool| {
-                json!({
+                let mut declared = json!({
                     "name": tool.name,
                     "description": tool.description,
                     "input_schema": tool.input_schema,
+                });
+                if eager_input {
                     // Stream arguments as they are written; each tool
                     // validates its own input before acting on it.
-                    "eager_input_streaming": true,
-                })
+                    declared["eager_input_streaming"] = json!(true);
+                }
+                declared
             })
             .collect();
     }
@@ -720,6 +782,67 @@ mod tests {
         assert_eq!(bodies.len(), 2);
         let has_thinking = |body: &Value| body.to_string().contains("\"type\":\"thinking\"");
         assert!(has_thinking(&bodies[0]) && !has_thinking(&bodies[1]));
+    }
+
+    #[tokio::test]
+    async fn what_an_older_model_does_not_accept_is_left_out_from_then_on() {
+        let refusal = |message: &str| {
+            json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}})
+                .to_string()
+        };
+        let (base_url, bodies) = serve(vec![
+            (
+                400,
+                refusal("This model does not support the effort parameter."),
+            ),
+            (
+                400,
+                refusal("tools.0.custom.eager_input_streaming: Extra inputs are not permitted"),
+            ),
+            (
+                400,
+                refusal("cache_control: Extra inputs are not permitted"),
+            ),
+            (200, answer()),
+            (200, answer()),
+        ])
+        .await;
+        let model = adapter(&base_url).with_effort(Some("high".into()));
+        let (_, result) = collect(&model, &request()).await;
+        assert_eq!(result.unwrap().stop, StopReason::ToolUse);
+        // The next request does not try them again.
+        let (_, result) = collect(&model, &request()).await;
+        assert!(result.is_ok());
+
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 5);
+        assert_eq!(bodies[0]["output_config"]["effort"], "high");
+        assert!(bodies[1].get("output_config").is_none());
+        assert_eq!(bodies[1]["tools"][0]["eager_input_streaming"], true);
+        assert!(bodies[2]["tools"][0].get("eager_input_streaming").is_none());
+        assert!(bodies[2].get("cache_control").is_some());
+        for sent in &bodies[3..] {
+            assert!(sent.get("output_config").is_none());
+            assert!(sent.get("cache_control").is_none());
+            assert!(sent["tools"][0].get("eager_input_streaming").is_none());
+            // Caching is asked for the older way: on the fixed part of the
+            // prompt and on the last block of the conversation.
+            assert_eq!(sent["system"][0]["cache_control"]["type"], "ephemeral");
+            let last = sent["messages"].as_array().unwrap().last().unwrap();
+            let block = last["content"].as_array().unwrap().last().unwrap();
+            assert_eq!(block["cache_control"]["type"], "ephemeral");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_names_nothing_we_sent_is_not_retried() {
+        let unrelated = json!({"type": "error", "error": {"type": "invalid_request_error",
+            "message": "max_tokens: must be at most 64000"}})
+        .to_string();
+        let (base_url, bodies) = serve(vec![(400, unrelated), (200, answer())]).await;
+        let (_, result) = collect(&adapter(&base_url), &request()).await;
+        assert!(matches!(result, Err(LlmError::Http { status: 400, .. })));
+        assert_eq!(bodies.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
