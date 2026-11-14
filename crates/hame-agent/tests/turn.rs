@@ -9,7 +9,7 @@ use hame_kernel::{BoxFuture, Layer, Next};
 use hame_llm::{Completion, DeltaSink, Llm, LlmError, Request};
 use hame_session::{
     AttemptReason, Block, Clock, CreateOptions, Delta, Event, Role, SessionId, SessionStore,
-    StopReason, TurnEndReason, Usage, plan_recovery,
+    StopReason, TurnEndReason, Usage, assemble, plan_recovery,
 };
 use hame_tools::{Effect, InProcess, ToolContext, ToolOutput, ToolSet};
 use serde_json::{Value, json};
@@ -593,7 +593,19 @@ async fn replaying_the_recording_lifted_from_a_log_reproduces_the_log() {
     };
 
     let (first_log, lifted) = run("first", recording.clone()).await;
-    assert_eq!(lifted, recording);
+    // Pieces that arrive together are journalled as one; what they
+    // assemble to is unchanged.
+    assert_eq!(lifted.responses.len(), recording.responses.len());
+    for (got, want) in lifted.responses.iter().zip(&recording.responses) {
+        assert_eq!(assemble(&got.deltas), assemble(&want.deltas));
+        assert_eq!((got.stop, got.usage), (want.stop, want.usage));
+    }
+    assert_eq!(
+        lifted.responses[2].deltas.last(),
+        Some(&Delta::Text {
+            text: "All set.".into()
+        })
+    );
     let (second_log, _) = run("second", lifted).await;
     assert_eq!(first_log, second_log);
 }

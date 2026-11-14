@@ -175,6 +175,27 @@ pub trait TurnHook: Send + Sync {
 /// Starts the message telling the model the turn is about to run out.
 pub const STEPS_LEFT_PREFIX: &str = "[hame limit]";
 const STEPS_LEFT_WARNING: u64 = 3;
+/// How long stream pieces may be held back to be journalled together.
+const COALESCE_FOR: std::time::Duration = std::time::Duration::from_millis(50);
+/// A held piece is written out once it is this long.
+const COALESCE_BYTES: usize = 4096;
+
+/// Adds `next` to `held` when both continue the same block, so they can be
+/// journalled as one record that assembles to the same content.
+fn merge_delta(held: &mut Delta, next: &Delta) -> bool {
+    match (held, next) {
+        (Delta::Text { text }, Delta::Text { text: more })
+        | (Delta::Thinking { text }, Delta::Thinking { text: more })
+        | (Delta::ToolInput { json: text }, Delta::ToolInput { json: more })
+            if text.len() < COALESCE_BYTES =>
+        {
+            text.push_str(more);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Results shorter than this are cheaper to repeat than to point at.
 const MIN_DEDUPE_BYTES: usize = 2000;
 
@@ -344,14 +365,32 @@ impl Agent {
 
             let mut deltas: Vec<Delta> = Vec::new();
             let completion = {
+                // Pieces that arrive close together are journalled as one
+                // record: a response streamed a token at a time would
+                // otherwise put a record per token in the log (a hundred
+                // thousand in one long turn), which every reader of the log
+                // then pays for. At most the last moment of a stream is
+                // left unjournalled by a crash, as before nothing is
+                // fsynced until the response is complete.
+                let mut pending: Option<(Delta, std::time::Instant)> = None;
                 let mut journal = |delta: Delta| -> Result<(), SinkError> {
-                    session.append(Event::AssistantDelta {
-                        delta: delta.clone(),
-                    })?;
-                    deltas.push(delta);
+                    deltas.push(delta.clone());
+                    if let Some((held, since)) = &mut pending
+                        && since.elapsed() < COALESCE_FOR
+                        && merge_delta(held, &delta)
+                    {
+                        return Ok(());
+                    }
+                    if let Some((held, _)) = pending.replace((delta, std::time::Instant::now())) {
+                        session.append(Event::AssistantDelta { delta: held })?;
+                    }
                     Ok(())
                 };
-                self.llm.stream(&request, &mut journal).await?
+                let streamed = self.llm.stream(&request, &mut journal).await;
+                if let Some((held, _)) = pending.take() {
+                    session.append(Event::AssistantDelta { delta: held })?;
+                }
+                streamed?
             };
 
             let content = assemble(&deltas);
