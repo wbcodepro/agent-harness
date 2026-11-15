@@ -38,6 +38,12 @@ pub const COMMIT_WORDS: &[&str] = &[
     "trash",
     "overwrite",
     "discard",
+    "post",
+    "reply",
+    "confirm",
+    "order",
+    "remove",
+    "merge",
     // A save panel opened by an export confirms with "Export".
     "export",
 ];
@@ -181,7 +187,23 @@ pub struct FocusContext {
     pub in_dialog: bool,
     /// The focus is inside a save panel (confirming it writes a file).
     pub save_panel: bool,
+    /// The application's bundle id, set by the caller from the target
+    /// window (the helper does not report it).
+    pub app: String,
 }
+
+/// Document editors, where Return in a text area of an ordinary window
+/// only inserts a line break. Elsewhere a text area may be a message box
+/// whose Return sends (Messages, Slack and other Electron apps, web chat),
+/// so Return there needs commit.
+pub const LINE_BREAK_APPS: &[&str] = &[
+    "com.apple.TextEdit",
+    "com.apple.iWork.Pages",
+    "com.apple.iWork.Numbers",
+    "com.apple.iWork.Keynote",
+    "com.apple.Notes",
+    "com.microsoft.Word",
+];
 
 /// Roles that take text, where Space types a space instead of pressing.
 const TEXT_INPUT_ROLES: &[&str] = &[
@@ -212,7 +234,14 @@ impl FocusContext {
             // A missing answer is the stricter one.
             in_dialog: v["in_dialog"].as_bool().unwrap_or(true),
             save_panel: v["save_panel"].as_bool().unwrap_or(true),
+            app: String::new(),
         })
+    }
+
+    /// The same context, attributed to the application `app` (bundle id).
+    pub fn in_app(mut self, app: Option<&str>) -> Self {
+        self.app = app.unwrap_or_default().to_string();
+        self
     }
 
     /// What the helper must still find at dispatch time for this
@@ -231,10 +260,15 @@ impl FocusContext {
             || TEXT_INPUT_ROLES.contains(&self.subrole.as_str())
     }
 
-    /// A multi-line text area in an ordinary window, where Return only
-    /// inserts a line break.
+    /// A multi-line text area in an ordinary window of a document editor,
+    /// where Return only inserts a line break.
     fn takes_line_breaks(&self) -> bool {
-        self.role == "AXTextArea" && !self.in_dialog && !self.save_panel
+        self.role == "AXTextArea"
+            && !self.in_dialog
+            && !self.save_panel
+            && LINE_BREAK_APPS
+                .iter()
+                .any(|app| app.eq_ignore_ascii_case(&self.app))
     }
 
     /// The facts an idempotency key is made of.
@@ -290,8 +324,8 @@ fn return_needs(need: &mut Need, what: &str, focus: Option<&FocusContext>) {
         Some(f) => need.add(
             Capability::Commit,
             format!(
-                "{what} with focus on {} needs commit (outside a multi-line text area it can \
-                 press a default button or submit)",
+                "{what} with focus on {} needs commit (outside a document editor's text area \
+                 it can press a default button, submit or send a message)",
                 f.describe()
             ),
         ),
@@ -755,8 +789,30 @@ mod tests {
             name: "x".into(),
             in_dialog,
             save_panel,
+            app: "com.apple.TextEdit".into(),
             ..FocusContext::default()
         }
+    }
+
+    #[test]
+    fn return_in_a_text_area_outside_a_document_editor_is_a_commit() {
+        use Capability::*;
+        // A chat app's message box is a text area too; Return sends there.
+        for app in ["com.apple.MobileSMS", "com.tinyspeck.slackmacgap", ""] {
+            let chat = focus("AXTextArea", false, false).in_app(Some(app));
+            assert_eq!(
+                key("return", Some(&chat)),
+                vec![Commit, GlobalInput],
+                "{app}"
+            );
+            assert_eq!(
+                type_needs("hi\n", Some(&chat), false).caps,
+                vec![Commit, GlobalInput],
+                "{app}"
+            );
+        }
+        let doc = focus("AXTextArea", false, false).in_app(Some("com.apple.textedit"));
+        assert_eq!(key("return", Some(&doc)), vec![GlobalInput]);
     }
 
     fn key(combo: &str, focus: Option<&FocusContext>) -> Vec<Capability> {

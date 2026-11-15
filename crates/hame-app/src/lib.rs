@@ -130,6 +130,9 @@ pub struct Options {
     /// browser and desktop tools, and its acceptance conditions hold the
     /// turn open until they pass (a bounded number of times).
     pub task: Option<hame_session::contract::TaskContract>,
+    /// More paths the agent's tools must neither read nor write, such as
+    /// `hame run --inbox`, whose files arrive as the user's messages.
+    pub private_paths: Vec<PathBuf>,
 }
 
 type NoticeSink = Box<dyn Fn(&str) + Send + Sync>;
@@ -203,6 +206,7 @@ fn private_home_paths(home: &Path) -> Vec<PathBuf> {
         "skills",
         "plugins",
         "desktop.lease",
+        "mcp-auth",
         "AGENTS.md",
     ];
     const SHARED: &[&str] = &["spill", "worktrees"];
@@ -420,6 +424,12 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         // The spill directory stays readable; tools are pointed at it.
         let home = hame_kernel::real_path(home).unwrap_or_else(|_| home.to_path_buf());
         policy.unreadable.extend(private_home_paths(&home));
+        policy.unreadable.extend(
+            options
+                .private_paths
+                .iter()
+                .map(|path| hame_kernel::real_path(path).unwrap_or_else(|_| path.clone())),
+        );
         if let Some(dir) = &config.computer.profiles_dir {
             policy
                 .unreadable
@@ -1762,6 +1772,62 @@ mod tests {
         // so like a credential it must not reach the check.
         assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
         assert!(check("test -z \"$CARGO_MANIFEST_DIR\"".into()).await.passed);
+
+        // File conditions read through the confinement too: a link the
+        // agent made to a hidden file is not followed for it, and the
+        // file's content does not come back as evidence.
+        std::fs::write(home.join("config.toml"), "api_key = \"s3cret-value\"").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(home.join("config.toml"), cwd.join("peek.txt")).unwrap();
+            for predicate in [
+                Predicate::FileContains {
+                    path: "peek.txt".into(),
+                    text: "nothing".into(),
+                },
+                Predicate::JsonValue {
+                    path: "peek.txt".into(),
+                    pointer: "/x".into(),
+                    equals: serde_json::json!(1),
+                },
+                Predicate::FileSha256 {
+                    path: "peek.txt".into(),
+                    sha256: "0".repeat(64),
+                },
+            ] {
+                let task = TaskContract {
+                    version: 1,
+                    id: "t".into(),
+                    outcome: "t".into(),
+                    constraints: vec![],
+                    acceptance: vec![predicate],
+                    authorization: Default::default(),
+                    budget: Default::default(),
+                };
+                let report = hame_verify::verify(&task, &cwd, None, Some(&confine)).await;
+                assert!(!report.passed);
+                let evidence = serde_json::to_string(&report).unwrap();
+                assert!(!evidence.contains("s3cret"), "{evidence}");
+            }
+            std::fs::write(cwd.join("mine.txt"), "visible").unwrap();
+            let task = TaskContract {
+                version: 1,
+                id: "t".into(),
+                outcome: "t".into(),
+                constraints: vec![],
+                acceptance: vec![Predicate::FileContains {
+                    path: "mine.txt".into(),
+                    text: "visible".into(),
+                }],
+                authorization: Default::default(),
+                budget: Default::default(),
+            };
+            assert!(
+                hame_verify::verify(&task, &cwd, None, Some(&confine))
+                    .await
+                    .passed
+            );
+        }
     }
 
     #[test]

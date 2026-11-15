@@ -84,25 +84,105 @@ fn clip(text: &str, max: usize) -> String {
     format!("{}…", &text[..end])
 }
 
-/// Splits one CSV line, honouring double quotes.
-fn csv_fields(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
+/// Splits CSV text into records of fields, honouring double quotes: a
+/// quoted field may hold commas and line breaks, and `""` inside it is a
+/// quote. Blank records are dropped. A quote that is never closed, or one
+/// in the middle of an unquoted field, is an error.
+fn csv_records(text: &str) -> Result<Vec<Vec<String>>, String> {
+    let mut records = Vec::new();
+    let mut record = Vec::new();
     let mut field = String::new();
     let mut quoted = false;
-    let mut chars = line.chars().peekable();
+    // The current field began with a quote (and so may only end with one).
+    let mut was_quoted = false;
+    let mut line = 1;
+    let mut chars = text.chars().peekable();
+    let mut end_record = |record: &mut Vec<String>, field: &mut String| {
+        record.push(std::mem::take(field));
+        let fields = std::mem::take(record);
+        if !(fields.len() == 1 && fields[0].trim().is_empty()) {
+            records.push(fields);
+        }
+    };
     while let Some(c) = chars.next() {
         match (c, quoted) {
             ('"', true) if chars.peek() == Some(&'"') => {
                 field.push('"');
                 chars.next();
             }
-            ('"', _) => quoted = !quoted,
-            (',', false) => fields.push(std::mem::take(&mut field)),
-            (c, _) => field.push(c),
+            ('"', true) => {
+                quoted = false;
+                if !matches!(chars.peek(), None | Some(',' | '\n' | '\r')) {
+                    return Err(format!("line {line}: text after a closing quote"));
+                }
+            }
+            ('"', false) if field.is_empty() && !was_quoted => {
+                quoted = true;
+                was_quoted = true;
+            }
+            ('"', false) => return Err(format!("line {line}: a quote inside an unquoted field")),
+            (',', false) => {
+                record.push(std::mem::take(&mut field));
+                was_quoted = false;
+            }
+            ('\r', false) if chars.peek() == Some(&'\n') => {}
+            ('\n' | '\r', false) => {
+                end_record(&mut record, &mut field);
+                was_quoted = false;
+                line += 1;
+            }
+            (c, _) => {
+                if c == '\n' {
+                    line += 1;
+                }
+                field.push(c);
+            }
         }
     }
-    fields.push(field);
-    fields
+    if quoted {
+        return Err(format!("line {line}: a quoted field is never closed"));
+    }
+    end_record(&mut record, &mut field);
+    Ok(records)
+}
+
+/// Reads a file a predicate names. In a confined session it is read
+/// through the confinement, so a path the agent's tools cannot read (or a
+/// link the agent made to one) is not read for them either and its content
+/// cannot reach the model as evidence.
+async fn read_checked(
+    cwd: &Path,
+    path: &str,
+    confine: Option<&Confinement>,
+) -> Result<Vec<u8>, String> {
+    let full = resolve(cwd, path);
+    let Some(confine) = confine.filter(|_| cfg!(unix)) else {
+        return std::fs::read(&full).map_err(|e| e.to_string());
+    };
+    let confined = confine(
+        Path::new("/bin/cat"),
+        &[OsString::from("--"), full.into_os_string()],
+    )?;
+    let mut cmd = tokio::process::Command::new(confined.program);
+    cmd.args(confined.args);
+    if let Some(env) = confined.env {
+        cmd.env_clear().envs(env);
+    }
+    cmd.current_dir(cwd).kill_on_drop(true);
+    match tokio::time::timeout(COMMAND_TIMEOUT, cmd.output()).await {
+        Ok(Ok(output)) if output.status.success() => Ok(output.stdout),
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = stderr.trim().rsplit(": ").next().unwrap_or("").trim();
+            Err(if reason.is_empty() {
+                "not readable".into()
+            } else {
+                reason.to_string()
+            })
+        }
+        Ok(Err(e)) => Err(format!("cannot read confined: {e}")),
+        Err(_) => Err(format!("timed out after {COMMAND_TIMEOUT:?}")),
+    }
 }
 
 async fn check_one(
@@ -124,13 +204,15 @@ async fn check_one(
         }
         Predicate::FileAbsent { path } => {
             let full = resolve(cwd, path);
-            if full.exists() {
-                (false, format!("{} exists", full.display()))
-            } else {
-                (true, "absent".into())
+            // Only "not found" is absence; a path that cannot be looked at
+            // is not known to be absent. A link counts as present.
+            match std::fs::symlink_metadata(&full) {
+                Ok(_) => (false, format!("{} exists", full.display())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (true, "absent".into()),
+                Err(e) => (false, format!("cannot check {}: {e}", full.display())),
             }
         }
-        Predicate::FileContains { path, text } => match std::fs::read(resolve(cwd, path)) {
+        Predicate::FileContains { path, text } => match read_checked(cwd, path, confine).await {
             Ok(bytes) => {
                 let content = String::from_utf8_lossy(&bytes);
                 if content.contains(text.as_str()) {
@@ -148,7 +230,7 @@ async fn check_one(
             }
             Err(e) => (false, format!("cannot read {path}: {e}")),
         },
-        Predicate::FileSha256 { path, sha256 } => match std::fs::read(resolve(cwd, path)) {
+        Predicate::FileSha256 { path, sha256 } => match read_checked(cwd, path, confine).await {
             Ok(bytes) => {
                 let actual = hame_session::artifact::sha256_hex(&bytes);
                 (
@@ -163,9 +245,9 @@ async fn check_one(
             pointer,
             equals,
         } => {
-            let parsed = std::fs::read_to_string(resolve(cwd, path))
-                .map_err(|e| e.to_string())
-                .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|e| e.to_string()));
+            let parsed = read_checked(cwd, path, confine).await.and_then(|bytes| {
+                serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string())
+            });
             match parsed {
                 Ok(value) => match value.pointer(pointer) {
                     Some(found) => (found == equals, format!("{pointer} = {found}")),
@@ -178,11 +260,36 @@ async fn check_one(
             path,
             rows,
             columns,
-        } => match std::fs::read_to_string(resolve(cwd, path)) {
+        } => match read_checked(cwd, path, confine)
+            .await
+            .and_then(|bytes| String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string()))
+        {
             Ok(text) => {
-                let mut lines = text.lines().filter(|line| !line.trim().is_empty());
-                let header = lines.next().map(csv_fields).unwrap_or_default();
-                let count = lines.count();
+                let records = match csv_records(&text) {
+                    Ok(records) => records,
+                    Err(e) => return (false, format!("{path} is not valid CSV: {e}")),
+                };
+                let mut records = records.into_iter();
+                let header = records.next().unwrap_or_default();
+                let records: Vec<Vec<String>> = records.collect();
+                let count = records.len();
+                // Every record must have the header's fields: a short or
+                // long row is not the declared shape.
+                if let Some((i, bad)) = records
+                    .iter()
+                    .enumerate()
+                    .find(|(_, r)| r.len() != header.len())
+                {
+                    return (
+                        false,
+                        format!(
+                            "data record {} has {} fields, the header {}",
+                            i + 1,
+                            bad.len(),
+                            header.len()
+                        ),
+                    );
+                }
                 let columns_ok = columns.is_empty()
                     || columns
                         .iter()
@@ -652,6 +759,120 @@ mod tests {
             "kind": "browser_state", "text_contians": "Payment received"
         }));
         assert!(typo.is_err());
+    }
+
+    #[test]
+    fn csv_records_keep_quoted_line_breaks_in_one_record() {
+        let text = "name,note\r\n\"Ann\",\"line one\nline two, still\"\r\n\r\n";
+        let records = csv_records(text).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1], vec!["Ann", "line one\nline two, still"]);
+        let quotes = csv_records("a\n\"say \"\"hi\"\"\"\n").unwrap();
+        assert_eq!(quotes[1], vec!["say \"hi\""]);
+        assert!(csv_records("a,b\n\"open,1\n").is_err());
+        assert!(csv_records("a,b\nx\"y,1\n").is_err());
+        assert!(csv_records("a,b\n\"x\"y,1\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_shape_fails_on_ragged_or_malformed_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = || {
+            task(vec![Predicate::CsvShape {
+                path: "t.csv".into(),
+                rows: Some(1),
+                columns: vec!["a".into(), "b".into()],
+            }])
+        };
+        for bad in ["a,b\n1\n", "a,b\n1,2,3\n", "a,b\n\"1,2\n"] {
+            std::fs::write(dir.path().join("t.csv"), bad).unwrap();
+            assert!(
+                !verify(&shape(), dir.path(), None, None).await.passed,
+                "{bad:?}"
+            );
+        }
+        std::fs::write(dir.path().join("t.csv"), "a,b\r\n1,2\r\n").unwrap();
+        assert!(verify(&shape(), dir.path(), None, None).await.passed);
+    }
+
+    #[tokio::test]
+    async fn a_csv_record_with_a_line_break_counts_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("t.csv"), "a,b\n1,\"x\ny\"\n").unwrap();
+        let shape = |rows| {
+            task(vec![Predicate::CsvShape {
+                path: "t.csv".into(),
+                rows: Some(rows),
+                columns: vec!["a".into(), "b".into()],
+            }])
+        };
+        assert!(verify(&shape(1), dir.path(), None, None).await.passed);
+        assert!(!verify(&shape(2), dir.path(), None, None).await.passed);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_path_that_cannot_be_looked_at_is_not_absent() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("f"), "x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let blocked = std::fs::symlink_metadata(locked.join("f")).is_err();
+        let report = verify(
+            &task(vec![Predicate::FileAbsent {
+                path: "locked/f".into(),
+            }]),
+            dir.path(),
+            None,
+            None,
+        )
+        .await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Root can look anyway; then the file is found, which also fails.
+        assert!(!report.passed, "{blocked}");
+        // A link that points at itself is present, not absent.
+        std::os::unix::fs::symlink(dir.path().join("loop"), dir.path().join("loop")).unwrap();
+        assert!(
+            !verify(
+                &task(vec![Predicate::FileAbsent {
+                    path: "loop".into()
+                }]),
+                dir.path(),
+                None,
+                None
+            )
+            .await
+            .passed
+        );
+        // A missing path is absent.
+        assert!(
+            verify(
+                &task(vec![Predicate::FileAbsent {
+                    path: "never".into()
+                }]),
+                dir.path(),
+                None,
+                None
+            )
+            .await
+            .passed
+        );
+        // A dangling link is present, not absent.
+        std::os::unix::fs::symlink(dir.path().join("gone"), dir.path().join("link")).unwrap();
+        assert!(
+            !verify(
+                &task(vec![Predicate::FileAbsent {
+                    path: "link".into()
+                }]),
+                dir.path(),
+                None,
+                None
+            )
+            .await
+            .passed
+        );
     }
 
     #[tokio::test]

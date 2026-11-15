@@ -31,7 +31,10 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 - `command` acceptance conditions run in the sandbox under the agent's policy with the network blocked and no inherited environment; workflow parameters are shell-quoted into them.
 - A custom `HAME_HOME` and `profiles_dir` are hidden from shell tools.
 - Task files, grants and predicates reject unknown fields and empty conditions.
-- Commands in the macOS sandbox cannot send Apple Events, so they cannot script applications outside the desktop tool's grants.
+- Commands in the macOS sandbox inherited the terminal's Accessibility and Screen Recording permissions and could script, read and drive other applications, capture the screen or use the clipboard; the Seatbelt profile now refuses Apple Events, the accessibility port, WindowServer and ScreenCaptureKit, HID user clients and the pasteboard.
+- Return or a typed newline in a text area needs `commit` except in known document editors, since in chat apps it sends.
+- File acceptance conditions read files through the sandbox in a confined session, so a link to a hidden file is not followed and its content never comes back as evidence; `file_absent` fails when the path cannot be looked at; `csv_shape` counts records, not lines, and fails on malformed quoting or records whose width differs from the header.
+- `hame run --inbox` directories are hidden from the agent's tools and message files that are links are not delivered; `~/.hame/mcp-auth` is hidden; a browser tab whose redirect guard could not be attached is not used.
 - A password typed into a secure field is not written into receipts.
 
 **Mid-run messages.** `hame run --inbox DIR` delivers a user message to a running agent (or as the next turn once it has finished); `hame eval` tasks can schedule one with `interject`.
@@ -67,7 +70,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 
 ## Verification for this release candidate
 
-- `cargo test --workspace` on macOS 26.6.2 arm64 (Apple M5, rustc 1.99.1, Playwright and Chrome present, so the browser tests ran): 380 passed, 0 failed, 19 ignored (live-provider and desktop GUI tests, which are opt-in). The desktop GUI suite (`cargo test -p hame-desktop --test gui -- --ignored --test-threads=1`) passed 14/14 on the same machine after the final merge.
+- `cargo test --workspace` on macOS 26.6.2 arm64 (Apple M5, rustc 1.99.1, Playwright and Chrome present, so the browser tests ran): 385 passed, 0 failed, 19 ignored (live-provider and desktop GUI tests, which are opt-in). The desktop GUI suite (`cargo test -p hame-desktop --test gui -- --ignored --test-threads=1`) passed 14/14 on the same machine after the final merge.
 - Live pilot (claude-haiku-5-5, 3 runs per task): 56/57 on the first 19 tasks (commit 74ba6e4) and 29/33 on the other 11 (commit e6f2fea); injection suite 12/12. Both were measured before some of the security fixes above; see [EVIDENCE.md](EVIDENCE.md).
 - Clean build and `cargo test --workspace` in a fresh Linux arm64 container from `git archive`: 339 passed, 0 failed, 5 ignored ([INSTALL.md](INSTALL.md)).
 - `scripts/release-check.sh`: source and macOS arm64 binary archives contain no `.env`, keys, session logs, `target/`, `.claude/` or `.solutions/` ([RELEASE-INSTRUCTIONS.md](RELEASE-INSTRUCTIONS.md)).

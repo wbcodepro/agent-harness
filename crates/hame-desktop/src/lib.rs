@@ -1275,7 +1275,8 @@ impl DesktopTool {
                 self.focus_context(&params["pid"], &params["window_id"])
                     .await?
             }
-        };
+        }
+        .map(|f| f.in_app(target.app.as_deref()));
         if let Some(problem) = focus
             .as_ref()
             .and_then(|f| save_name_problem(&f.facts(), text))
@@ -1389,6 +1390,7 @@ impl DesktopTool {
         let focus = if caps::key_needs_focus(&combo) {
             self.focus_context(&params["pid"], &params["window_id"])
                 .await?
+                .map(|f| f.in_app(target.app.as_deref()))
         } else {
             None
         };

@@ -1638,6 +1638,7 @@ dependencies = [
  "hame-tui",
  "hame-verify",
  "hame-web",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

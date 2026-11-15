@@ -86,6 +86,22 @@ fn config(home: &Path, auth: Authorization) -> DesktopConfig {
     config
 }
 
+/// Runs `open` with `args`, again while it fails: right after the previous
+/// test quit the app, Launch Services answers -600 (the app is still
+/// quitting) for a moment.
+fn open_app(args: &[&std::ffi::OsStr]) {
+    let mut last = None;
+    for _ in 0..10 {
+        let status = Command::new("open").args(args).status().unwrap();
+        if status.success() {
+            return;
+        }
+        last = Some(status);
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    panic!("open {args:?} failed: {last:?}");
+}
+
 fn running(bundle: &str) -> bool {
     let name = if bundle == TEXTEDIT {
         "TextEdit"
@@ -170,11 +186,7 @@ impl Gui {
         }
         let was_running = running(TEXTEDIT);
         if !was_running {
-            let status = Command::new("open")
-                .args(["-g", "-b", TEXTEDIT])
-                .status()
-                .unwrap();
-            assert!(status.success());
+            open_app(&["-g".as_ref(), "-b".as_ref(), TEXTEDIT.as_ref()]);
         }
         let gui = Self {
             tool,
@@ -853,13 +865,14 @@ async fn two_windows_with_the_same_title_are_ambiguous() {
             std::fs::write(dir.path().join("same.txt"), "same name, different folder\n").unwrap();
         }
         let before = gui.windows().await;
-        let status = Command::new("open")
-            .args(["-g", "-b", TEXTEDIT])
-            .arg(a.path().join("same.txt"))
-            .arg(b.path().join("same.txt"))
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let (first, second) = (a.path().join("same.txt"), b.path().join("same.txt"));
+        open_app(&[
+            "-g".as_ref(),
+            "-b".as_ref(),
+            TEXTEDIT.as_ref(),
+            first.as_os_str(),
+            second.as_os_str(),
+        ]);
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut ours;
         loop {
@@ -1354,14 +1367,12 @@ async fn numbers_cells_are_observed_selected_and_typed_into() {
         .args(["-x", "Numbers"])
         .output()
         .is_ok_and(|o| o.status.success());
-    assert!(
-        Command::new("open")
-            .args(["-g", "-a", "Numbers"])
-            .arg(&doc)
-            .status()
-            .unwrap()
-            .success()
-    );
+    open_app(&[
+        "-g".as_ref(),
+        "-a".as_ref(),
+        "Numbers".as_ref(),
+        doc.as_os_str(),
+    ]);
     let home = tempfile::tempdir().unwrap();
     let journal = Arc::new(ActionJournal::open(home.path().join("actions.v1.jsonl")).unwrap());
     let ctx = ToolContext::new(home.path())

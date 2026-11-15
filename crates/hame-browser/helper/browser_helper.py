@@ -825,6 +825,9 @@ class Tab:
         self.closed = False
         self.busy = False
         self.guarded = False
+        # Why the redirect guard could not be attached; the tab is then not
+        # used until a new attempt succeeds.
+        self.guard_error = None
 
 
 class Ref:
@@ -904,8 +907,11 @@ class Helper:
             await cdp.send("Fetch.enable", {"patterns": [
                 {"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"},
                 {"urlPattern": "*", "resourceType": "Document", "requestStage": "Response"}]})
+            tab.guard_error = None
         except Exception as e:
-            self.events.append(f"the redirect guard is not active in {tab.id}: {pw_reason(e)}")
+            tab.guarded = False
+            tab.guard_error = pw_reason(e)
+            self.events.append(f"the redirect guard is not active in {tab.id}: {tab.guard_error}")
 
     async def on_paused(self, tab, cdp, ev):
         rid = ev["requestId"]
@@ -1102,6 +1108,14 @@ class Helper:
         if tab.dialog is not None:
             coro.close()
             raise self.dialog_error(tab, during=False)
+        if tab.guard_error is not None:
+            # Without the guard a redirect could leave the granted origins:
+            # try once more, and refuse to use the tab if it still fails.
+            await self.attach_redirect_guard(tab)
+            if tab.guard_error is not None:
+                coro.close()
+                raise OpError("unauthorized", f"the redirect guard could not be attached to tab {tab.id} "
+                                              f"({tab.guard_error}), so it is not used; open a new tab")
         tab.busy = True
         tab.dialog_event.clear()
         task = asyncio.ensure_future(coro)

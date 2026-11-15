@@ -107,7 +107,7 @@ pub fn drain_inbox(dir: &Path, steering: &hame_agent::Steering) -> usize {
     files.sort();
     let mut queued = 0;
     for file in files {
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Some(text) = read_message(&file) else {
             continue;
         };
         // Renamed first: a message is delivered at most once.
@@ -120,6 +120,29 @@ pub fn drain_inbox(dir: &Path, steering: &hame_agent::Steering) -> usize {
         }
     }
     queued
+}
+
+/// A message file's text, only from a regular file with no other links: a
+/// link to a secret must not be delivered to the model.
+fn read_message(file: &Path) -> Option<String> {
+    use std::io::Read;
+    let meta = std::fs::symlink_metadata(file).ok()?;
+    if !meta.file_type().is_file() {
+        return None;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        if meta.nlink() > 1 {
+            return None;
+        }
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut text = String::new();
+    options.open(file).ok()?.read_to_string(&mut text).ok()?;
+    Some(text)
 }
 
 pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
@@ -140,6 +163,7 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         base_url: args.base_url.clone(),
         max_steps: args.max_steps.unwrap_or(0),
         plan: args.plan,
+        private_paths: args.inbox.iter().cloned().collect(),
         tracer: args
             .trace
             .clone()
@@ -555,5 +579,14 @@ mod tests {
         // Already queued: nothing is delivered twice.
         assert_eq!(drain_inbox(dir.path(), &steering), 0);
         assert_eq!(drain_inbox(&dir.path().join("missing"), &steering), 0);
+        // A link to another file is not delivered, nor is a hard link.
+        #[cfg(unix)]
+        {
+            let secret = dir.path().join("secret.txt");
+            std::fs::write(&secret, "TOKEN=s3cret").unwrap();
+            std::os::unix::fs::symlink(&secret, dir.path().join("004.msg")).unwrap();
+            std::fs::hard_link(&secret, dir.path().join("005.msg")).unwrap();
+            assert_eq!(drain_inbox(dir.path(), &steering), 0);
+        }
     }
 }

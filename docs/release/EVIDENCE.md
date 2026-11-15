@@ -619,7 +619,13 @@ Second pass (office and cross-application tasks):
   If consent had been given earlier, that route would bypass the desktop
   tool's authorization. **Fixed after this pass:** the Seatbelt profile now
   refuses `appleevent-send`, so a sandboxed command cannot script another
-  application (test in `crates/hame-sandbox/src/seatbelt.rs`).
+  application (test in `crates/hame-sandbox/src/seatbelt.rs`). The
+  independent re-review then showed that a command also inherits the
+  terminal's Accessibility and Screen Recording permissions; the profile
+  now also denies the per-app `com.apple.axserver` port, WindowServer,
+  `replayd`, the HID user clients and the pasteboard (checked with an
+  accessibility read, a posted mouse-moved event, `screencapture` and
+  `pbcopy` under the profile: all refused).
 - **FileWrite is per application, not per folder.** A task that grants
   `file_write` on Numbers lets the agent confirm a save or export panel in
   any folder; in the post-fix X02 round 2 it exported into `~/Documents` on

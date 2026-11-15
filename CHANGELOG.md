@@ -13,7 +13,15 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 - Desktop keys, typed newlines and pixel clicks could commit or save under a grant without `commit` or `file_write` (Return in a save panel, cmd+s, a click on Save). They are now classified from the focused element or the element under the point at dispatch time and need what pressing that control needs.
 - `command` acceptance conditions ran unconfined in the harness process. They now run in the sandbox under the agent's policy, with the network blocked and no inherited environment; workflow parameters are shell-quoted into them.
 - A custom `HAME_HOME` (other than its `spill` and `worktrees` folders) and a custom `profiles_dir` were readable by shell tools; they are now hidden.
-- Commands in the macOS sandbox could send Apple Events (`osascript`) and so script applications outside the desktop tool's grants; the Seatbelt profile now refuses them.
+- Commands in the macOS sandbox inherit the terminal's privacy permissions, so they could script applications (`osascript`), read and drive them through accessibility, post keyboard and mouse events, capture the screen and use the clipboard, outside the desktop tool's grants. The Seatbelt profile now refuses Apple Events, the per-app `com.apple.axserver` port, WindowServer and `replayd`, the HID user clients and the pasteboard.
+- Return or a typed newline in any text area outside a dialog needed only `global_input`, but in Messages, Slack and other chat apps it sends. It now needs `commit` except in known document editors (TextEdit, Pages, Numbers, Keynote, Notes, Word).
+- File acceptance conditions (`file_contains`, `file_sha256`, `json_value`, `csv_shape`) read files unconfined, so a link the agent made to a hidden file (for example `~/.hame/config.toml`) was followed and part of its content returned to the model as evidence. In a confined session they now read through the sandbox.
+- `file_absent` passed when the path could not be looked at (a permission error); only "not found" counts as absent now, and a dangling link counts as present.
+- `csv_shape` counted lines, so a record with a quoted line break counted twice, and it accepted rows missing a column; it now parses records strictly (unclosed or stray quotes are errors) and fails when a record's width differs from the header.
+- `hame run --inbox DIR`: the directory is hidden from the agent's tools (otherwise the agent could write its own "user" messages), and a message file that is a link or has other hard links is not delivered.
+- `~/.hame/mcp-auth` (MCP OAuth tokens) is hidden from shell tools even when it is created after the session starts.
+- A browser tab whose redirect guard could not be attached was used unguarded; it is now refused until the guard attaches.
+- More control names count as commits on the desktop: post, reply, confirm, order, remove, merge.
 - A password typed into a secure field was recorded in the action receipt; it is now left out.
 - Unknown fields in task files, grants, budgets and predicates, and predicates with empty fields, are errors instead of being ignored or passing vacuously; a required browser profile that is not reported fails the check.
 

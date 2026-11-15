@@ -11,10 +11,24 @@ use crate::policy::{Mode, Network, SandboxPolicy};
 pub(crate) fn profile(policy: &SandboxPolicy) -> String {
     let mut out = String::from("(version 1)\n(allow default)\n");
 
-    // Apple Events let a command script other apps (`osascript`), which
-    // would bypass the desktop tool's per-app grants, commit gates and
-    // receipts. Apps are driven through the desktop tool only.
+    // Other applications, the screen, input devices and the clipboard are
+    // the desktop tool's business, under its grants, commit gates and
+    // receipts. A command inherits the terminal's privacy permissions
+    // (Accessibility, Screen Recording, Input Monitoring), so without these
+    // rules it could script apps (Apple Events), read and drive their
+    // accessibility trees (the per-app `com.apple.axserver` port), capture
+    // the screen or post and tap events (WindowServer, ScreenCaptureKit's
+    // `replayd`), read HID devices, or use the pasteboard.
     out.push_str("(deny appleevent-send)\n");
+    out.push_str(
+        "(deny mach-lookup (global-name-regex #\"^com\\.apple\\.windowserver\") \
+         (global-name \"com.apple.replayd\") \
+         (global-name-regex #\"^com\\.apple\\.pasteboard\\.\") \
+         (local-name \"com.apple.axserver\"))\n",
+    );
+    out.push_str(
+        "(deny iokit-open (iokit-user-client-class \"IOHIDParamUserClient\" \"IOHIDLibUserClient\"))\n",
+    );
 
     out.push_str("(deny file-write*)\n");
     out.push_str(
@@ -124,12 +138,17 @@ mod tests {
         assert!(!run(&format!("cp {}/key stolen", vault.display())).0);
         assert!(!run("cat .env").0);
 
-        // Other apps cannot be scripted from a command.
+        assert!(!run("echo OVERWRITE > .env").0);
+
+        // Other apps cannot be scripted, the screen captured or the
+        // clipboard written from a command.
         let scripted = run(
             "/usr/bin/osascript -e 'tell application \"System Events\" to get name of first process'",
         );
         assert!(!scripted.0, "{}", scripted.1);
-        assert!(!run("echo OVERWRITE > .env").0);
+        let shot = run("/usr/sbin/screencapture -x shot.png");
+        assert!(!shot.0 && !work.join("shot.png").exists(), "{}", shot.1);
+        assert!(!run("echo x | /usr/bin/pbcopy").0);
         assert!(!work.join("stolen").exists());
 
         // No network.

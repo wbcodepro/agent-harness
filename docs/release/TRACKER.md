@@ -106,6 +106,13 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 - [x] Shell Apple Events bypass found → Seatbelt denies `appleevent-send` (test).
 - Open: desktop `file_write` per app, not per folder (documented in README/SECURITY/RELEASE-NOTES); Excel has no accessible grid; Word/Keynote untried.
 
+### Independent re-review (at 3698a10) — resolved
+- [x] BLOCKER sandboxed commands inherit the terminal's Accessibility/Screen Recording → Seatbelt denies axserver, WindowServer, replayd, HID user clients, pasteboard (probed: AX read, posted event, screencapture, pbcopy all refused).
+- [x] BLOCKER Return in any AXTextArea sends in chat apps → needs commit outside `LINE_BREAK_APPS`.
+- [x] Minor: inbox hidden + link-safe reads; `mcp-auth` hidden; redirect guard fails closed; more commit verbs.
+- [x] User-reported: file predicates followed links to hidden files (now read through the sandbox), `file_absent` on permission errors, `csv_shape` line vs record.
+- Documented, not fixed: formula-editor following does not recompute grants (same app); `AXEnhancedUserInterface` left on; press "OK"/"Yes" in a dialog needs only interact.
+
 ## Test log
 
 | Date | Command | Result |
@@ -128,6 +135,8 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 | 2026-11-15 | `hame eval evals/pilot` second pass, 11 tasks × 3, claude-haiku-5-5 (G3, at e6f2fea) | 29/33 pass, 1 false success (O04, grant/phrase fixed in ccd27c0); post-fix O04 3/3, X02 2/3; $1.45 |
 | 2026-11-15 | fmt, clippy `-D warnings`, `cargo test --workspace` after merging G3 + Apple Events denial | clean; 380 passed, 0 failed, 19 ignored |
 | 2026-11-15 | `cargo test -p hame-desktop --test gui -- --ignored --test-threads=1` after merging G3 | 14/14 pass, 59 s (one test's typed text changed to avoid macOS auto-capitalisation) |
+| 2026-11-15 | fmt, clippy, `cargo test --workspace` after the re-review fixes (sandbox GUI isolation, chat Return, confined file predicates, inbox) | clean; 385 passed, 0 failed, 19 ignored |
+| 2026-11-15 | GUI suite after the re-review fixes | 14/14 pass (a first run failed on a Numbers instance hung since an earlier run; killed, then all passed) |
 
 ### A — merged (c844fef, e3024b3, 2932957)
 - [x] Per-session ToolContext (artifacts, journal, session id) derived from `SessionWriter` each turn; `request.artifacts` set.

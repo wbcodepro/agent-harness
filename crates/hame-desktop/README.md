@@ -45,7 +45,7 @@ A key, a typed newline or a pixel click does whatever the control it reaches doe
 
 | Input | Needs, besides GlobalInput |
 |---|---|
-| `return`, `enter`, `keypadenter` | Commit, unless focus is an `AXTextArea` outside any sheet, dialog or panel. In a save panel (including the Go To Folder sheet on it) also FileWrite. With cmd, ctrl or opt always Commit |
+| `return`, `enter`, `keypadenter` | Commit, unless focus is an `AXTextArea` outside any sheet, dialog or panel in a document editor (`caps::LINE_BREAK_APPS`: TextEdit, Pages, Numbers, Keynote, Notes, Word); elsewhere a text area may be a message box whose Return sends. In a save panel (including the Go To Folder sheet on it) also FileWrite. With cmd, ctrl or opt always Commit |
 | `space` (without cmd or ctrl) | Commit unless focus is a text input (text area, text field, secure field, combo box, search field); on a save panel's control also FileWrite |
 | `delete`, `forwarddelete` (without cmd or ctrl) | Commit unless focus is a text input |
 | `cmd+s`, `cmd+shift+s`, `cmd+opt+s` (any cmd+…+s) | Commit and FileWrite |
@@ -58,7 +58,7 @@ A key, a typed newline or a pixel click does whatever the control it reaches doe
 | `click_at` on text, a text field, a table row or cell, a scroll area | nothing more; a double-click there inside a dialog or panel needs Commit (plus FileWrite in a save panel) |
 | `click_at` on an unnamed control, a generic group, web content that is not a named control, or a point the hit test cannot resolve | Commit (plus FileWrite in a save panel, or when the hit test failed) |
 
-When the focus or the hit test cannot be determined, the stricter set applies. A commit made this way carries an idempotency key (the window, the focused control or the control clicked, the key or text, and the focused field's value), so the same Return in the same field, or a second click on the same Send button, is refused as `prior_effect` until reconciled; for `click_at` a newer screenshot of the window counts as the newer observation. Typing ordinary text into a field and Return in a document's text area need only GlobalInput and carry no key.
+When the focus or the hit test cannot be determined, the stricter set applies. A commit made this way carries an idempotency key (the window, the focused control or the control clicked, the key or text, and the focused field's value), so the same Return in the same field, or a second click on the same Send button, is refused as `prior_effect` until reconciled; for `click_at` a newer screenshot of the window counts as the newer observation. Typing ordinary text into a field and Return in a document editor's text area need only GlobalInput and carry no key. Known gaps: when typing follows Numbers' separate formula editor window, the grants were worked out for the original focus and are not recomputed (same app only); `observe` sets `AXEnhancedUserInterface` on apps that hide their content until asked and does not turn it off.
 
 Safety properties:
 
