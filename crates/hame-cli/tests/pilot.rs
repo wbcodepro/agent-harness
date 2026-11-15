@@ -538,3 +538,99 @@ fn live_fixtures_faults_and_resumption_run_around_the_agent() {
         "the server was stopped"
     );
 }
+
+const INTERJECT_MANIFEST: &str = r#"
+task_set = "interject"
+version = "test.1"
+
+[[task]]
+id = "during"
+prompt = "Write a draft."
+check = "grep -rq 'Use EUR, not USD' \"$HAME_AGENT_HOME/sessions\" && test -f \"$HAME_RUN_DIR/interject.sent\""
+interject = { when = "while [ ! -f draft.txt ]; do sleep 0.05; done", message = "Use EUR, not USD." }
+
+[[task]]
+id = "after"
+prompt = "Write a draft."
+check = "grep -rq 'Use EUR, not USD' \"$HAME_AGENT_HOME/sessions\""
+# The condition never holds while the agent works: the user sends the
+# correction once it has finished.
+interject = { when = "sleep 60", message = "Use EUR, not USD." }
+"#;
+
+#[test]
+fn a_user_correction_reaches_the_running_turn_or_follows_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let suite = root.join("suite");
+    fs::create_dir_all(&suite).unwrap();
+    fs::write(suite.join("manifest.toml"), INTERJECT_MANIFEST).unwrap();
+    // The draft is written, then the shell call lasts long enough for the
+    // inbox (polled every 200 ms) to queue the message before the next
+    // request.
+    let script = root.join("script.jsonl");
+    Recording {
+        responses: vec![
+            bash_call("echo draft > draft.txt; sleep 1", Usage::default()),
+            ScriptedResponse {
+                deltas: vec![Delta::Text {
+                    text: "Done.".into(),
+                }],
+                stop: StopReason::EndTurn,
+                usage: Usage::default(),
+            },
+        ],
+    }
+    .save(&script)
+    .unwrap();
+    let report = root.join("report.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_hame"))
+        .arg("--home")
+        .arg(root.join("home"))
+        .arg("eval")
+        .arg(&suite)
+        .args(["--set", "sandbox.mode=danger-full-access"])
+        .arg("--json")
+        .arg(&report)
+        .current_dir(&root)
+        .env("HAME_SCRIPT", &script)
+        .env_remove("HAME_TRACE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(&report).unwrap_or_else(|e| panic!("{e}\n{stderr}")),
+    )
+    .unwrap();
+    let find = |id: &str| {
+        report["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["task_id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let during = find("during");
+    assert_eq!(during["outcome"], "pass", "{during:#}\n{stderr}");
+    assert_eq!(during["human_interventions"], 1);
+    assert!(
+        during["note"]
+            .as_str()
+            .unwrap()
+            .contains("user correction delivered during the turn"),
+        "{during:#}"
+    );
+    let after = find("after");
+    assert_eq!(after["outcome"], "pass", "{after:#}\n{stderr}");
+    assert_eq!(after["human_interventions"], 1);
+    assert!(
+        after["note"].as_str().unwrap().contains("follow-up turn"),
+        "{after:#}"
+    );
+    // Both processes' requests are accounted: two in the turn, two in the
+    // follow-up.
+    assert_eq!(during["model_calls"], 2, "{during:#}");
+    assert_eq!(after["model_calls"], 4, "{after:#}");
+}

@@ -671,6 +671,7 @@ fn agent_command(
     trace_path: &Path,
     prompt: &str,
     session: Option<&str>,
+    inbox: Option<&Path>,
 ) -> Result<tokio::process::Command, String> {
     let args = ctx.args;
     let mut command = match &args.command {
@@ -699,6 +700,9 @@ fn agent_command(
                 command.args(["--base-url", base_url]);
             }
             command.arg("--trace").arg(trace_path);
+            if let Some(inbox) = inbox {
+                command.arg("--inbox").arg(inbox);
+            }
             command.arg(prompt);
             command
         }
@@ -796,6 +800,72 @@ async fn run_agent(
 /// The marker a fault injector leaves when it killed the agent.
 const KILLED_MARKER: &str = "agent.killed";
 
+/// Written to the run directory when the simulated user's message was
+/// put in the agent's inbox.
+const INTERJECT_MARKER: &str = "interject.sent";
+
+/// Sends the task's interjection: waits for its `when` command to exit 0
+/// (or, without one, for the agent to start), then writes the message to
+/// the agent's inbox. Aborting the task kills the `when` command.
+fn spawn_interjector(
+    when: Option<String>,
+    message: String,
+    inbox: PathBuf,
+    run_dir: PathBuf,
+    cwd: PathBuf,
+    env: Vec<(&'static str, OsString)>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let started = Instant::now();
+        match when {
+            Some(command) => {
+                let status = tokio::process::Command::new(hame_kernel::bash_program())
+                    .arg("-c")
+                    .arg(&command)
+                    .current_dir(&cwd)
+                    .envs(env.iter().map(|(k, v)| (*k, v)))
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true)
+                    .status()
+                    .await;
+                if !status.is_ok_and(|s| s.success()) {
+                    return;
+                }
+            }
+            None => {
+                while !run_dir.join("agent.pid").exists() {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+        if std::fs::write(inbox.join("001.msg"), &message).is_ok() {
+            let _ = std::fs::write(
+                run_dir.join(INTERJECT_MARKER),
+                format!("{:.3}", started.elapsed().as_secs_f64()),
+            );
+        }
+    })
+}
+
+/// Whether any session under `home` holds a user message containing
+/// `text`: the interjection reached the model.
+fn user_said(home: &Path, text: &str) -> bool {
+    let store = SessionStore::new(home.join("sessions"));
+    let text = text.trim();
+    store.list().unwrap_or_default().iter().any(|header| {
+        store
+            .read(&header.id)
+            .unwrap_or_default()
+            .iter()
+            .any(|record| {
+                matches!(&record.event, Event::UserMessage { content }
+                if content.iter().any(|b| matches!(b, Block::Text { text: t } if t.contains(text))))
+            })
+    })
+}
+
 async fn run_task(
     ctx: &Context<'_>,
     task: &TaskSpec,
@@ -844,6 +914,7 @@ async fn run_task(
     let outbox = dir.join("outbox");
     let trace_path = dir.join(TRACE_FILE);
     let resume_trace = dir.join(format!("resume.{TRACE_FILE}"));
+    let followup_trace = dir.join(format!("followup.{TRACE_FILE}"));
 
     // Setup: a fresh workspace and data directory, the fixture, the
     // fixture server, the task's setup command.
@@ -937,6 +1008,8 @@ async fn run_task(
     let mut exited_ok = false;
     let mut timed_out = false;
     let mut resumed = false;
+    // How the simulated user's interjection reached the agent, if it did.
+    let mut interjected: Option<&'static str> = None;
     if setup_ok {
         let background = match &task.background {
             Some(command) => {
@@ -956,7 +1029,28 @@ async fn run_task(
             }
             None => None,
         };
-        let command = agent_command(ctx, &home, &work, &trace_path, &prompt, None)?;
+        let inbox = run_dir.join("inbox");
+        let interject = task
+            .interject
+            .as_ref()
+            .filter(|_| args.command.is_none())
+            .map(|i| (i, manifest::substitute(&i.message, &vars)));
+        let interjector = match &interject {
+            Some((spec, message)) => {
+                std::fs::create_dir_all(&inbox).map_err(|e| e.to_string())?;
+                Some(spawn_interjector(
+                    spec.when.clone(),
+                    message.clone(),
+                    inbox.clone(),
+                    run_dir.clone(),
+                    work.clone(),
+                    env.clone(),
+                ))
+            }
+            None => None,
+        };
+        let inbox_arg = interject.as_ref().map(|_| inbox.as_path());
+        let command = agent_command(ctx, &home, &work, &trace_path, &prompt, None, inbox_arg)?;
         let first = run_agent(command, timeout, &run_dir).await;
         let mut elapsed = first.elapsed;
         let mut last = first;
@@ -974,11 +1068,51 @@ async fn run_task(
             if let Some(session) = session {
                 resumed = true;
                 let resume = manifest::substitute(resume, &vars);
-                let command =
-                    agent_command(ctx, &home, &work, &resume_trace, &resume, Some(&session))?;
+                let command = agent_command(
+                    ctx,
+                    &home,
+                    &work,
+                    &resume_trace,
+                    &resume,
+                    Some(&session),
+                    inbox_arg,
+                )?;
                 let again = run_agent(command, timeout.saturating_sub(elapsed), &run_dir).await;
                 elapsed += again.elapsed;
                 last = again;
+            }
+        }
+        if let Some(interjector) = interjector {
+            interjector.abort();
+        }
+        // The user's message: delivered during the turn, or, when the agent
+        // finished before it got there, sent as the next turn of the same
+        // session, as a user who had just typed it would.
+        if let Some((_, message)) = &interject {
+            if user_said(&home, message) {
+                interjected = Some("delivered during the turn");
+            } else if !last.timed_out {
+                let session = SessionStore::new(home.join("sessions"))
+                    .list()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .next()
+                    .map(|header| header.id.to_string());
+                if let Some(session) = session {
+                    interjected = Some("sent after the agent finished, as a follow-up turn");
+                    let command = agent_command(
+                        ctx,
+                        &home,
+                        &work,
+                        &followup_trace,
+                        message,
+                        Some(&session),
+                        None,
+                    )?;
+                    let again = run_agent(command, timeout.saturating_sub(elapsed), &run_dir).await;
+                    elapsed += again.elapsed;
+                    last = again;
+                }
             }
         }
         if let Some(background) = background {
@@ -1057,14 +1191,18 @@ async fn run_task(
     } else {
         !timed_out && claims_success(exited_ok, facts.last_turn_completed, &facts.final_text)
     };
-    if resumed {
-        // The simulated user who continued the session after the crash.
-        record.human_interventions = Some(1);
+    // The simulated user who continued the session after the crash, and
+    // the one who sent a correction.
+    let interventions = u32::from(resumed) + u32::from(interjected.is_some());
+    if interventions > 0 {
+        record.human_interventions = Some(interventions.into());
     }
     if trace_path.is_file() {
         let mut records = read_trace(&trace_path).map_err(|e| e.to_string())?;
-        if resume_trace.is_file() {
-            records.extend(read_trace(&resume_trace).map_err(|e| e.to_string())?);
+        for extra in [&resume_trace, &followup_trace] {
+            if extra.is_file() {
+                records.extend(read_trace(extra).map_err(|e| e.to_string())?);
+            }
         }
         record.apply_account(&account(&records, &ctx.tariffs));
         if let Some(traces) = &ctx.traces {
@@ -1076,8 +1214,10 @@ async fn run_task(
                 let _ = std::fs::create_dir_all(parent);
             }
             let mut bytes = std::fs::read(&trace_path).unwrap_or_default();
-            if let Ok(more) = std::fs::read(&resume_trace) {
-                bytes.extend(more);
+            for extra in [&resume_trace, &followup_trace] {
+                if let Ok(more) = std::fs::read(extra) {
+                    bytes.extend(more);
+                }
             }
             if std::fs::write(&kept, bytes).is_ok() {
                 record.trace_reference = Some(kept.to_string_lossy().into_owned());
@@ -1106,6 +1246,20 @@ async fn run_task(
             "resumed after the injected crash".into()
         } else {
             format!("resumed after the injected crash; {}", tally.note)
+        };
+    }
+    if let Some(how) = interjected {
+        let said = format!("user correction {how}");
+        tally.note = if tally.note.is_empty() {
+            said
+        } else {
+            format!("{said}; {}", tally.note)
+        };
+    } else if task.interject.is_some() && args.command.is_none() && setup_ok {
+        tally.note = if tally.note.is_empty() {
+            "the user correction was never delivered".into()
+        } else {
+            format!("the user correction was never delivered; {}", tally.note)
         };
     }
     if !tally.note.is_empty() {

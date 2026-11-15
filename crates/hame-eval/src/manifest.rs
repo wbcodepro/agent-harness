@@ -106,6 +106,21 @@ pub struct TaskSpec {
     /// Merged into the agent's config.toml for this task (the arm's own
     /// settings win; arrays are joined), e.g. the `[computer]` grants.
     pub config: toml::Table,
+    /// A user's message during the run, such as a correction.
+    pub interject: Option<Interject>,
+}
+
+/// A message the simulated user sends while the agent works.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Interject {
+    /// Shell command started beside the agent; when it exits 0 the
+    /// message is sent (e.g. once a draft file exists). Without it, the
+    /// message is sent as soon as the agent has started.
+    pub when: Option<String>,
+    /// What the user says. `{fixture_url}`, `{workspace}` and `{outbox}`
+    /// are replaced.
+    pub message: String,
 }
 
 impl TaskSpec {
@@ -181,6 +196,7 @@ struct ManifestTask {
     resume: Option<String>,
     #[serde(default)]
     config: toml::Table,
+    interject: Option<Interject>,
 }
 
 fn file_category() -> String {
@@ -274,6 +290,7 @@ pub fn parse_manifest(text: &str, root: &Path) -> Result<TaskSet, String> {
             teardown: task.teardown.or_else(|| manifest.defaults.teardown.clone()),
             resume: task.resume,
             config: task.config,
+            interject: task.interject,
             dir,
             id: task.id,
         });
@@ -341,6 +358,7 @@ fn load_legacy(suite: &Path) -> Result<TaskSet, String> {
             teardown: None,
             resume: None,
             config: toml::Table::new(),
+            interject: None,
         });
     }
     Ok(TaskSet {
@@ -445,6 +463,7 @@ timeout_secs = 60
 server = "python3 app.py"
 resume = "Continue."
 config = { computer = { browser = true } }
+interject = { when = "test -f draft.md", message = "Use EUR, not USD." }
 "#;
 
     #[test]
@@ -481,6 +500,10 @@ config = { computer = { browser = true } }
         assert_eq!(b01.resume.as_deref(), Some("Continue."));
         assert_eq!(b01.teardown.as_deref(), Some("true"), "from the defaults");
         assert_eq!(b01.config["computer"]["browser"].as_bool(), Some(true));
+        let interject = b01.interject.as_ref().unwrap();
+        assert_eq!(interject.when.as_deref(), Some("test -f draft.md"));
+        assert_eq!(interject.message, "Use EUR, not USD.");
+        assert_eq!(f02.interject, None);
         assert_eq!(b01.dir, dir.path().join("B01"));
         assert_eq!(f02.server, None);
 

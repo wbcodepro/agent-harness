@@ -64,6 +64,7 @@ pub const ACTIONS: &[&str] = &[
     "press",
     "set_value",
     "focus",
+    "select",
     "menu",
     "type",
     "key",
@@ -964,6 +965,28 @@ impl DesktopTool {
                 format!("value: {}", v.chars().take(500).collect::<String>())
             });
         }
+        if action == "select" {
+            let cell = input["cell"].as_str().filter(|c| !c.trim().is_empty());
+            let text = input["text"].as_str().filter(|t| !t.is_empty());
+            if cell.is_none() && text.is_none() && facts.role != "AXCell" {
+                return Err(invalid(
+                    "select needs cell (\"C2\" or \"A1:C4\", on a table or one of its cells) or text (on a text element).",
+                ));
+            }
+            if let Some(cell) = cell {
+                params["cell"] = json!(cell);
+                emitted.push(format!("cell: {cell}"));
+            } else if let Some(text) = text {
+                params["text"] = json!(text);
+                if let Some(n) = input["occurrence"].as_u64() {
+                    params["occurrence"] = json!(n);
+                }
+                emitted.push(format!(
+                    "text: {}",
+                    text.chars().take(200).collect::<String>()
+                ));
+            }
+        }
         let observation_id = params["observation"].as_str().map(str::to_string);
         let result = self
             .act(
@@ -998,6 +1021,7 @@ impl DesktopTool {
                     )
                 }
             }
+            "select" => render::selection(&what, &result),
             _ => format!("Focused {what} in {}", window_line(window)),
         };
         Ok(Outcome::ok(
@@ -1206,14 +1230,19 @@ impl DesktopTool {
                     .as_str()
                     .map(|s| s.chars().count())
                     .unwrap_or(0);
-                Ok(Outcome::ok(
-                    format!(
-                        "Typed {n} characters{} in {} chunks.",
-                        if secure { " (redacted)" } else { "" },
-                        r["chunks"]
-                    ),
-                    Self::window_key(&info["window"]),
-                ))
+                let mut text = format!(
+                    "Typed {n} characters{} in {} chunks.",
+                    if secure { " (redacted)" } else { "" },
+                    r["chunks"]
+                );
+                if let Some(editors) = r["followed"].as_array() {
+                    let editors: Vec<&str> = editors.iter().filter_map(Value::as_str).collect();
+                    text.push_str(&format!(
+                        " The typing opened the app's own editor window ({}); the rest went there.",
+                        editors.join(", ")
+                    ));
+                }
+                Ok(Outcome::ok(text, Self::window_key(&info["window"])))
             }
             Err(e) => {
                 let mut e = e;
@@ -1658,7 +1687,9 @@ impl DesktopTool {
             "apps" => self.apps(ctx).await,
             "windows" => self.windows(input, ctx).await,
             "observe" => self.observe(input, ctx).await,
-            "press" | "set_value" | "focus" => self.element_action(action, input, ctx).await,
+            "press" | "set_value" | "focus" | "select" => {
+                self.element_action(action, input, ctx).await
+            }
             "menu" => self.menu(input, ctx).await,
             "type" => self.type_text(input, ctx).await,
             "key" => self.key(input, ctx).await,
@@ -1950,7 +1981,9 @@ impl Tool for DesktopTool {
                 Start with observe (app, optional window or title) to get refs like o3:e12; refs \
                 are valid only with their observation. press, set_value and focus act on a ref (or \
                 a unique name/role in the window) without moving the mouse; menu chooses a menu \
-                bar item (path \"File > Save…\"). type and key send physical keyboard input to the \
+                bar item (path \"File > Save…\"). select selects table cells (cell \"C2\" or \"A1:C4\" on \
+                a table ref; observed cells show their address) or a stretch of text (text, on a \
+                text element), for typing, a menu command or a format button to act on. type and key send physical keyboard input to the \
                 focused window (call focus first); they stop if focus changes or a dialog appears. \
                 screenshot captures a window (or region) as an image; click_at clicks a pixel of \
                 that screenshot and is refused if the window moved since. Use the visual actions \
@@ -1972,7 +2005,9 @@ impl Tool for DesktopTool {
                     "role": {"type": "string", "description": "Element role to narrow name, e.g. button."},
                     "value": {"type": "string", "description": "set_value: the new value. wait: the value to equal. clipboard set: the text."},
                     "contains": {"type": "string", "description": "wait: the value or title to contain."},
-                    "text": {"type": "string", "description": "type: the text."},
+                    "text": {"type": "string", "description": "type: the text (\\n is Return, \\t is Tab). select: the text to select."},
+                    "cell": {"type": "string", "description": "select: a cell address or range, e.g. C2 or A1:C4."},
+                    "occurrence": {"type": "integer", "description": "select: which appearance of text (default 1)."},
                     "keys": {"type": "string", "description": "key: e.g. cmd+s, return, cmd+shift+g."},
                     "path": {"type": "string", "description": "menu: e.g. File > Save…"},
                     "until": {"type": "string", "enum": ["window", "window_gone", "dialog", "element", "element_gone", "value", "title"]},

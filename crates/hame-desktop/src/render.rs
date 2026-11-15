@@ -94,6 +94,12 @@ pub fn observation(result: &Value, frames: bool) -> Rendered {
             ", pruned (raise max_nodes or act on what is shown)"
         },
     );
+    if result["canvas_exposed"].as_bool() == Some(true) {
+        text.push_str(
+            "The app hid its document content from accessibility; it was asked to expose it \
+             (AXEnhancedUserInterface), as screen readers do.\n",
+        );
+    }
     let dialogs = result["dialogs"].as_array().cloned().unwrap_or_default();
     for d in &dialogs {
         text.push_str(&format!(
@@ -122,6 +128,10 @@ pub fn observation(result: &Value, frames: bool) -> Rendered {
             && sub != "AXStandardWindow"
         {
             line.push_str(&format!("/{}", short_role(sub)));
+        }
+        if let Some(cell) = node["cell"].as_str() {
+            line.push(' ');
+            line.push_str(cell);
         }
         if !name.is_empty() {
             line.push(' ');
@@ -161,6 +171,41 @@ pub fn observation(result: &Value, frames: bool) -> Rendered {
         });
     }
     Rendered { text, refs }
+}
+
+/// What a `select` did, from the helper's result: the cells or the text
+/// now selected, read back from the application.
+pub fn selection(what: &str, result: &Value) -> String {
+    if let Some(cells) = result["selected_cells"].as_array() {
+        let cells: Vec<&str> = cells.iter().filter_map(Value::as_str).collect();
+        let shown = match cells.len() {
+            0 => "no cells (the application did not take the selection)".to_string(),
+            1..=6 => cells.join(", "),
+            n => format!("{n} cells, {} to {}", cells[0], cells[n - 1]),
+        };
+        let table = quote(result["table"].as_str().unwrap_or(what), 60);
+        let requested = result["requested"].as_u64().unwrap_or(cells.len() as u64);
+        if (cells.len() as u64) < requested {
+            return format!(
+                "Asked {table} to select {requested} cells, but it selected only {shown}. \
+                 To select a range, select its first cell, focus the window and extend the \
+                 selection with key shift+right / shift+down."
+            );
+        }
+        return format!(
+            "Selected in {table}: {shown}. Typing now replaces the selected cell's content; \
+             \\n (Return) or \\t (Tab) in typed text commits it and moves on."
+        );
+    }
+    let selected = result["selected_text"].as_str().unwrap_or("");
+    if result["matches"].as_bool() == Some(true) {
+        format!("Selected {} in {what}.", quote(selected, 120))
+    } else {
+        format!(
+            "Asked {what} to select the text, but the selection reads {} (the application changed it).",
+            quote(selected, 120)
+        )
+    }
 }
 
 #[cfg(test)]
@@ -220,5 +265,42 @@ mod tests {
                 .text
                 .contains("o3:e13 button \"Save\" [disabled] @1,2 30x40")
         );
+    }
+
+    #[test]
+    fn table_cells_show_their_address_and_selections_read_back() {
+        let result = json!({
+            "observation": "o1", "complete": true, "canvas_exposed": true,
+            "window": {"window_id": 7, "title": "Budget", "app": "Numbers",
+                       "bundle_id": "com.apple.iWork.Numbers", "pid": 9},
+            "nodes": [
+                {"ref": "e3", "depth": 2, "role": "AXTable", "name": "Table 1, 10 rows, 5 columns"},
+                {"ref": "e12", "depth": 4, "role": "AXCell", "name": "1,5", "cell": "C2"},
+            ]
+        });
+        let text = observation(&result, false).text;
+        assert!(text.contains("o1:e12 cell C2 \"1,5\""), "{text}");
+        assert!(text.contains("asked to expose it"), "{text}");
+
+        let one = json!({"selected_cells": ["D3"], "requested": 1, "table": "Table 1"});
+        assert!(selection("table", &one).starts_with("Selected in \"Table 1\": D3."));
+        let many: Vec<String> = (2..=11).map(|r| format!("A{r}")).collect();
+        let range = json!({"selected_cells": many, "requested": 10, "table": "T"});
+        assert!(selection("table", &range).contains("10 cells, A2 to A11"));
+        // The application took less than was asked: said so, with a way on.
+        let partial = json!({"selected_cells": ["A1"], "requested": 10, "table": "T"});
+        let said = selection("table", &partial);
+        assert!(
+            said.contains("selected only A1") && said.contains("shift+down"),
+            "{said}"
+        );
+
+        let text_ok = json!({"selected_text": "stable demand", "matches": true});
+        assert_eq!(
+            selection("textarea \"Body\"", &text_ok),
+            "Selected \"stable demand\" in textarea \"Body\"."
+        );
+        let text_off = json!({"selected_text": "stable", "matches": false});
+        assert!(selection("x", &text_off).contains("selection reads \"stable\""));
     }
 }
