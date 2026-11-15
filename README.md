@@ -172,7 +172,7 @@ headless = true                 # browser without a window (default)
 browser_channel = "chrome"      # chrome (installed Google Chrome, default) | msedge | chromium
 # batch = true                  # the tools' batch action (default on; off only to measure it)
 # observation = "semantic"      # semantic (default) | screenshot | pixels (both need a "screen" grant; screenshot measures vision cost, pixels is the screenshot-loop baseline: screenshots only, clicks by coordinates)
-# desktop_background = false     # true: the desktop tool works without taking your screen (text and plain keys only; saving and menus need the app in front)
+# desktop_background = false     # true: the desktop tool works without taking your screen: text, plain keys, and new_document / open_file / save through Apple Events; menus, pixel clicks and shortcuts are refused
 # profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
 
 [[computer.grant]]              # read and use pages on local servers, profile "work" only
@@ -263,7 +263,7 @@ A workflow runs only if you trusted that exact file: `hame workflow show NAME` p
 
 ## Built-in tools
 
-`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured; `browser` and `desktop` when [enabled or granted](#browser-and-desktop-control); `workflow` when [workflows](#workflows) exist. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
+`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list` / `task_claim` (a board shared with subagents: dependencies, owners, claiming a free task); `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured; `browser` and `desktop` when [enabled or granted](#browser-and-desktop-control); `workflow` when [workflows](#workflows) exist. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
 
 `write` refuses to overwrite an existing file the model has not read in the session (a file's content is usually what the task depends on); when a write shrinks a file by more than half, the result says the whole file was replaced. When `edit` cannot find the text to replace, it shows how far it matched and where it differs. `grep` names the function or class around each match. After every `edit`, `write` or `apply_patch`, if a valid source file has become syntactically invalid, the result points at the error (Python is checked with `python3` when present; Rust, JS, TS and Go with tree-sitter).
 
@@ -434,7 +434,7 @@ Claude Code plugins: for each plugin installed with `hame plugin install` (in `~
 
 Commands and subagent kinds: a file `commands/<name>.md` in `.hame/`, `.claude/`, `~/.hame/` or a plugin is a prompt invoked as `/<name> args` (with `$ARGUMENTS`, `$1`...`$9`), usable from `hame run`, the terminal interface and ACP. A file `agents/<name>.md` (front matter `name`, `description`, `tools`) defines a kind of subagent the model picks through the `agent` argument of the `subagent` tool; it runs with the file's instructions and, if `tools` is given, only those tools.
 
-A project can declare its own check commands in `.hame/config.toml` (the `[verify]` section only; a repository cannot loosen the sandbox). The project's `AGENTS.md` and `CLAUDE.md`, and `~/.hame/AGENTS.md`, are appended to the system prompt. Skills live in `.hame/skills/<name>/SKILL.md`, `.claude/skills/` or `~/.hame/skills/`.
+A project can declare its own check commands in `.hame/config.toml` (the `[verify]` section only; a repository cannot loosen the sandbox). The project's `AGENTS.md` and `CLAUDE.md`, and `~/.hame/AGENTS.md`, are appended to the system prompt. Skills live in `.hame/skills/<name>/SKILL.md`, `.claude/skills/`, `.agents/skills/` (where `npx skills` installs them), `~/.hame/skills/` or `~/.agents/skills/`; a skill with `disable-model-invocation: true` is not offered to the model.
 
 `hame skill install` reads every file of a skill before copying it: invisible characters, sentences telling the model to ignore instructions or hide things from the user, commands that download and pipe straight into a shell, code hidden in base64, paths to keys and secret files, symlinks. When it sees danger signs it does not install unless you add `--force`. This is pattern matching, not proof: a clean scan means no known trick was found, not that the skill is safe.
 

@@ -77,6 +77,12 @@ pub const BLOCKER_MARKERS: &[&str] = &[
     "not done",
     "was not written",
     "blocked the",
+    "stopped before",
+    "i've stopped",
+    "i have stopped",
+    "still needs",
+    "still need to",
+    "needs_foreground",
 ];
 
 /// How much of the final answer is read for a blocker: its lead, up to the
@@ -527,6 +533,18 @@ pub fn compare(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stopping_short_of_a_step_is_not_a_success_claim() {
+        let text = "I've stopped before the export. Two text edits need Numbers in front, and the \
+                    file shouldn't be exported until they're done.\n\n**Done so far:** ...";
+        assert!(!claims_success(true, true, text));
+        assert!(claims_success(
+            true,
+            true,
+            "Exported revenue-chart.xlsx to the outbox."
+        ));
+    }
     use super::*;
 
     fn record(
