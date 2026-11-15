@@ -218,17 +218,22 @@ def render(path, size=1000):
     return os.path.join(out, pngs[0])
 
 
-def ink_bands(png, threshold=110, min_rows=2):
-    """Horizontal bands of dark pixels (text lines), top to bottom, each
-    (top, bottom, left, right) in pixels, and the image width."""
+def ink_bands(png, contrast=14, min_rows=2):
+    """Horizontal bands of text (pixels that differ from the page's
+    background, its most common grey, by more than `contrast`), top to
+    bottom, each (top, bottom, left, right) in pixels, and the image width.
+    Relative to the background because Quick Look draws some documents on
+    a dark page in dark mode."""
     from PIL import Image
 
     img = Image.open(png).convert("L")
     w, h = img.size
+    histogram = img.histogram()
+    background = max(range(256), key=lambda v: histogram[v])
     px = img.load()
     rows = []
     for y in range(h):
-        xs = [x for x in range(0, w) if px[x, y] < threshold]
+        xs = [x for x in range(w) if abs(px[x, y] - background) > contrast]
         rows.append((min(xs), max(xs)) if xs else None)
     bands, start = [], None
     for y, r in enumerate(rows + [None]):

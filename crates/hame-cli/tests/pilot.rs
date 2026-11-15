@@ -154,8 +154,9 @@ fn every_pilot_checker_fails_the_fixture_and_passes_the_reference_solution() {
     assert_eq!(
         ids,
         [
-            "B01", "B02", "B03", "B04", "B05", "D01", "D03", "D04", "F01", "F02", "F03", "F04",
-            "F05", "R01", "R02", "R03", "R04", "R05", "X01"
+            "B01", "B02", "B03", "B04", "B05", "D01", "D02", "D03", "D04", "D05", "F01", "F02",
+            "F03", "F04", "F05", "O01", "O02", "O03", "O04", "O05", "R01", "R02", "R03", "R04",
+            "R05", "X01", "X02", "X03", "X04", "X05"
         ]
     );
     for task in &set.tasks {
@@ -173,6 +174,13 @@ fn every_pilot_checker_fails_the_fixture_and_passes_the_reference_solution() {
         // by real runs, not here.
         if task.requires.iter().any(|r| r == "desktop") {
             assert!(task.teardown.is_some(), "{} puts the desktop back", task.id);
+            continue;
+        }
+        // A task with a user's interjection is graded on what the agent
+        // did after it; the runner's delivery is tested below, and its
+        // checker by its own offline test.
+        if task.interject.is_some() {
+            assert!(check_dir.join("test_check.py").is_file(), "{}", task.id);
             continue;
         }
         // The profile check opens Chrome through Playwright.
@@ -217,6 +225,58 @@ fn every_pilot_checker_fails_the_fixture_and_passes_the_reference_solution() {
             );
         }
     }
+}
+
+/// The office and cross-application checkers' own tests: synthetic
+/// outputs (and real exports kept beside them), right and wrong, graded
+/// without the API, the GUI or the applications.
+#[test]
+fn office_and_cross_app_checkers_pass_their_offline_tests() {
+    let libs = Command::new("python3")
+        .args(["-c", "import openpyxl, fitz, PIL"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !python() || !libs || !cfg!(target_os = "macos") {
+        eprintln!(
+            "skipped: needs python3 with openpyxl, PyMuPDF and Pillow, and macOS (textutil, Quick Look)"
+        );
+        return;
+    }
+    let suite = repo().join("evals/pilot");
+    let set = hame_eval::manifest::load(&suite, None).unwrap();
+    let mut ran = Vec::new();
+    for task in &set.tasks {
+        let Some(test) = task
+            .check_dir
+            .as_ref()
+            .map(|d| d.join("test_check.py"))
+            .filter(|t| t.is_file())
+        else {
+            continue;
+        };
+        let out = Command::new("python3")
+            .arg(&test)
+            .env("HAME_SUITE_DIR", &suite)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}: {}{}",
+            task.id,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        ran.push(task.id.clone());
+    }
+    assert_eq!(
+        ran,
+        [
+            "D02", "D05", "O01", "O02", "O03", "O04", "O05", "X02", "X03", "X04", "X05"
+        ]
+    );
 }
 
 fn bash_call(command: &str, usage: Usage) -> ScriptedResponse {
