@@ -408,6 +408,15 @@ let SKIP_ROLES: Set<String> = ["AXScrollBar", "AXColumn", "AXSplitter", "AXGrowA
 /// Roles whose children are rendering detail rather than controls.
 let LEAF_ROLES: Set<String> = ["AXTextArea", "AXTextField", "AXStaticText", "AXImage", "AXSecureTextField"]
 
+/// What a skeleton observation keeps: the regions of a window, to map a
+/// dense app first and observe one region with `root` afterwards (after
+/// agent-desktop's `--skeleton` / `--root`).
+let REGION_ROLES: Set<String> = [
+    "AXWindow", "AXSheet", "AXGroup", "AXScrollArea", "AXSplitGroup", "AXToolbar", "AXTabGroup",
+    "AXList", "AXOutline", "AXTable", "AXBrowser", "AXWebArea", "AXLayoutArea", "AXRadioGroup",
+    "AXDrawer", "AXPopover", "AXMenuBar",
+]
+
 /// The attributes an observation reads per element, fetched in one
 /// accessibility round trip instead of one per attribute.
 let OBSERVED_ATTRIBUTES: [String] = [
@@ -568,8 +577,25 @@ func parseCellAddress(_ text: String) -> (Int, Int)? {
 func observe(_ req: [String: Any]) throws -> [String: Any] {
     let (app, appEl, window, wid) = try resolveWindow(req)
     let exposed = exposeCanvas(app, appEl, window)
+    let skeleton = req["skeleton"] as? Bool ?? false
     let maxNodes = max(10, min((req["max_nodes"] as? Int) ?? 150, 1500))
-    let maxDepth = max(2, min((req["max_depth"] as? Int) ?? 30, 60))
+    let maxDepth = max(2, min((req["max_depth"] as? Int) ?? (skeleton ? 8 : 30), 60))
+    // `root`: observe only the subtree of an element of an earlier
+    // observation of this window.
+    var start = window
+    if let root = req["root"] as? String {
+        let parts = root.split(separator: ":").map(String.init)
+        stateLock.lock()
+        let earlier = parts.count == 2 ? observations[parts[0]] : nil
+        stateLock.unlock()
+        guard let earlier, earlier.windowID == wid, let el = earlier.elements[parts[1]] else {
+            throw fail("stale_ref", "\(root) is not an element of a recent observation of this window. Observe again.")
+        }
+        guard roleOf(el.element).0 != nil else {
+            throw fail("stale_ref", "\(root) no longer exists. Observe again.")
+        }
+        start = el.element
+    }
     stateLock.lock()
     let obsID = "o\(nextObservation)"
     nextObservation += 1
@@ -592,7 +618,9 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
         let subrole = a.subrole
         let hasValue = value.map { !$0.isEmpty } ?? false
         var keep: Bool
-        if depth == 0 || CONTROL_ROLES.contains(role) {
+        if skeleton {
+            keep = depth == 0 || REGION_ROLES.contains(role) || role == "AXSheet"
+        } else if depth == 0 || CONTROL_ROLES.contains(role) {
             keep = true
         } else if role == "AXStaticText" {
             // A label repeating its container's name says nothing new.
@@ -615,6 +643,7 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
             if let id = a.identifier, !id.isEmpty { node["identifier"] = id }
             if let fr = rectJSON(a.frame) { node["frame"] = fr }
             if role == "AXCell", let address = cellAddress(e) { node["cell"] = address }
+            if skeleton { node["children"] = a.children.count }
             nodes.append(node)
             if role == "AXSheet" || subrole == "AXDialog" || subrole == "AXSystemDialog" {
                 dialogs.append(["ref": ref, "role": role, "subrole": subrole ?? "", "name": name])
@@ -636,7 +665,7 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
             visit(child, depth: childDepth, parentName: keep ? name : parentName)
         }
     }
-    visit(window, depth: 0, parentName: "")
+    visit(start, depth: 0, parentName: "")
 
     // Other windows of the app that are dialogs (alerts are separate windows).
     var appDialogs: [[String: Any]] = []
@@ -647,7 +676,7 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
         }
     }
 
-    if nodes.count <= 1 && elementsAttr(window, kAXChildrenAttribute).isEmpty {
+    if req["root"] == nil && nodes.count <= 1 && elementsAttr(window, kAXChildrenAttribute).isEmpty {
         throw fail("unsupported",
                    "This window exposes no accessibility content. Use the Visual channel explicitly (screenshot, then click_at) if that is acceptable.",
                    ["window_id": Int(wid)])
@@ -670,6 +699,8 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
         "app_dialogs": appDialogs,
     ]
     if let f = focusedRef { out["focused_ref"] = f }
+    if skeleton { out["skeleton"] = true }
+    if let root = req["root"] as? String { out["root"] = root }
     if exposed { out["canvas_exposed"] = true }
     return out
 }

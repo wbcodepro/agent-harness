@@ -150,6 +150,9 @@ pub fn observation(result: &Value, frames: bool) -> Rendered {
         if node["enabled"].as_bool() == Some(false) {
             line.push_str(" [disabled]");
         }
+        if let Some(n) = node["children"].as_u64() {
+            line.push_str(&format!(" [{n} children]"));
+        }
         if frames && let Some(frame) = frame_text(&node["frame"]) {
             line.push(' ');
             line.push_str(&frame);

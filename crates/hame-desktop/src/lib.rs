@@ -1286,9 +1286,25 @@ impl DesktopTool {
     }
 
     async fn observe(&self, input: &Value, ctx: &ToolContext) -> Step<Outcome> {
-        let mut params = self.window_params(input, ctx)?;
+        // A root names its window through its observation; no app needed.
+        let mut params =
+            if input["root"].is_string() && input["ref"].is_null() && input["app"].is_null() {
+                json!({})
+            } else {
+                self.window_params(input, ctx)?
+            };
         if let Some(n) = input["max_nodes"].as_u64() {
             params["max_nodes"] = json!(n);
+        }
+        if input["skeleton"].as_bool() == Some(true) {
+            params["skeleton"] = json!(true);
+        }
+        if let Some(root) = input["root"].as_str() {
+            let (obs, _) = parse_ref(root).map_err(invalid)?;
+            let record = self.observation(&obs, ctx)?;
+            params["pid"] = json!(record.pid);
+            params["window_id"] = json!(record.window_id);
+            params["root"] = json!(root);
         }
         let result = self
             .req_quick("observe", params)
@@ -2864,6 +2880,8 @@ impl Tool for DesktopTool {
                     "region": {"type": "array", "items": {"type": "number"}, "description": "screenshot: [x, y, width, height] in screen points instead of a window."},
                     "max_edge": {"type": "integer", "description": "screenshot: downscale so the longer side is at most this."},
                     "max_nodes": {"type": "integer", "description": "observe: element budget (default 150)."},
+                    "skeleton": {"type": "boolean", "description": "observe: only the window's regions (groups, lists, tables...) with their child counts, to map a dense app; then observe one with root."},
+                    "root": {"type": "string", "description": "observe: only the subtree of this element of an earlier observation, e.g. o3:e12."},
                     "frames": {"type": "boolean", "description": "observe: show each element's screen frame in points."},
                     "mode": {"type": "string", "enum": ["get", "set", "restore"], "description": "clipboard."},
                     "commit": {"type": "boolean", "description": "Declare that this action commits an effect."},

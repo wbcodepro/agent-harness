@@ -729,6 +729,41 @@ async fn background_mode_types_without_taking_the_foreground() {
     });
 }
 
+/// A skeleton observation lists the window's regions with their child
+/// counts; observing one region with root returns its controls.
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
+async fn a_skeleton_maps_regions_and_root_drills_into_one() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        let doc = gui.new_document().await;
+        let full = gui.observe(doc).await;
+        let skeleton = gui
+            .ok(json!({"action": "observe", "app": TEXTEDIT, "window": doc, "skeleton": true}))
+            .await;
+        assert!(skeleton.contains("children]"), "{skeleton}");
+        assert!(
+            !skeleton.contains("checkbox"),
+            "controls in a skeleton: {skeleton}"
+        );
+        assert!(
+            skeleton.lines().count() < full.lines().count(),
+            "{skeleton}\n---\n{full}"
+        );
+        let region = find_ref(&skeleton, "scrollarea").expect("a scroll area region");
+        let drilled = gui.ok(json!({"action": "observe", "root": region})).await;
+        assert!(drilled.contains("textarea"), "{drilled}");
+        assert!(
+            !drilled.contains("checkbox"),
+            "the format bar is outside the region: {drilled}"
+        );
+        let stale = gui
+            .call(json!({"action": "observe", "root": "o999:e1"}))
+            .await;
+        assert!(stale.is_error, "{}", stale.text);
+    });
+}
+
 /// Background mode creates a document and opens a file through Apple
 /// Events, and a file outside the granted folders is not opened.
 #[tokio::test]
