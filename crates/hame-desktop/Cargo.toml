@@ -1,0 +1,26 @@
+[package]
+name = "hame-desktop"
+description = "Native desktop execution: a macOS accessibility helper behind one desktop tool, with leases, receipts and selective screenshots."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+hame-agent.workspace = true
+hame-kernel.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util = "0.3.34"
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1636,6 +1636,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hame-desktop"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "hame-agent",
+ "hame-kernel",
+ "hame-session",
+ "hame-tools",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "hame-eval"
 version = "0.0.1"
 dependencies = [
