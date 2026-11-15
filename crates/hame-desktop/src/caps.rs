@@ -38,6 +38,8 @@ pub const COMMIT_WORDS: &[&str] = &[
     "trash",
     "overwrite",
     "discard",
+    // A save panel opened by an export confirms with "Export".
+    "export",
 ];
 
 /// Whether a control's name marks it as a commit.
@@ -78,7 +80,7 @@ pub fn channel_of(action: &str) -> Channel {
 pub fn required(action: &str, element: Option<&ElementFacts>, commit: bool) -> Vec<Capability> {
     let mut caps = match action {
         "apps" | "windows" | "observe" | "wait" => vec![Capability::Observe],
-        "press" | "set_value" | "focus" | "menu" => vec![Capability::Interact],
+        "press" | "set_value" | "focus" | "select" | "menu" => vec![Capability::Interact],
         "type" | "key" | "click_at" => vec![Capability::GlobalInput],
         "clipboard" => vec![Capability::Clipboard],
         "screenshot" => vec![Capability::Screen],
@@ -702,6 +704,15 @@ mod tests {
         assert_eq!(
             required("press", Some(&el("Save", true)), false),
             vec![Interact, Commit, FileWrite]
+        );
+        // Numbers and Pages confirm their export save panels with "Export".
+        assert_eq!(
+            required("press", Some(&el("Export", true)), false),
+            vec![Interact, Commit, FileWrite]
+        );
+        assert_eq!(
+            required("menu", Some(&el("Export as PDF…", false)), false),
+            vec![Interact]
         );
         // Cancelling a save panel writes nothing.
         assert_eq!(

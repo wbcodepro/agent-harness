@@ -484,8 +484,85 @@ struct NodeAttributes {
     }
 }
 
+// MARK: - Hidden document canvases
+
+/// Apps whose document content this helper asked to be exposed.
+var exposedPids = Set<pid_t>()
+
+/// Whether a window draws its document on a canvas it does not expose: a
+/// scroll area holding nothing but scroll bars. Numbers and Pages do this
+/// until an assistive app asks for their content, as VoiceOver does.
+func hasHiddenCanvas(_ window: AXUIElement) -> Bool {
+    var level = [window]
+    for _ in 0..<4 {
+        var next: [AXUIElement] = []
+        for e in level {
+            for c in elementsAttr(e, kAXChildrenAttribute) {
+                if roleOf(c).0 == "AXScrollArea" {
+                    let kids = elementsAttr(c, kAXChildrenAttribute)
+                    if kids.allSatisfy({ roleOf($0).0 == "AXScrollBar" }) { return true }
+                }
+                next.append(c)
+            }
+        }
+        level = next
+    }
+    return false
+}
+
+/// Asks the app to expose its document canvas (AXEnhancedUserInterface,
+/// the attribute assistive apps set) when the window hides it, and waits
+/// briefly for the content to appear. True when it asked.
+func exposeCanvas(_ app: NSRunningApplication, _ appEl: AXUIElement, _ window: AXUIElement) -> Bool {
+    let pid = app.processIdentifier
+    if exposedPids.contains(pid) || !hasHiddenCanvas(window) { return false }
+    AXUIElementSetAttributeValue(appEl, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+    exposedPids.insert(pid)
+    let deadline = Date().addingTimeInterval(1.5)
+    while Date() < deadline && hasHiddenCanvas(window) {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    return true
+}
+
+/// Spreadsheet-style column letters: 0 -> A, 25 -> Z, 26 -> AA.
+func columnLetters(_ index: Int) -> String {
+    var n = index
+    var out = ""
+    repeat {
+        out = String(UnicodeScalar(UInt8(65 + n % 26))) + out
+        n = n / 26 - 1
+    } while n >= 0
+    return out
+}
+
+/// The address of a table cell (`C2`) from its row and column ranges.
+func cellAddress(_ cell: AXUIElement) -> String? {
+    func location(_ name: String) -> Int? {
+        guard let v = attr(cell, name), CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(v as! AXValue, .cfRange, &range), range.location >= 0,
+              range.location < 1_000_000 else { return nil }
+        return range.location
+    }
+    guard let row = location("AXRowIndexRange"), let column = location("AXColumnIndexRange") else { return nil }
+    return "\(columnLetters(column))\(row + 1)"
+}
+
+/// `C2` -> (column 2, row 1), zero-based.
+func parseCellAddress(_ text: String) -> (Int, Int)? {
+    let s = text.trimmingCharacters(in: .whitespaces).uppercased()
+    let letters = s.prefix { $0 >= "A" && $0 <= "Z" }
+    let digits = s.dropFirst(letters.count)
+    guard !letters.isEmpty, letters.count <= 3, let row = Int(digits), row >= 1 else { return nil }
+    var column = 0
+    for ch in letters { column = column * 26 + Int(ch.asciiValue! - 64) }
+    return (column - 1, row - 1)
+}
+
 func observe(_ req: [String: Any]) throws -> [String: Any] {
     let (app, appEl, window, wid) = try resolveWindow(req)
+    let exposed = exposeCanvas(app, appEl, window)
     let maxNodes = max(10, min((req["max_nodes"] as? Int) ?? 150, 1500))
     let maxDepth = max(2, min((req["max_depth"] as? Int) ?? 30, 60))
     stateLock.lock()
@@ -532,6 +609,7 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
             if let f = focusedEl, CFEqual(f, e) { node["focused"] = true; focusedRef = ref }
             if let id = a.identifier, !id.isEmpty { node["identifier"] = id }
             if let fr = rectJSON(a.frame) { node["frame"] = fr }
+            if role == "AXCell", let address = cellAddress(e) { node["cell"] = address }
             nodes.append(node)
             if role == "AXSheet" || subrole == "AXDialog" || subrole == "AXSystemDialog" {
                 dialogs.append(["ref": ref, "role": role, "subrole": subrole ?? "", "name": name])
@@ -587,6 +665,7 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
         "app_dialogs": appDialogs,
     ]
     if let f = focusedRef { out["focused_ref"] = f }
+    if exposed { out["canvas_exposed"] = true }
     return out
 }
 
@@ -943,6 +1022,120 @@ func setValue(_ req: [String: Any]) throws -> [String: Any] {
     return ["value": after, "matches": after == value, "window": windowState(r)]
 }
 
+/// The table a cell belongs to.
+func tableOf(_ e: AXUIElement) -> AXUIElement? {
+    var cursor: AXUIElement? = e
+    var hops = 0
+    while let c = cursor, hops < 6 {
+        if roleOf(c).0 == "AXTable" { return c }
+        cursor = elementAttr(c, kAXParentAttribute)
+        hops += 1
+    }
+    return nil
+}
+
+/// The cell at a zero-based column and row, through the table's own
+/// lookup, so cells that are empty (and so not observed) can be reached.
+func cellAt(_ table: AXUIElement, column: Int, row: Int) -> AXUIElement? {
+    var value: CFTypeRef?
+    let param = [NSNumber(value: column), NSNumber(value: row)] as CFArray
+    if AXUIElementCopyParameterizedAttributeValue(table, "AXCellForColumnAndRow" as CFString, param, &value) == .success,
+       let v = value, CFGetTypeID(v) == AXUIElementGetTypeID() {
+        return (v as! AXUIElement)
+    }
+    // Tables without the lookup: walk the rows.
+    let rows = elementsAttr(table, kAXChildrenAttribute).filter { roleOf($0).0 == "AXRow" }
+    guard row < rows.count else { return nil }
+    let cells = elementsAttr(rows[row], kAXChildrenAttribute).filter { roleOf($0).0 == "AXCell" }
+    return column < cells.count ? cells[column] : nil
+}
+
+/// Selects table cells (a cell ref, or `cell` "C2" / "A1:C4" on a table or
+/// one of its cells) or a stretch of text (`text`, its `occurrence`-th
+/// appearance, in a text element). What follows (typing, a menu command, a
+/// format button) applies to the selection.
+func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
+    let r = try resolveElement(req)
+    try checkExpected(r, req)
+    let cellSpec = req["cell"] as? String
+    if cellSpec != nil || r.role == "AXCell" {
+        guard let table = r.role == "AXTable" ? r.element : tableOf(r.element) else {
+            throw fail("invalid", "\(r.role) \"\(r.name)\" is not a table or a cell of one.")
+        }
+        var cells: [AXUIElement] = []
+        if let spec = cellSpec {
+            let parts = spec.split(separator: ":").map(String.init)
+            guard (1...2).contains(parts.count), let from = parseCellAddress(parts[0]),
+                  let to = parseCellAddress(parts.last!) else {
+                throw fail("invalid", "cell must be an address such as C2 or a range such as A1:C4, not \(spec).")
+            }
+            let (c0, c1) = (min(from.0, to.0), max(from.0, to.0))
+            let (r0, r1) = (min(from.1, to.1), max(from.1, to.1))
+            if (c1 - c0 + 1) * (r1 - r0 + 1) > 2000 {
+                throw fail("invalid", "Select at most 2000 cells at once.")
+            }
+            for row in r0...r1 {
+                for column in c0...c1 {
+                    guard let cell = cellAt(table, column: column, row: row) else {
+                        throw fail("not_found", "The table has no cell \(columnLetters(column))\(row + 1).",
+                                   ["table": nameOf(table)])
+                    }
+                    cells.append(cell)
+                }
+            }
+        } else {
+            cells = [r.element]
+        }
+        // Typing is what follows a cell selection, and it needs the window
+        // in front; focusing the table afterwards would make Numbers select
+        // the table object instead of the cell (pilot X02). Bring the window
+        // forward first, then select.
+        _ = try? focus(["pid": Int(r.app.processIdentifier), "window_id": Int(r.windowID)])
+        let err = AXUIElementSetAttributeValue(table, "AXSelectedCells" as CFString, cells as CFArray)
+        if err != .success {
+            throw fail("unsupported", "The table does not let its cells be selected through accessibility (AX error \(err.rawValue)).")
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+        let selected = elementsAttr(table, "AXSelectedCells").compactMap(cellAddress)
+        return ["selected_cells": selected, "requested": cells.count, "table": nameOf(table), "window": windowState(r)]
+    }
+    guard let text = req["text"] as? String, !text.isEmpty else {
+        throw fail("invalid", "select needs cell (on a table or cell) or text (on a text element).")
+    }
+    let full = (valueString(r.element, limit: 10_000_000) ?? "") as NSString
+    let occurrence = max(1, (req["occurrence"] as? Int) ?? 1)
+    var searchFrom = 0
+    var found = NSRange(location: NSNotFound, length: 0)
+    var count = 0
+    while searchFrom <= full.length {
+        let range = full.range(of: text, options: [], range: NSRange(location: searchFrom, length: full.length - searchFrom))
+        if range.location == NSNotFound { break }
+        count += 1
+        if count == occurrence { found = range; break }
+        searchFrom = range.location + max(1, range.length)
+    }
+    if found.location == NSNotFound {
+        throw fail("not_found", count == 0
+                   ? "\(r.role) \"\(r.name)\" does not contain \"\(text)\"."
+                   : "\"\(text)\" appears only \(count) time(s) in \(r.role) \"\(r.name)\".")
+    }
+    var settable = DarwinBoolean(false)
+    AXUIElementIsAttributeSettable(r.element, kAXSelectedTextRangeAttribute as CFString, &settable)
+    if !settable.boolValue {
+        throw fail("unsupported", "\(r.role) \"\(r.name)\" does not let its text be selected through accessibility.")
+    }
+    var range = CFRange(location: found.location, length: found.length)
+    guard let axRange = AXValueCreate(.cfRange, &range) else { throw fail("failed", "Could not build the range.") }
+    let err = AXUIElementSetAttributeValue(r.element, kAXSelectedTextRangeAttribute as CFString, axRange)
+    if err != .success {
+        throw fail("failed", "Selecting the text failed (AX error \(err.rawValue)).")
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+    let selected = strAttr(r.element, kAXSelectedTextAttribute) ?? ""
+    return ["selected_text": selected, "matches": selected == text, "location": found.location,
+            "occurrences_seen": count, "window": windowState(r)]
+}
+
 func frontmostPid() -> pid_t? {
     let system = AXUIElementCreateSystemWide()
     AXUIElementSetMessagingTimeout(system, 2.0)
@@ -1109,9 +1302,14 @@ struct InputTarget {
     let pid: pid_t
     let appEl: AXUIElement
     let windowID: CGWindowID
-    let focusedWindow: AXUIElement
+    var focusedWindow: AXUIElement
     let sheets: Int
-    let focus: AXUIElement?
+    var focus: AXUIElement?
+    /// The app's windows when input started.
+    let windows: [AXUIElement]
+    /// Where input started, to return to when a followed editor closes.
+    let originWindow: AXUIElement
+    let originFocus: AXUIElement?
 }
 
 /// Checks that the target is frontmost and focused, so input would land in
@@ -1124,7 +1322,41 @@ func captureInputTarget(pid: pid_t, appEl: AXUIElement, windowID wid: CGWindowID
     }
     return InputTarget(pid: pid, appEl: appEl, windowID: wid, focusedWindow: fw.focused,
                        sheets: sheetsOf(fw.top).count,
-                       focus: elementAttr(appEl, kAXFocusedUIElementAttribute))
+                       focus: elementAttr(appEl, kAXFocusedUIElementAttribute),
+                       windows: axWindows(appEl),
+                       originWindow: fw.focused,
+                       originFocus: elementAttr(appEl, kAXFocusedUIElementAttribute))
+}
+
+/// Window subroles that are documents or dialogs: focus moving to one of
+/// them during input is interference or an unexpected dialog, never the
+/// input's own doing.
+let NOT_EDITOR_SUBROLES: Set<String> = ["AXStandardWindow", "AXDialog", "AXSystemDialog", ""]
+
+/// When the typing itself opened an editor window of the same app (Numbers
+/// opens a separate formula editor at "="), input follows it: the window
+/// did not exist when input started, is not a document, dialog or sheet,
+/// and the app is still frontmost. Returns the editor's description when
+/// the target moved.
+func followEditor(_ t: inout InputTarget) -> String? {
+    guard frontmostPid() == t.pid, let fw = focusedWindows(t.appEl), !CFEqual(fw.focused, t.focusedWindow) else {
+        return nil
+    }
+    if CFEqual(fw.focused, t.originWindow) {
+        // The followed editor closed (it committed) and focus is back
+        // where input started.
+        t.focusedWindow = t.originWindow
+        t.focus = t.originFocus
+        return ""
+    }
+    if t.windows.contains(where: { CFEqual($0, fw.focused) }) { return nil }
+    let role = roleOf(fw.focused).0 ?? ""
+    let sub = strAttr(fw.focused, kAXSubroleAttribute) ?? ""
+    if role != "AXWindow" || NOT_EDITOR_SUBROLES.contains(sub) { return nil }
+    t.focusedWindow = fw.focused
+    t.focus = elementAttr(t.appEl, kAXFocusedUIElementAttribute)
+    let label = strAttr(fw.focused, kAXIdentifierAttribute) ?? strAttr(fw.focused, kAXTitleAttribute) ?? ""
+    return "\(sub.hasPrefix("AX") ? String(sub.dropFirst(2)) : sub) \"\(label)\""
 }
 
 /// Checks that input would still land where it did when the operation
@@ -1162,7 +1394,10 @@ func checkInputTarget(_ t: InputTarget, emitted: String, checkFocus: Bool) throw
     }
     if checkFocus, let start = t.focus {
         let now = elementAttr(t.appEl, kAXFocusedUIElementAttribute)
-        if now == nil || !CFEqual(now!, start) {
+        // Focus may move into the element input started on (a table opens
+        // an editor inside the cell being typed into) and back out to it;
+        // anywhere else is interference.
+        if now == nil || !(CFEqual(now!, start) || attached(now!, to: start)) {
             throw fail("interference", "Keyboard focus moved to another element; input stopped.", details)
         }
     }
@@ -1248,18 +1483,36 @@ func typeText(_ req: [String: Any], id: Int) throws -> [String: Any] {
     }
     let size = max(1, min((req["chunk"] as? Int) ?? 8, 16))
     let delay = Double(max(0, min((req["delay_ms"] as? Int) ?? 12, 1000))) / 1000.0
-    let target = try captureInputTarget(pid: pid, appEl: appEl, windowID: wid)
+    var target = try captureInputTarget(pid: pid, appEl: appEl, windowID: wid)
     // Focus may not move while typing (checked before every chunk), so the
     // focus checked here is the focus every newline and space will meet.
+    // The exceptions followEditor allows stay inside what the typing
+    // itself opened: the app's own editor for the element typed into.
     try checkContext(req, focusContext(target.focus, windows: [target.focusedWindow, topWindow]))
-    let startFocus = target.focus
+    var startFocus = target.focus
     let hid = postsToHID(req, target)
-    let baseCount = charCount(startFocus)
-    let baseSelected = selectedLength(startFocus)
+    var baseCount = charCount(startFocus)
+    var baseSelected = selectedLength(startFocus)
+    // How much of `emitted` was typed before the current focus took over.
+    var baseEmitted = 0
     var emitted = ""
     var chunkCount = 0
+    var followed: [String] = []
     for chunk in chunks(text, size: size) {
         try checkCancelled(id, ["emitted": emitted, "dispatched": !emitted.isEmpty])
+        let control = chunk == "\n" || chunk == "\r\n" || chunk == "\t"
+        if control && !emitted.isEmpty {
+            // Return and Tab commit what was typed; let a window the text
+            // opened take focus first, or the key is lost in the transition.
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+        if let editor = followEditor(&target) {
+            if !editor.isEmpty && !followed.contains(editor) { followed.append(editor) }
+            startFocus = target.focus
+            baseCount = charCount(startFocus)
+            baseSelected = selectedLength(startFocus)
+            baseEmitted = (emitted as NSString).length
+        }
         try checkInputTarget(target, emitted: emitted, checkFocus: true)
         if chunk == "\n" || chunk == "\r\n" {
             postKey(36, flags: [], pid: pid, hid: hid)
@@ -1273,7 +1526,7 @@ func typeText(_ req: [String: Any], id: Int) throws -> [String: Any] {
         // Wait until the app has taken the chunk, so a focus change after
         // this point cannot redirect it.
         if let base = baseCount {
-            let expected = base - baseSelected + (emitted as NSString).length
+            let expected = base - baseSelected + (emitted as NSString).length - baseEmitted
             let deadline = Date().addingTimeInterval(0.4)
             while Date() < deadline, let now = charCount(startFocus), now < expected {
                 Thread.sleep(forTimeInterval: 0.005)
@@ -1281,7 +1534,9 @@ func typeText(_ req: [String: Any], id: Int) throws -> [String: Any] {
         }
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }
     }
-    return ["emitted": emitted, "chunks": chunkCount]
+    var out: [String: Any] = ["emitted": emitted, "chunks": chunkCount]
+    if !followed.isEmpty { out["followed"] = followed }
+    return out
 }
 
 func pressKey(_ req: [String: Any], id: Int) throws -> [String: Any] {
@@ -1653,7 +1908,7 @@ func wait(_ req: [String: Any], id: Int) throws -> [String: Any] {
 
 // MARK: - Dispatch
 
-let OPERATIONS = ["apps", "windows", "observe", "resolve", "focus_context", "hit_test", "press", "set_value", "focus", "menu", "type",
+let OPERATIONS = ["apps", "windows", "observe", "resolve", "focus_context", "hit_test", "press", "set_value", "focus", "select", "menu", "type",
                   "key", "screenshot", "click_at", "clipboard", "wait", "window_state", "cancel", "shutdown"]
 
 func handle(_ req: [String: Any]) {
@@ -1714,6 +1969,7 @@ func handle(_ req: [String: Any]) {
         case "press": result = try press(req)
         case "set_value": result = try setValue(req)
         case "focus": result = try focus(req)
+        case "select": result = try selectTarget(req)
         case "menu": result = try menuItem(req)
         case "type": result = try typeText(req, id: id)
         case "key": result = try pressKey(req, id: id)
@@ -1748,6 +2004,11 @@ for sig in [SIGTERM, SIGINT, SIGHUP] {
     source.resume()
     signalSources.append(source)
 }
+
+// Connect to the window server before any capture: ScreenCaptureKit
+// asserts (CGS_REQUIRE_INIT) and aborts the helper when it is the first
+// to need the connection. The helper stays out of the Dock and app list.
+NSApplication.shared.setActivationPolicy(.prohibited)
 
 let work = DispatchQueue(label: "hame.desktop.work")
 

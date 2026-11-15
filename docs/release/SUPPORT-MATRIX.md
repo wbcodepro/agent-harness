@@ -17,7 +17,7 @@ Legend: **tested** — exercised for this release; **earlier** — tested on an 
 | Shell sandbox | Seatbelt: reads, writes, network confined; tested | Seatbelt; untested | Landlock + seccomp (Linux 6.7+); untested here | Landlock + seccomp; tested (doctor probe and sandbox tests in Docker) | Low integrity: **writes only**, needs `allow_partial = true`; earlier |
 | Network allowlist proxy | tested | untested | untested | tested (tests) | not enforceable (proxy only for programs that honour proxy variables) |
 | Browser tool | tested (Chrome 157.0.8103.78, Playwright for Python 1.64.1, Python 3.14.5) | untested | untested | builds; browser tests skip (no Playwright in the image) | untested |
-| Desktop tool | tested (macOS 26.6.2, TextEdit 1.20) | untested | no (returns `unsupported`) | no | no |
+| Desktop tool | tested (macOS 26.6.2: TextEdit 1.20, Numbers 14.4, Pages 14.4, Preview 11.0) | untested | no (returns `unsupported`) | no | no |
 | Outcome verification (`file_*`, `json_value`, `csv_shape`, `command`) | tested | untested | untested | tested (unit tests) | builds (`command` uses `cmd /C`) |
 | `browser_state` / `desktop_state` predicates | tested (fixture tests) | untested | untested | browser: skipped; desktop: no | no |
 | Workflows, `hame workflow` | tested (unit tests, CLI run) | untested | untested | tested (unit tests) | builds |
@@ -34,13 +34,17 @@ The desktop helper needs macOS 14 or later (ScreenCaptureKit); only macOS 26.6.2
 | Playwright for Python | 1.64.1 | same | same |
 | Python | 3.14.5 (macOS); 3.11.2 in the Linux image (no Playwright) | | same; clean-install record in [INSTALL.md](INSTALL.md) |
 | Fixture web app | `crates/hame-browser/tests/fixture/app.py` | | browser tests B01–B05 and others |
-| TextEdit | 1.20 (build 415), rich and plain text | macOS 26.6.2 | [EVIDENCE-desktop.md](EVIDENCE-desktop.md), `crates/hame-desktop/README.md` |
+| TextEdit | 1.20 (build 415), rich and plain text | macOS 26.6.2 | [EVIDENCE-desktop.md](EVIDENCE-desktop.md), `crates/hame-desktop/README.md`; pilot D01–D05, X01, X03, R05 ([EVIDENCE.md](EVIDENCE.md)) |
+| Numbers | 14.4 (7043.0.93): tables (cells read with addresses, selected, typed into; formulas through its formula editor), header rows, 2D column chart with title and axis name (Visual channel), Export To Excel | macOS 26.6.2 | pilot O01, O02, O04, X02, X04; GUI test `numbers_cells_are_observed_selected_and_typed_into` |
+| Pages | 14.4 (7043.0.93): body text selected and replaced, Export To Word and PDF | macOS 26.6.2 | pilot O03, O05 |
+| Preview | 11.0: opening a PDF (O05's reopen step) | macOS 26.6.2 | pilot O05 |
+| Microsoft Excel, Microsoft Word | 16.78 | macOS 26.6.2 | diagnostics only, not used by any task: Excel exposes its name box, formula bar and ribbon but no cell grid (also with AXEnhancedUserInterface); a value typed after choosing a cell in the name box landed in A1. Word was not driven |
 | Finder | system | macOS 26.6.2 | `windows` and menu dry resolution, manual check only |
 | Swift | 6.4.2 | macOS 26.6.2 | desktop helper build |
 | Zed | 1.28.1 | macOS | ACP, 2026-11-14 (earlier) |
 | IntelliJ IDEA (AI Assistant) | 2026.1 | macOS | ACP, 2026-11-14 (earlier) |
 
-**Untested**: Microsoft Edge (`msedge` channel) and Playwright's Chromium (`chromium` channel); Firefox and WebKit (not supported: the helper launches Chromium-family browsers only); the browser tool on Linux and Windows; Preview, Notes, Numbers, Pages, System Settings, Electron and Java applications; multiple displays; non-US keyboard layouts; macOS 14 and 15.
+**Untested**: Microsoft Edge (`msedge` channel) and Playwright's Chromium (`chromium` channel); Firefox and WebKit (not supported: the helper launches Chromium-family browsers only); the browser tool on Linux and Windows; Notes, Keynote, System Settings, Electron and Java applications; Excel and Word beyond the diagnostic above; multiple displays; non-US keyboard layouts; macOS 14 and 15.
 
 ## Providers × capabilities
 
@@ -56,7 +60,7 @@ The desktop helper needs macOS 14 or later (ScreenCaptureKit); only macOS 26.6.2
 
 ## Known unsupported operations
 
-- Desktop: scroll, drag, hover, text-range selection, choosing pop-up menu items by value, context menus; `click_at` on region screenshots; capturing minimized windows or windows on another Space; any platform other than macOS.
+- Desktop: scroll, drag, hover, choosing pop-up menu items by value, context menus; selecting a range of Numbers cells in one call (the table takes only the first cell through accessibility; `select` says so and the range is extended with shift+arrow keys); editing chart titles without the Visual channel (Numbers exposes them as text only while being edited); `click_at` on region screenshots; capturing minimized windows or windows on another Space; any platform other than macOS.
 - Browser: iframes and closed shadow roots are not expanded; Firefox/WebKit; filtering a page's own subresource requests (only top-level navigation is limited to granted origins); file uploads from outside the workspace.
 - Budgets: `max_cost_usd` is enforced for Anthropic models only (other providers have no tariff; such a task stops).
 - MCP: requests from server to client (sampling, elicitation, roots) and background tasks.

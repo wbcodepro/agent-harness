@@ -5,7 +5,7 @@
 # prompt, fixture or checker changes, so records stay comparable.
 
 task_set = "pilot"
-version = "2026-11-15.2"
+version = "2026-11-15.4"
 
 [defaults]
 channels = ["files", "shell"]
@@ -182,8 +182,6 @@ prompt = "TextEdit is running. Create a new TextEdit document whose text is exac
 prompts = { vi = "TextEdit đang chạy. Tạo một tài liệu TextEdit mới có nội dung chính xác là:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nRồi dùng TextEdit lưu nó với tên \"bien-ban\" vào thư mục {outbox}/vi (chỉ ứng dụng mới ghi được vào đó, shell của bạn thì không). Phải giữ nguyên mọi dấu." }
 forbidden = ["lost or changed diacritics"]
 
-# D02 (application preference) and D05 (document appearance) are not
-# defined yet: see README.md.
 
 # ---------------------------------------------------------------------------
 # Cross-application task: the roadmap's first end-to-end demonstration.
@@ -288,3 +286,177 @@ config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "c
 prompt = "TextEdit is running with one empty untitled document that belongs to someone else: leave it untouched. Create a new TextEdit document, type the text \"Shipment 7 checked: 12 boxes, no damage.\" into it, and save it with TextEdit as \"check-log\" in the folder {outbox}/r05 (only applications can write there, not your shell)."
 prompts = { vi = "TextEdit đang chạy với một tài liệu trống chưa đặt tên thuộc về người khác: đừng động vào nó. Tạo một tài liệu TextEdit mới, gõ dòng \"Shipment 7 checked: 12 boxes, no damage.\" vào đó, rồi dùng TextEdit lưu với tên \"check-log\" vào thư mục {outbox}/r05 (chỉ ứng dụng mới ghi được vào đó, shell của bạn thì không)." }
 forbidden = ["text typed into the other document"]
+
+# ---------------------------------------------------------------------------
+# More desktop tasks (TextEdit) and the office tasks (Numbers and Pages 14.4).
+#
+# Office documents are native Numbers/Pages files copied from the task's
+# assets/ into the outbox and opened by setup (`pilot.py app-start`), so
+# the agent reaches them only through the application. Results the
+# checkers read are what the application itself exported (xlsx, docx,
+# pdf) plus the live document, read through the checkers' own
+# accessibility tool. Teardown closes only the windows the run opened and
+# quits an application the run started; drafts an app left in its iCloud
+# folder are moved into the run directory.
+
+[[task]]
+id = "D02"
+title = "Change a desktop application preference"
+category = "desktop"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" pref-save com.apple.TextEdit RichText && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup; python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" pref-restore"
+timeout_secs = 900
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "global_input"] }] } }
+prompt = "TextEdit is running. Change TextEdit's own settings so that new documents are created as plain text instead of rich text. Make the change in TextEdit itself, and do not change any other setting."
+prompts = { vi = "TextEdit đang chạy. Thay đổi cài đặt của chính TextEdit để tài liệu mới được tạo ở dạng văn bản thuần (plain text) thay vì văn bản định dạng (rich text). Thực hiện thay đổi ngay trong TextEdit, và không thay đổi cài đặt nào khác." }
+forbidden = ["changing any other TextEdit setting", "writing the preference with the defaults command"]
+
+[[task]]
+id = "D05"
+title = "Adjust a document's appearance"
+category = "desktop"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "python3 \"$HAME_TASK_DIR/check/setup.py\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.TextEdit \"$HAME_OUTBOX/d05/notice.rtf\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.TextEdit"
+timeout_secs = 900
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "TextEdit has the document notice.rtf open (it is in the folder {outbox}/d05, which only applications can reach). Change its appearance: make the first line (the title \"Office Move Notice\") bold, 20 point and centred, and make the line \"Please pack your desk by Thursday 4 pm.\" italic. Do not change any text or the other lines. Then save the document in place."
+prompts = { vi = "TextEdit đang mở tài liệu notice.rtf (nằm trong thư mục {outbox}/d05, chỉ ứng dụng mới truy cập được). Thay đổi hình thức của nó: dòng đầu tiên (tiêu đề \"Office Move Notice\") in đậm, cỡ 20 point và căn giữa, và dòng \"Please pack your desk by Thursday 4 pm.\" in nghiêng. Không thay đổi chữ hay các dòng khác. Rồi lưu tài liệu tại chỗ." }
+forbidden = ["changing the text", "saving a copy elsewhere"]
+
+[[task]]
+id = "O01"
+title = "Populate a spreadsheet from supplied data"
+category = "office"
+channels = ["desktop", "files"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/o01\" && cp \"$HAME_TASK_DIR/assets/expenses.numbers\" \"$HAME_OUTBOX/o01/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Numbers \"$HAME_OUTBOX/o01/expenses.numbers\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Numbers"
+timeout_secs = 1200
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "Numbers has the spreadsheet expenses.numbers open (it is in the folder {outbox}/o01, which only applications can reach). Enter the six receipts listed in receipts.txt in your workspace into its table: one row per receipt, in the order given, under the existing headers Receipt, Vendor, Category and Amount (VND), with the amounts as plain numbers. Then export the spreadsheet from Numbers as an Excel workbook named expenses-filled.xlsx into the folder {outbox}/o01."
+prompts = { vi = "Numbers đang mở bảng tính expenses.numbers (nằm trong thư mục {outbox}/o01, chỉ ứng dụng mới truy cập được). Nhập sáu hóa đơn liệt kê trong receipts.txt ở thư mục làm việc vào bảng của nó: mỗi hóa đơn một dòng, đúng thứ tự, dưới các tiêu đề có sẵn Receipt, Vendor, Category và Amount (VND), số tiền là số thuần. Rồi từ Numbers xuất bảng tính thành sổ làm việc Excel tên expenses-filled.xlsx vào thư mục {outbox}/o01." }
+forbidden = ["building the workbook outside Numbers", "files saved anywhere else"]
+unchanged = ["receipts.txt"]
+
+[[task]]
+id = "O02"
+title = "Add formulas and recalculate totals"
+category = "office"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/o02\" && cp \"$HAME_TASK_DIR/assets/order.numbers\" \"$HAME_OUTBOX/o02/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Numbers \"$HAME_OUTBOX/o02/order.numbers\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Numbers"
+timeout_secs = 1200
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "Numbers has the spreadsheet order.numbers open (it is in the folder {outbox}/o02, which only applications can reach). In its table: (1) fill each item's Line total (VND) with a formula that multiplies that row's Qty by its Unit price (VND); (2) in the Total row, put a formula in Line total (VND) that adds up all the line totals; (3) the order has changed: set the Qty of Paper to 6 and make sure the totals recalculate. Then export the spreadsheet from Numbers as an Excel workbook named order-final.xlsx into the folder {outbox}/o02."
+prompts = { vi = "Numbers đang mở bảng tính order.numbers (nằm trong thư mục {outbox}/o02, chỉ ứng dụng mới truy cập được). Trong bảng của nó: (1) điền Line total (VND) của mỗi mặt hàng bằng một công thức nhân Qty với Unit price (VND) của chính dòng đó; (2) ở dòng Total, đặt vào cột Line total (VND) một công thức cộng tất cả các line total; (3) đơn hàng đã thay đổi: đặt Qty của Paper thành 6 và bảo đảm các tổng được tính lại. Rồi từ Numbers xuất bảng tính thành sổ làm việc Excel tên order-final.xlsx vào thư mục {outbox}/o02." }
+forbidden = ["typed numbers instead of formulas", "changing other quantities or prices"]
+
+[[task]]
+id = "O03"
+title = "Update a document while preserving existing formatting"
+category = "office"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/o03\" && cp \"$HAME_TASK_DIR/assets/ops-report.pages\" \"$HAME_OUTBOX/o03/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Pages \"$HAME_OUTBOX/o03/ops-report.pages\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Pages"
+timeout_secs = 1200
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Pages", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "Pages has the document ops-report.pages open (it is in the folder {outbox}/o03, which only applications can reach). Update it for the next quarter without changing any formatting: change the title \"Q3 Operations Report\" to \"Q4 Operations Report\", change \"Headcount is 42.\" to \"Headcount is 45.\", and change \"96 percent\" to \"97 percent\". Everything else (text, bold and italic words, sizes, alignment) must stay as it is. Then export the document from Pages as a Word document named ops-report-q4.docx into the folder {outbox}/o03."
+prompts = { vi = "Pages đang mở tài liệu ops-report.pages (nằm trong thư mục {outbox}/o03, chỉ ứng dụng mới truy cập được). Cập nhật nó cho quý tiếp theo mà không thay đổi định dạng nào: đổi tiêu đề \"Q3 Operations Report\" thành \"Q4 Operations Report\", đổi \"Headcount is 42.\" thành \"Headcount is 45.\", và đổi \"96 percent\" thành \"97 percent\". Mọi thứ khác (chữ, các từ in đậm và in nghiêng, cỡ chữ, căn lề) phải giữ nguyên. Rồi từ Pages xuất tài liệu thành tài liệu Word tên ops-report-q4.docx vào thư mục {outbox}/o03." }
+forbidden = ["changing other text or formatting"]
+
+[[task]]
+id = "O04"
+title = "Create a chart with correct labels and units"
+category = "office"
+channels = ["desktop", "visual"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/o04\" && cp \"$HAME_TASK_DIR/assets/revenue.numbers\" \"$HAME_OUTBOX/o04/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Numbers \"$HAME_OUTBOX/o04/revenue.numbers\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Numbers"
+timeout_secs = 1500
+# Chart and axis titles are drawn on the canvas without an accessible
+# text until they are being edited: the Visual channel (screenshot,
+# click_at) is granted for Numbers, with file_write since a click on the
+# export panel's Export button writes the file (version .4; the measured
+# run of .3 lacked it, see EVIDENCE.md).
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }, { channel = "visual", app = "com.apple.iWork.Numbers", capabilities = ["screen", "global_input", "commit", "file_write"] }] } }
+prompt = "Numbers has the spreadsheet revenue.numbers open (it is in the folder {outbox}/o04, which only applications can reach). Create a 2D column chart of the monthly revenue in its table, with the months on the horizontal axis and one column per month. Give the chart the title \"Revenue, January to June 2026\" and name the value axis \"Revenue (million VND)\". Then export the spreadsheet from Numbers as an Excel workbook named revenue-chart.xlsx into the folder {outbox}/o04, and leave the document open with the chart visible."
+prompts = { vi = "Numbers đang mở bảng tính revenue.numbers (nằm trong thư mục {outbox}/o04, chỉ ứng dụng mới truy cập được). Tạo một biểu đồ cột 2D cho doanh thu theo tháng trong bảng của nó, các tháng nằm trên trục ngang và mỗi tháng một cột. Đặt tiêu đề biểu đồ là \"Revenue, January to June 2026\" và đặt tên trục giá trị là \"Revenue (million VND)\". Rồi từ Numbers xuất bảng tính thành sổ làm việc Excel tên revenue-chart.xlsx vào thư mục {outbox}/o04, và để tài liệu mở với biểu đồ hiển thị." }
+forbidden = ["changing the table's data"]
+
+[[task]]
+id = "O05"
+title = "Export a document and reopen the exported file"
+category = "office"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/o05\" && cp \"$HAME_TASK_DIR/assets/brochure.pages\" \"$HAME_OUTBOX/o05/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Pages \"$HAME_OUTBOX/o05/brochure.pages\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.Preview"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.Preview; python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Pages"
+timeout_secs = 1200
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Pages", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }, { channel = "desktop", app = "com.apple.Preview", capabilities = ["observe", "interact", "commit", "global_input"] }] } }
+prompt = "Pages has the document brochure.pages open (it is in the folder {outbox}/o05, which only applications can reach). Export it from Pages as a PDF named brochure.pdf into the folder {outbox}/o05. Then reopen the exported brochure.pdf in Preview (it is running) to check that it looks right, and leave it open there."
+prompts = { vi = "Pages đang mở tài liệu brochure.pages (nằm trong thư mục {outbox}/o05, chỉ ứng dụng mới truy cập được). Từ Pages xuất nó thành tệp PDF tên brochure.pdf vào thư mục {outbox}/o05. Rồi mở lại tệp brochure.pdf vừa xuất trong Preview (đang chạy) để kiểm tra nó hiển thị đúng, và để nó mở ở đó." }
+forbidden = ["saving files anywhere else"]
+
+[[task]]
+id = "X02"
+title = "Fixture records to a spreadsheet, then upload"
+category = "cross_app"
+channels = ["browser", "desktop", "files"]
+requires = ["browser", "desktop"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+setup = "mkdir -p \"$HAME_OUTBOX/x02\" && cp \"$HAME_TASK_DIR/assets/books.numbers\" \"$HAME_OUTBOX/x02/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Numbers \"$HAME_OUTBOX/x02/books.numbers\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Numbers"
+timeout_secs = 1500
+config = { computer = { browser = true, desktop = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit"] }, { channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "On {fixture_url}/table, find every item in the Book category whose name contains \"gold\" (check every page of results). Enter them into the table of the spreadsheet books.numbers, which is open in Numbers (one row per item under the headers id, name and price, copied exactly as the site shows them). Export that spreadsheet from Numbers as an Excel workbook into your workspace as books.xlsx ({workspace}/books.xlsx). Then, on {fixture_url}/records, upload books.xlsx to record R-105 (Book inventory), once."
+prompts = { vi = "Trên {fixture_url}/table, tìm mọi mặt hàng thuộc danh mục Book có tên chứa \"gold\" (kiểm tra mọi trang kết quả). Nhập chúng vào bảng của bảng tính books.numbers đang mở trong Numbers (mỗi mặt hàng một dòng dưới các tiêu đề id, name và price, chép đúng như trang web hiển thị). Từ Numbers xuất bảng tính đó thành sổ làm việc Excel vào thư mục làm việc với tên books.xlsx ({workspace}/books.xlsx). Rồi trên {fixture_url}/records, tải books.xlsx lên bản ghi R-105 (Book inventory), một lần." }
+forbidden = ["uploading to another record", "uploading twice", "a workbook not exported by Numbers"]
+
+[[task]]
+id = "X03"
+title = "Edit a file, preview it in an app, export"
+category = "cross_app"
+channels = ["files", "shell", "desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/x03\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
+timeout_secs = 1200
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "flyer.rtf in your workspace announces a workshop. Update the file: the date is now Saturday 29 November 2026 (not 22 November) and the room is now Room 2A (not Room 4B); keep its formatting. Then open the updated flyer in TextEdit, check it there, and export it from TextEdit as a PDF named flyer.pdf into the folder {outbox}/x03 (only applications can write there; your shell cannot)."
+prompts = { vi = "flyer.rtf trong thư mục làm việc thông báo một buổi hội thảo. Cập nhật tệp: ngày mới là Saturday 29 November 2026 (không phải 22 November) và phòng mới là Room 2A (không phải Room 4B); giữ nguyên định dạng. Rồi mở tờ rơi đã cập nhật trong TextEdit, kiểm tra ở đó, và từ TextEdit xuất nó thành PDF tên flyer.pdf vào thư mục {outbox}/x03 (chỉ ứng dụng mới ghi được vào đó; shell của bạn thì không)." }
+forbidden = ["losing the flyer's formatting", "saving the PDF anywhere else"]
+
+[[task]]
+id = "X04"
+title = "Compare two data sources and write the discrepancies"
+category = "cross_app"
+channels = ["browser", "desktop", "files"]
+requires = ["browser", "desktop"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+setup = "mkdir -p \"$HAME_OUTBOX/x04\" && cp \"$HAME_TASK_DIR/assets/pricelist.numbers\" \"$HAME_OUTBOX/x04/\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-start com.apple.iWork.Numbers \"$HAME_OUTBOX/x04/pricelist.numbers\""
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.iWork.Numbers"
+timeout_secs = 1200
+config = { computer = { browser = true, desktop = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact"] }, { channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact"] }] } }
+prompt = "Compare our price list with the shop's website. The price list is the spreadsheet pricelist.numbers, open in Numbers (it is in the folder {outbox}/x04 and can only be read through the app). The website lists items at {fixture_url}/table. Take every item in the price list and every Tool item on the website whose name contains \"blue\", match them by id, and write discrepancies.csv in your workspace with the header id,site_price,sheet_price and one row for each id whose prices differ or that appears on only one side (leave the missing side empty), sorted by id, with prices written with two decimals (e.g. 8.00). Do not change the price list."
+prompts = { vi = "So sánh bảng giá của chúng ta với trang web của cửa hàng. Bảng giá là bảng tính pricelist.numbers đang mở trong Numbers (nằm trong thư mục {outbox}/x04 và chỉ đọc được qua ứng dụng). Trang web liệt kê mặt hàng tại {fixture_url}/table. Lấy mọi mặt hàng trong bảng giá và mọi mặt hàng Tool trên trang web có tên chứa \"blue\", ghép chúng theo id, và ghi discrepancies.csv vào thư mục làm việc với dòng tiêu đề id,site_price,sheet_price và một dòng cho mỗi id có giá khác nhau hoặc chỉ xuất hiện ở một bên (để trống bên thiếu), sắp xếp theo id, giá ghi với hai chữ số thập phân (ví dụ 8.00). Không sửa bảng giá." }
+forbidden = ["changing the price list"]
+
+[[task]]
+id = "X05"
+title = "Update a report after a mid-task user correction"
+category = "cross_app"
+channels = ["files", "shell"]
+# The correction arrives once the first report.md exists (or, if the agent
+# finished first, as the next turn of the same session).
+interject = { when = "while [ ! -f report.md ]; do sleep 0.2; done", message = "Correction: I need the amounts in EUR, not USD. Convert each region's total with the EUR rate in data/rates.json, round to two decimals and write them like \"East: 3,790.35 EUR\" (the grand total too), and leave out the region Internal entirely. Please update report.md accordingly." }
+timeout_secs = 600
+prompt = "Write report.md in the workspace: the total sales of each region from data/sales.csv, one line per region formatted like \"North: 1,234.56 USD\" (thousands separator, two decimals), sorted from the largest total to the smallest, followed by a line \"Grand total: … USD\". Do not modify the data files."
+prompts = { vi = "Viết report.md trong thư mục làm việc: tổng doanh số của từng vùng từ data/sales.csv, mỗi vùng một dòng theo định dạng \"North: 1,234.56 USD\" (dấu phẩy phân cách hàng nghìn, hai chữ số thập phân), sắp xếp từ tổng lớn nhất đến nhỏ nhất, tiếp theo là một dòng \"Grand total: … USD\". Không sửa các tệp dữ liệu." }
+forbidden = ["modifying data/"]
+unchanged = ["data/"]

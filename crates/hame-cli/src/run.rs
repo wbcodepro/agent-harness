@@ -82,6 +82,44 @@ pub struct RunArgs {
     /// `session`, the trace goes beside the session log.
     #[arg(long)]
     trace: Option<PathBuf>,
+    /// Deliver messages written to this directory to the running turn, as
+    /// if the user had typed them: each new `*.msg` file is queued for the
+    /// model's next request and renamed to `*.queued`. Used by `hame eval`
+    /// for a user's mid-task correction.
+    #[arg(long)]
+    inbox: Option<PathBuf>,
+}
+
+/// How often `--inbox` is looked at.
+const INBOX_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Queues every `*.msg` file in `dir` (in name order) on `steering` and
+/// renames it `*.queued`. Returns how many it queued.
+pub fn drain_inbox(dir: &Path, steering: &hame_agent::Steering) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "msg"))
+        .collect();
+    files.sort();
+    let mut queued = 0;
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        // Renamed first: a message is delivered at most once.
+        if std::fs::rename(&file, file.with_extension("queued")).is_err() {
+            continue;
+        }
+        if !text.trim().is_empty() {
+            steering.push(text.trim().to_string());
+            queued += 1;
+        }
+    }
+    queued
 }
 
 pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
@@ -186,6 +224,15 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         }),
     }
     let logged_before = session.records().len();
+    let inbox = args.inbox.clone().map(|dir| {
+        let steering = runtime.steering.clone();
+        tokio::spawn(async move {
+            loop {
+                drain_inbox(&dir, &steering);
+                tokio::time::sleep(INBOX_POLL).await;
+            }
+        })
+    });
 
     let turn = runtime.agent.run_turn(
         &mut session,
@@ -212,6 +259,9 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
             Some(Err(_)) => hame_trace::SpanStatus::Error,
             None => hame_trace::SpanStatus::Cancelled,
         });
+    }
+    if let Some(inbox) = inbox {
+        inbox.abort();
     }
     // Close browsers cleanly so their profiles (cookies, local storage)
     // are written to disk; dropping the helper would kill them instead.
@@ -488,5 +538,22 @@ mod tests {
         // Too short a run to judge.
         assert!(!Spent::of(&cold[..2]).cache_is_cold());
         assert_eq!(Spent::of(&[]).cached_percent(), 0);
+    }
+
+    #[test]
+    fn inbox_messages_are_queued_once_in_name_order() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("002.msg"), "second").unwrap();
+        std::fs::write(dir.path().join("001.msg"), "  first\n").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not a message").unwrap();
+        std::fs::write(dir.path().join("003.msg"), "   ").unwrap();
+        let steering = hame_agent::Steering::default();
+        assert_eq!(drain_inbox(dir.path(), &steering), 2);
+        assert!(dir.path().join("001.queued").is_file());
+        assert!(!dir.path().join("001.msg").exists());
+        assert!(dir.path().join("notes.txt").is_file());
+        // Already queued: nothing is delivered twice.
+        assert_eq!(drain_inbox(dir.path(), &steering), 0);
+        assert_eq!(drain_inbox(&dir.path().join("missing"), &steering), 0);
     }
 }

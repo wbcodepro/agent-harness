@@ -1314,3 +1314,149 @@ async fn tool_level_latency() {
         println!("tool set_value (journalled): median {sm:.1} ms, p95 {sp:.1} ms, n=12");
     });
 }
+
+const NUMBERS: &str = "com.apple.iWork.Numbers";
+
+fn numbers_grants() -> Authorization {
+    let caps = all_caps();
+    Authorization {
+        grants: [Channel::Desktop, Channel::Visual]
+            .into_iter()
+            .map(|channel| Grant {
+                channel,
+                app: Some(NUMBERS.into()),
+                origin: None,
+                profile: None,
+                capabilities: caps.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Numbers draws its sheet on a canvas it exposes only on request; the
+/// observation asks for it, shows cells with their addresses, `select`
+/// reaches an empty cell, typing a formula follows Numbers' separate
+/// formula editor, and a range the table does not take is reported.
+/// Works on a copy of the O02 pilot fixture in a temporary folder.
+#[tokio::test]
+#[ignore = "drives Numbers; run with --ignored --test-threads=1"]
+async fn numbers_cells_are_observed_selected_and_typed_into() {
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("order.numbers");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/pilot/O02/assets/order.numbers"),
+        &doc,
+    )
+    .unwrap();
+    let was_running = Command::new("pgrep")
+        .args(["-x", "Numbers"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    assert!(
+        Command::new("open")
+            .args(["-g", "-a", "Numbers"])
+            .arg(&doc)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let home = tempfile::tempdir().unwrap();
+    let journal = Arc::new(ActionJournal::open(home.path().join("actions.v1.jsonl")).unwrap());
+    let ctx = ToolContext::new(home.path())
+        .with_artifacts(ArtifactStore::new(home.path().join("artifacts")))
+        .with_journal(journal)
+        .with_session("gui-numbers");
+    let tool = DesktopTool::new(config(home.path(), numbers_grants()));
+    let call = |input: Value| {
+        let tool = &tool;
+        let ctx = &ctx;
+        async move { tool.call(&input, ctx).await }
+    };
+    let window = {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let out = call(json!({"action": "windows", "app": NUMBERS})).await;
+            if let Some((id, _)) = windows_of(&out.text)
+                .into_iter()
+                .find(|(_, t)| t.starts_with("order"))
+            {
+                break id;
+            }
+            assert!(Instant::now() < deadline, "no order window: {}", out.text);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    };
+    let result = AssertUnwindSafe(async {
+        let obs =
+            call(json!({"action": "observe", "app": NUMBERS, "window": window, "max_nodes": 60}))
+                .await
+                .text;
+        assert!(obs.contains("cell A2 \"Notebook\""), "{obs}");
+        assert!(obs.contains("cell C2 \"25000\""), "{obs}");
+        let table = find_ref(&obs, " table ").expect("a table ref");
+        // No focus first: selecting a cell brings its window to the front,
+        // so typing can follow.
+        let out = call(json!({"action": "select", "ref": table, "cell": "D2"})).await;
+        assert!(
+            out.text.contains(": D2.") && out.text.contains("window is in front"),
+            "{}",
+            out.text
+        );
+        let out =
+            call(json!({"action": "type", "app": NUMBERS, "window": window, "text": "=B2*C2\n"}))
+                .await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("editor window"), "{}", out.text);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let obs = call(
+                json!({"action": "observe", "app": NUMBERS, "window": window, "max_nodes": 60}),
+            )
+            .await
+            .text;
+            if obs.contains("cell D2 \"250000, Formula result\"") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the formula never landed: {obs}");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        // Values typed with tabs move along the row inside the cell editor.
+        let obs =
+            call(json!({"action": "observe", "app": NUMBERS, "window": window, "max_nodes": 5}))
+                .await
+                .text;
+        let table = find_ref(&obs, " table ").expect("a table ref");
+        let out = call(json!({"action": "select", "ref": table, "cell": "B3"})).await;
+        assert!(out.text.contains(": B3."), "{}", out.text);
+        let out =
+            call(json!({"action": "type", "app": NUMBERS, "window": window, "text": "7\t61000\n"}))
+                .await;
+        assert!(!out.is_error, "{}", out.text);
+        let obs =
+            call(json!({"action": "observe", "app": NUMBERS, "window": window, "max_nodes": 60}))
+                .await
+                .text;
+        assert!(
+            obs.contains("cell B3 \"7\"") && obs.contains("cell C3 \"61000\""),
+            "{obs}"
+        );
+        // A range the table does not take is reported, not claimed.
+        let table = find_ref(&obs, " table ").expect("a table ref");
+        let out = call(json!({"action": "select", "ref": table, "cell": "A2:B3"})).await;
+        assert!(out.text.contains("selected only"), "{}", out.text);
+    })
+    .catch_unwind()
+    .await;
+    let _ =
+        call(json!({"action": "key", "app": NUMBERS, "window": window, "keys": "escape"})).await;
+    let _ =
+        call(json!({"action": "menu", "app": NUMBERS, "window": window, "path": "File > Close"}))
+            .await;
+    if !was_running {
+        let _ =
+            call(json!({"action": "menu", "app": NUMBERS, "path": "Numbers > Quit Numbers"})).await;
+    }
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
