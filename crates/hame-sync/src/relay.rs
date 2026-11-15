@@ -143,21 +143,42 @@ pub enum RelayEvent {
     },
 }
 
+/// Bytes of envelopes queued for the socket at most; `send` waits when the
+/// queue is full (backpressure on the streams that produce them).
+pub const MAX_OUTGOING_BYTES: usize = 16 * 1024 * 1024;
+
+/// A frame for the socket, with the share of the byte budget it holds
+/// until written.
+type Outgoing = (RelayFrame, Option<tokio::sync::OwnedSemaphorePermit>);
+
 /// Sends through the connection. Cheap to clone.
 #[derive(Clone)]
 pub struct RelayHandle {
-    out: mpsc::Sender<RelayFrame>,
+    out: mpsc::Sender<Outgoing>,
+    budget: Arc<tokio::sync::Semaphore>,
     stop: watch::Sender<bool>,
 }
 
 impl RelayHandle {
     pub async fn send(&self, to: &str, envelope: String, push: bool) -> Result<(), SyncError> {
+        // In KiB, rounded up; an envelope is at most 1 MiB.
+        let kib = envelope
+            .len()
+            .div_ceil(1024)
+            .clamp(1, MAX_OUTGOING_BYTES / 1024) as u32;
+        let permit = Arc::clone(&self.budget)
+            .acquire_many_owned(kib)
+            .await
+            .map_err(|_| SyncError::Closed)?;
         self.out
-            .send(RelayFrame::Send {
-                to: to.into(),
-                envelope,
-                push,
-            })
+            .send((
+                RelayFrame::Send {
+                    to: to.into(),
+                    envelope,
+                    push,
+                },
+                Some(permit),
+            ))
             .await
             .map_err(|_| SyncError::Closed)
     }
@@ -165,7 +186,7 @@ impl RelayHandle {
     /// Acknowledges everything up to `seq`; the relay may drop it.
     pub async fn ack(&self, seq: u64) -> Result<(), SyncError> {
         self.out
-            .send(RelayFrame::Ack { seq })
+            .send((RelayFrame::Ack { seq }, None))
             .await
             .map_err(|_| SyncError::Closed)
     }
@@ -185,6 +206,7 @@ pub fn connect(options: RelayOptions) -> (RelayHandle, mpsc::Receiver<RelayEvent
     (
         RelayHandle {
             out: out_tx,
+            budget: Arc::new(tokio::sync::Semaphore::new(MAX_OUTGOING_BYTES / 1024)),
             stop: stop_tx,
         },
         event_rx,
@@ -203,7 +225,7 @@ pub fn backoff(base: Duration, max: Duration, attempt: u32) -> Duration {
 
 async fn run(
     options: RelayOptions,
-    mut out: mpsc::Receiver<RelayFrame>,
+    mut out: mpsc::Receiver<Outgoing>,
     events: mpsc::Sender<RelayEvent>,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -285,7 +307,7 @@ impl Unconfirmed {
 /// One connection, until it fails (`Err` with the reason) or is stopped.
 async fn session(
     options: &RelayOptions,
-    out: &mut mpsc::Receiver<RelayFrame>,
+    out: &mut mpsc::Receiver<Outgoing>,
     events: &mpsc::Sender<RelayEvent>,
     stop: &mut watch::Receiver<bool>,
     last_acked: &mut u64,
@@ -338,7 +360,7 @@ async fn session(
                 return Ok(());
             }
             frame = out.recv() => {
-                let Some(frame) = frame else {
+                let Some((frame, _permit)) = frame else {
                     let _ = sink.send(Message::Close(None)).await;
                     return Ok(());
                 };

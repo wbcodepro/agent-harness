@@ -35,3 +35,31 @@ async fn the_connection_renews_its_token() {
     assert!(asked.load(Ordering::SeqCst) >= 3);
     handle.stop();
 }
+
+#[tokio::test]
+async fn queued_sends_are_bounded_by_bytes() {
+    // Nothing listens: every send waits in the queue.
+    let (handle, _events) = connect(RelayOptions::new(
+        "http://127.0.0.1:9",
+        "host",
+        hame_sync::relay::fixed_token("t"),
+    ));
+    let envelope = "e".repeat(1024 * 1024);
+    let budget = hame_sync::relay::MAX_OUTGOING_BYTES / envelope.len();
+    for _ in 0..budget {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            handle.send("phone", envelope.clone(), false),
+        )
+        .await
+        .expect("within the budget")
+        .unwrap();
+    }
+    let over = tokio::time::timeout(
+        Duration::from_millis(300),
+        handle.send("phone", envelope.clone(), false),
+    )
+    .await;
+    assert!(over.is_err(), "the next send waits for room");
+    handle.stop();
+}

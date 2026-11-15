@@ -372,3 +372,53 @@ async fn a_revoked_device_loses_its_streams_and_its_running_turn_at_once() {
     silent(&phone, "GET", "/api/sessions").await;
     assert!(host.connector.devices().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unanswered_pairing_prompt_is_a_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay = MockRelay::start().await;
+    let account = relay.account();
+    let host_id = relay.register(&account, "laptop", "host", None);
+    let phone_id = relay.register(&account, "phone", "ios", None);
+    let (router, web_token) = hame_web::router(
+        dir.path().join("home"),
+        dir.path().to_path_buf(),
+        Options::default(),
+    );
+    // The host user never answers.
+    let confirm: ConfirmFn = Arc::new(|_| Box::pin(std::future::pending::<bool>()));
+    let (handle, events) = connect(fast(&relay.url, &host_id, &relay.token_for(&host_id)));
+    let connector = Connector::new(
+        ConnectorOptions {
+            device_id: host_id.clone(),
+            router,
+            token: web_token,
+            store: HostStore::new(&dir.path().join("home")),
+            confirm,
+            notice: Arc::new(|_| {}),
+            grants_changed: None,
+            publish_labels: false,
+        },
+        handle,
+    )
+    .unwrap();
+    connector.set_pairing_prompt_limit(Duration::from_millis(300));
+    let running = connector.clone();
+    tokio::spawn(async move { running.run(events).await });
+    let offer = connector.offer_pairing(&relay.url);
+    let phone = client(
+        &relay,
+        Identity::generate(),
+        &phone_id,
+        &host_id,
+        &relay.token_for(&phone_id),
+        None,
+    );
+    let mut pairing = phone.start_pairing(&offer, "Phone").await.unwrap();
+    pairing.sas().await.unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(10), phone.paired(pairing))
+        .await
+        .expect("an answer in time");
+    assert!(refused.is_err());
+    assert!(connector.devices().is_empty());
+}

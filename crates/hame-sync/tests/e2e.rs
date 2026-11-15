@@ -438,11 +438,16 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
         matches!(n, Notice::Rejected { from, reason } if from == &stranger_id && reason.contains("unknown sender"))
     })
     .await;
-    // Replaying the used pairing offer does not enrol it either.
-    assert!(
-        stranger.start_pairing(&offer, "late").await.is_ok(),
-        "the request is sent"
-    );
+    // A second device answering the used pairing code is refused, and
+    // not enrolled.
+    let late = stranger.start_pairing(&offer, "late").await.unwrap();
+    let refused = stranger.paired(late).await.unwrap_err();
+    assert!(refused.to_string().contains("already used"), "{refused}");
+    host.wait_notice(
+        "the refusal",
+        |n| matches!(n, Notice::PairingRefused { reason, .. } if reason.contains("already used")),
+    )
+    .await;
     silent(&stranger, "GET", "/api/sessions").await;
     assert_eq!(host.connector.devices().len(), 1);
 

@@ -50,6 +50,11 @@ pub const MAX_TASKS_PER_DEVICE: usize = 32;
 pub const MAX_SUBSCRIPTIONS_PER_DEVICE: usize = 8;
 /// Sessions one device may create per minute.
 pub const SESSIONS_PER_MINUTE: usize = 10;
+/// Artifact requests one device may have running at once (each may hold up
+/// to [`MAX_BLOB`] in the web server while it is read).
+pub const ARTIFACTS_PER_DEVICE: usize = 2;
+/// How long the host user has to answer a pairing prompt.
+pub const PAIRING_PROMPT_LIMIT: Duration = Duration::from_secs(120);
 /// Host counters reserved on disk ahead of use (see [`Inner::send_to`]).
 const COUNTER_RESERVE: u64 = 256;
 const MAX_LABEL: usize = 64;
@@ -145,7 +150,12 @@ struct Inner {
     grants_changed: Option<GrantsFn>,
     publish_labels: bool,
     offer: Mutex<Option<PairingOffer>>,
+    /// The offer used last, to refuse a second device answering it.
+    spent: Mutex<Option<PairingOffer>>,
     approvals: PendingApprovals,
+    /// Artifact requests running, per device.
+    artifacts: Mutex<HashMap<String, usize>>,
+    prompt_limit: Mutex<Duration>,
     tasks: Mutex<HashMap<(String, u64), (AbortHandle, TaskKind)>>,
     /// Sessions each device created or prompted, to cancel on revocation.
     sessions: Mutex<HashMap<String, HashSet<String>>>,
@@ -183,7 +193,10 @@ impl Connector {
                 grants_changed: options.grants_changed,
                 publish_labels: options.publish_labels,
                 offer: Mutex::new(None),
+                spent: Mutex::new(None),
                 approvals: PendingApprovals::default(),
+                artifacts: Mutex::new(HashMap::new()),
+                prompt_limit: Mutex::new(PAIRING_PROMPT_LIMIT),
                 tasks: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 created: Mutex::new(HashMap::new()),
@@ -206,6 +219,12 @@ impl Connector {
         let offer = PairingOffer::new(relay_url, &self.inner.device_id, self.public());
         *self.inner.offer.lock().expect("offer") = Some(offer.clone());
         offer
+    }
+
+    /// How long the host user has to answer a pairing prompt (default
+    /// [`PAIRING_PROMPT_LIMIT`]); no answer in time is a refusal.
+    pub fn set_pairing_prompt_limit(&self, limit: Duration) {
+        *self.inner.prompt_limit.lock().expect("limit") = limit;
     }
 
     /// Whether a pairing offer is still open.
@@ -425,13 +444,17 @@ impl Inner {
         change: impl FnOnce(&mut Allowlist) -> Result<T, SyncError>,
     ) -> Result<T, SyncError> {
         let (saved, result) = self.store.update_allowlist(change)?;
-        self.adopt(saved);
+        self.adopt(saved, "host");
         Ok(result)
     }
 
     /// Takes an allowlist read from disk as this connector's copy. Devices
-    /// that are gone were revoked: they lose everything at once.
-    fn adopt(&self, saved: Allowlist) {
+    /// that are gone were revoked (`by` whom): they lose everything at once.
+    /// This is the only way a revocation takes effect: the copy changes
+    /// first, then the device's tasks are stopped, and task admission
+    /// ([`Inner::track`]) checks the copy under the tasks lock, so no task of
+    /// a revoked device can start after the cleanup.
+    fn adopt(&self, saved: Allowlist, by: &str) {
         let gone: Vec<String> = {
             let mut allowlist = self.allowlist.lock().expect("allowlist");
             let gone = allowlist
@@ -445,8 +468,32 @@ impl Inner {
         };
         *self.stamp.lock().expect("stamp") = self.store.allowlist_stamp();
         for device in gone {
-            self.revoked(&device, "host");
+            self.revoked(&device, by);
         }
+    }
+
+    fn enrolled(&self, device: &str) -> bool {
+        self.allowlist
+            .lock()
+            .expect("allowlist")
+            .get(device)
+            .is_some()
+    }
+
+    fn cancel_session(&self, session: String) {
+        let router = self.router.clone();
+        let token = self.token.clone();
+        tokio::spawn(async move {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/sessions/{session}/cancel"))
+                .header(header::HOST, "127.0.0.1:0")
+                .header("x-hame-token", token)
+                .body(Body::empty());
+            if let Ok(request) = request {
+                let _ = router.oneshot(request).await;
+            }
+        });
     }
 
     /// Takes in a change another process made to the allowlist (a
@@ -457,7 +504,7 @@ impl Inner {
             return Ok(());
         }
         let saved = self.store.allowlist()?;
-        self.adopt(saved);
+        self.adopt(saved, "host");
         Ok(())
     }
 
@@ -481,25 +528,51 @@ impl Inner {
             .remove(device)
             .unwrap_or_default();
         for session in sessions {
-            let router = self.router.clone();
-            let token = self.token.clone();
-            tokio::spawn(async move {
-                let request = Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/api/sessions/{session}/cancel"))
-                    .header(header::HOST, "127.0.0.1:0")
-                    .header("x-hame-token", token)
-                    .body(Body::empty());
-                if let Ok(request) = request {
-                    let _ = router.oneshot(request).await;
-                }
-            });
+            self.cancel_session(session);
         }
         (self.notice)(Notice::Revoked {
             device: device.into(),
             by: by.into(),
         });
         self.publish_grants();
+    }
+
+    /// A pairing request when no offer is open: if it answers the offer
+    /// that was just spent (someone else used the same QR code first),
+    /// refuse it explicitly and tell the host user.
+    async fn refuse_spent(self: Arc<Self>, sealed: &Sealed) -> Result<(), SyncError> {
+        let from = sealed.header.from.clone();
+        let spent = self.spent.lock().expect("spent").clone();
+        let Some(spent) = spent.filter(|o| !o.expired(now_unix())) else {
+            return Err(SyncError::UnknownSender(from));
+        };
+        let Ok(plain) = sealed.decrypt(&self.identity) else {
+            return Err(SyncError::UnknownSender(from));
+        };
+        let Ok(Frame::Pair { ed, x, mac, .. }) = serde_json::from_slice::<Frame>(&plain) else {
+            return Err(SyncError::UnknownSender(from));
+        };
+        let keys = PublicIdentity {
+            ed: unb64_32(&ed)?,
+            x: unb64_32(&x)?,
+        };
+        sealed.verify(&keys.ed)?;
+        check_pairing_proof(&spent.secret, &keys, &unb64(&mac)?)?;
+        let reason = "this pairing code was already used; show a new one on the host".to_string();
+        (self.notice)(Notice::PairingRefused {
+            device: from.clone(),
+            reason: reason.clone(),
+        });
+        let _ = self
+            .send_to(
+                &from,
+                &keys.x,
+                Frame::PairRefused {
+                    reason: reason.clone(),
+                },
+            )
+            .await;
+        Err(SyncError::Pairing(reason))
     }
 
     /// A known device whose envelope does not verify with its pinned key:
@@ -544,7 +617,7 @@ impl Inner {
             offer.clone()
         };
         let Some(offer) = offer else {
-            return Err(SyncError::UnknownSender(from));
+            return self.refuse_spent(&sealed).await;
         };
         let plain = sealed
             .decrypt(&self.identity)
@@ -566,6 +639,7 @@ impl Inner {
                 return Err(SyncError::Pairing("the offer was already used".into()));
             }
             *current = None;
+            *self.spent.lock().expect("spent") = Some(offer.clone());
         }
         let label = clean_label(&label);
         let refusal = {
@@ -606,7 +680,13 @@ impl Inner {
         let counter = sealed.header.counter;
         let this = Arc::clone(&self);
         tokio::spawn(async move {
-            let confirmed = (this.confirm)(prompt).await;
+            // No answer within the time limit is a no; nor is a yes given
+            // after the code expired.
+            let limit = *this.prompt_limit.lock().expect("limit");
+            let confirmed = tokio::time::timeout(limit, (this.confirm)(prompt))
+                .await
+                .unwrap_or(false)
+                && !offer.expired(now_unix());
             let outcome = if confirmed {
                 this.update(|list| list.add(&from, &label, &keys, counter))
             } else {
@@ -689,24 +769,10 @@ impl Inner {
 
     fn revoke(&self, device: &str, by: &str) -> Result<bool, SyncError> {
         // `adopt` sees the device gone and does the rest.
-        let removed = {
-            let (saved, removed) = self
-                .store
-                .update_allowlist(|list| Ok(list.revoke(device)))?;
-            let mut allowlist = self.allowlist.lock().expect("allowlist");
-            if removed {
-                // Report who revoked it rather than "host".
-                *allowlist = saved;
-            } else {
-                drop(allowlist);
-                self.adopt(saved);
-            }
-            removed
-        };
-        if removed {
-            *self.stamp.lock().expect("stamp") = self.store.allowlist_stamp();
-            self.revoked(device, by);
-        }
+        let (saved, removed) = self
+            .store
+            .update_allowlist(|list| Ok(list.revoke(device)))?;
+        self.adopt(saved, by);
         Ok(removed)
     }
 
@@ -840,6 +906,11 @@ impl Inner {
         let this = Arc::clone(self);
         let done = key.clone();
         let mut tasks = self.tasks.lock().expect("tasks");
+        // Under the tasks lock, after which a revocation's cleanup would
+        // find this task: a device revoked meanwhile gets nothing started.
+        if !self.enrolled(device) {
+            return;
+        }
         if let Some((previous, _)) = tasks.remove(&key) {
             previous.abort();
         }
@@ -957,9 +1028,14 @@ impl Inner {
                 .map(str::to_string)
         };
         if let Some(session) = session {
-            self.sessions
-                .lock()
-                .expect("sessions")
+            let mut sessions = self.sessions.lock().expect("sessions");
+            // Revoked while the request ran: its turn is cancelled now.
+            if !self.enrolled(device) {
+                drop(sessions);
+                self.cancel_session(session);
+                return;
+            }
+            sessions
                 .entry(device.to_string())
                 .or_default()
                 .insert(session);
@@ -967,6 +1043,43 @@ impl Inner {
     }
 
     async fn request(&self, device: &str, id: u64, method: &str, path: &str, body: Option<Value>) {
+        let artifact = path.starts_with("/api/artifacts/");
+        if artifact {
+            let full = {
+                let mut running = self.artifacts.lock().expect("artifacts");
+                let count = running.entry(device.to_string()).or_insert(0);
+                let full = *count >= ARTIFACTS_PER_DEVICE;
+                if !full {
+                    *count += 1;
+                }
+                full
+            };
+            if full {
+                let _ = self
+                    .send(
+                        device,
+                        Frame::Res {
+                            id,
+                            status: 429,
+                            body: json!({"error": "too many artifact downloads at once"}),
+                        },
+                    )
+                    .await;
+                return;
+            }
+        }
+        // Released however this request ends (including an abort).
+        struct Release<'a>(&'a Mutex<HashMap<String, usize>>, &'a str, bool);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                if self.2
+                    && let Some(count) = self.0.lock().expect("artifacts").get_mut(self.1)
+                {
+                    *count = count.saturating_sub(1);
+                }
+            }
+        }
+        let _release = Release(&self.artifacts, device, artifact);
         if let Err((status, reason)) = self.admit(device, method, path, body.as_ref()) {
             let _ = self
                 .send(
