@@ -88,6 +88,9 @@ message):
   digits, since the nonce is unknown until the keys are fixed.
 - `hame connect` shows the offer as a QR code only; `--show-uri` also prints
   the text (it holds the secret).
+- The host user has two minutes to answer; no answer, or a yes after the
+  code expired, is a refusal. A second device answering a code that was
+  already used gets `pair_refused`, and the host user is told.
 - After the user confirms on the host: a grant `{v, host, device, ed, x,
   label, issued}`, signed as `Ed25519(host, "hame-sync v1 grant" ‖ JSON
   bytes)`, travels back in a `paired` frame.
@@ -119,8 +122,11 @@ session is built (`yes`, the reviewer model, `[approval] default` and
 allow rules are ignored; ask and deny rules apply); the sandbox mode is
 pinned at startup and full access is refused; the connector refuses any
 remote request whose body asks for full access (403) and limits each
-device to 32 running requests, 8 subscriptions and 10 new sessions a
-minute. When hame-web's policy lands, replace the `RemoteCaller` struct in
+device to 32 running requests, 8 subscriptions, 2 artifact downloads and
+10 new sessions a minute. (hame-web still reads an artifact whole, at most
+64 MiB, before answering; streaming it with a cap belongs to its artifact
+route, which WP A owns. Loaded sessions are bounded by WP A's idle
+eviction after the rebase; until then by the per-minute limit.) When hame-web's policy lands, replace the `RemoteCaller` struct in
 `connector.rs` with its type (or convert in `mark_remote`) and move this
 policy to its `[remote]` settings, keeping the stricter default.
 
@@ -152,11 +158,19 @@ whatever `allowlist.json` says), `relay.json` (relay URL, device id,
 tokens) and `lock`, each 0600, written atomically. Every read-modify-write,
 by the running connector and by `hame connect revoke` alike, holds an
 advisory lock on `lock` and re-reads under it, so a revocation is never
-lost. A running connector takes a revocation in before the next envelope
+lost. A damaged line in `revocations.log` stops the host with an error
+(never skipped: that would un-revoke a device), and an append after a torn
+line starts on a new line. A running connector takes a revocation in
+before the next envelope
 and within half a second otherwise: the device's envelopes are refused, its
 requests and streams stop, and the turns it started are cancelled through
-the web API. Loading refuses a file or the directory if the group or others
-have any access. On Windows the permission check is skipped (the profile
+the web API. Revocation has one path (the connector's copy changes, then
+the device's tasks stop), and new tasks are admitted only for devices
+still in the copy, under the same lock, so nothing of a revoked device
+starts after the cleanup; a turn whose prompt was accepted just as the
+device was revoked is cancelled when its answer arrives. `connect.lock`
+allows one `hame connect` per hame home. Loading refuses a file or the
+directory if the group or others have any access. On Windows the permission check is skipped (the profile
 directory's ACL applies).
 
 ## Relay connection and HTTP
@@ -169,12 +183,15 @@ directory's ACL applies).
   closes the connection and the next one starts with a refreshed token.
   `hame connect` refreshes one at a time, saves the rotated pair before
   using it, and never falls back to an old token.
+- Envelopes queued for the socket are bounded to 16 MiB; a sender waits
+  for room (backpressure on the streams producing them).
 - A send stays unconfirmed until the relay answers `sent` or an error with
   the same recipient (`to`); the relay has no per-send id, so the oldest
   unconfirmed send to that recipient is matched. Unconfirmed sends are
   bounded to 1024 and 16 MiB.
 - Everything the relay or another device supplies is printed without
-  control or bidirectional formatting characters (`text::printable`).
+  control or bidirectional formatting characters (`text::printable`),
+  including errors `hame connect` returns (relay answers, JSON bodies).
 
 ## Dependencies added
 

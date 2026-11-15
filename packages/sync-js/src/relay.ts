@@ -43,6 +43,8 @@ export interface RelayClientOptions {
   backoffMaxMs?: number;
   /** Send a fresh token this often (default 10 minutes; tokens live 15). */
   renewMs?: number;
+  /** Deliveries waiting for the handler at most before the connection is dropped. */
+  maxPendingDeliveries?: number;
 }
 
 /**
@@ -81,6 +83,7 @@ export const RELAY_PROTOCOL = "hame-relay.v1";
 const OPEN = 1;
 const MAX_UNCONFIRMED = 1024;
 const MAX_UNCONFIRMED_BYTES = 16 * 1024 * 1024;
+const MAX_PENDING_DELIVERIES = 1024;
 
 /** [to, envelope, push] of a queued send frame; to is "" for other frames. */
 function unpackSend(text: string): [string, string, boolean] {
@@ -104,6 +107,7 @@ export class RelayClient {
   private lastHeard = 0;
   /** Deliveries are handled one at a time, in seq order. */
   private chain: Promise<void> = Promise.resolve();
+  private pendingDeliveries = 0;
 
   constructor(private readonly options: RelayClientOptions) {}
 
@@ -272,11 +276,21 @@ export class RelayClient {
     switch (frame.op) {
       case "deliver": {
         const { seq, from, envelope } = frame;
+        // Deliveries wait their turn; too many waiting means the handler
+        // cannot keep up: drop the connection (the relay delivers what was
+        // not acknowledged again later) rather than grow without bound.
+        if (this.pendingDeliveries >= (this.options.maxPendingDeliveries ?? MAX_PENDING_DELIVERIES)) {
+          this.socket?.close(4004, "too many deliveries waiting");
+          return;
+        }
+        this.pendingDeliveries += 1;
         this.chain = this.chain.then(async () => {
           try {
             await this.options.onDeliver(from, envelope, seq);
           } catch {
             // Refused envelopes are acknowledged too: the relay may drop them.
+          } finally {
+            this.pendingDeliveries -= 1;
           }
           if (seq > this.lastAcked) this.lastAcked = seq;
           this.write(JSON.stringify({ op: "ack", seq } satisfies RelayFrame));

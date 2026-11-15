@@ -212,6 +212,39 @@ describe("remote transport through a relay", () => {
     expect(tokens.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("drops the connection when deliveries pile up, and gets them again", async () => {
+    let handled = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = new RelayClient({
+      url: relay.url,
+      deviceId: "slow",
+      token: async () => relay.device("slow"),
+      maxPendingDeliveries: 5,
+      backoffBaseMs: 20,
+      backoffMaxMs: 50,
+      onDeliver: async () => {
+        await gate;
+        handled += 1;
+      },
+    });
+    cleanup.push(() => client.stop());
+    client.start();
+    await until("connected", () => relay.connected("slow"));
+    let drops = 0;
+    const before = relay.connected.bind(relay);
+    for (let n = 0; n < 20; n++) relay.inject("host", "slow", `e${n}`);
+    await until("the connection to drop", () => {
+      if (!before("slow")) drops += 1;
+      return drops > 0;
+    });
+    release();
+    // What was not acknowledged comes again; everything is handled.
+    await until("all twenty handled", () => relay.queued("slow") === 0 && handled >= 20, 5000);
+  });
+
   it("refuses an unencrypted relay address that is not this machine", () => {
     expect(() => wsUrl("http://relay.example", "d")).toThrow("unencrypted");
     expect(() => checkRelayUrl("ws://10.0.0.1")).toThrow();

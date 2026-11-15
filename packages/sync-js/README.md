@@ -51,6 +51,8 @@ Notes:
   to `hame-relay.v1`, and renewed on the open socket every 10 minutes
   (`token()` is called again; return a fresh access token from `refresh`).
 - Relay addresses must be https (http only for localhost).
+- Deliveries waiting for the handler are bounded (1024): beyond that the
+  connection is dropped and the relay delivers the rest again later.
 - `CounterStore` (optional) persists the last counter accepted from each host,
   so a restarted app still refuses replayed envelopes from before.
 - When the host comes back online (relay presence), live subscriptions are
