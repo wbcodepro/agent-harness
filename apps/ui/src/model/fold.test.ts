@@ -375,6 +375,13 @@ describe("folding a session's events", () => {
     expect(state.items.map((item) => item.kind)).toEqual(["user"]);
   });
 
+  it("keeps who queued each message", () => {
+    reset();
+    const state = foldAll([{ kind: "steering", queued: ["a", "b"], origins: [null, "Ana's phone"] }]);
+    expect(state.queuedFrom).toEqual([null, "Ana's phone"]);
+    expect(foldAll([{ kind: "steering", queued: ["a"] }]).queuedFrom).toEqual([null]);
+  });
+
   it("shows a mode change in the transcript", () => {
     reset();
     const state = foldAll([rec("mode/changed", { mode: "ask", previous: "default", by: "phone-1", label: "Ana's phone" })]);

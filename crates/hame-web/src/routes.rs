@@ -342,12 +342,16 @@ pub(crate) async fn delete_session(
     let store = app.store();
     // Taking the lock proves no other hame (a terminal, an editor) has the
     // session open.
-    match store.open(&session) {
-        Ok((_, writer)) => drop(writer),
-        Err(hame_session::SessionError::NotFound(_)) => return Err(not_found("no such session")),
-        Err(hame_session::SessionError::Locked(_)) => return Err(locked()),
-        Err(e) => return Err(failed(e.to_string())),
-    }
+    // The lock may still be held for an instant after this server let it
+    // go: see `retry_locked`.
+    let writer = crate::retry_locked(|| match store.open(&session) {
+        Ok((_, writer)) => Ok(writer),
+        Err(hame_session::SessionError::NotFound(_)) => Err(not_found("no such session")),
+        Err(hame_session::SessionError::Locked(_)) => Err(locked()),
+        Err(e) => Err(failed(e.to_string())),
+    })
+    .await?;
+    drop(writer);
     std::fs::remove_dir_all(store.root().join(session.as_str()))
         .map_err(|e| failed(format!("cannot delete the session: {e}")))?;
     app.meta.update(&id, |_| None).map_err(failed)?;
@@ -687,11 +691,19 @@ pub(crate) async fn steer(
         if !entry.busy.load(Ordering::SeqCst) {
             None
         } else {
-            if caller.is_remote() {
-                // From here a remote device drives the run.
-                entry.channel.remote_run.store(true, Ordering::SeqCst);
-            }
+            // The message's origin goes with it: the turns that receive a
+            // remote one are remote-driven, whoever started them.
+            let mut origins = entry.channel.origins.lock().expect("origins");
+            let waiting = entry.steering.pending().len();
+            entry.channel.settle_origins(&mut origins, waiting);
             entry.steering.push(text);
+            origins.push(match &caller {
+                Caller::Local => None,
+                Caller::Remote(remote) if remote.label.trim().is_empty() => {
+                    Some(remote.device_id.clone())
+                }
+                Caller::Remote(remote) => Some(remote.label.clone()),
+            });
             Some(entry.steering.pending())
         }
     };
@@ -716,7 +728,16 @@ pub(crate) async fn withdraw(
 ) -> Result<Json<Value>, Failure> {
     let entry = app.view(&id)?;
     app.remote_may_act(&caller, &entry, false)?;
-    let withdrawn = entry.steering.withdraw(body.index, &body.text);
+    let withdrawn = {
+        let mut origins = entry.channel.origins.lock().expect("origins");
+        let waiting = entry.steering.pending().len();
+        entry.channel.settle_origins(&mut origins, waiting);
+        let withdrawn = entry.steering.withdraw(body.index, &body.text);
+        if withdrawn && body.index < origins.len() {
+            origins.remove(body.index);
+        }
+        withdrawn
+    };
     entry.channel.send_steering(&entry.steering);
     if !withdrawn {
         return Err(conflict("that message was already handed to the agent"));
@@ -922,20 +943,15 @@ pub(crate) async fn artifact(
         .into_iter()
         .find(|artifact| artifact.sha256 == sha256)
         .ok_or_else(missing)?;
-    let bytes = match store.artifacts().get(&artifact) {
-        Ok(bytes) => bytes,
-        Err(hame_session::artifact::ArtifactError::Missing(_)) => {
-            return Err(not_found("the artifact is missing from the store"));
-        }
-        Err(e) => return Err(failed(e.to_string())),
-    };
+    let body = artifact_body(&store, &artifact).await?;
     let mime = if hame_session::artifact::KNOWN_MIME.contains(&artifact.mime.as_str()) {
         artifact.mime.as_str()
     } else {
         "application/octet-stream"
     };
-    let mut response = bytes.into_response();
+    let mut response = body.into_response();
     let headers = response.headers_mut();
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(artifact.bytes));
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
@@ -960,6 +976,86 @@ pub(crate) async fn artifact(
         );
     }
     Ok(response)
+}
+
+/// The bytes of an artifact as a stream of 64 KiB chunks, so neither the
+/// browser's request nor an in-process caller (the relay connector) holds
+/// a whole file in memory. The file must have the size the log recorded
+/// (at most the store's limit); its SHA-256 is checked as it streams, and a
+/// file that turns out damaged ends the response with an error instead of
+/// completing it.
+async fn artifact_body(
+    store: &hame_session::SessionStore,
+    artifact: &hame_session::ArtifactRef,
+) -> Result<axum::body::Body, Failure> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+    const CHUNK: usize = 64 * 1024;
+
+    let path = store
+        .artifacts()
+        .path_of(&artifact.sha256)
+        .map_err(|e| bad(e.to_string()))?;
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(not_found("the artifact is missing from the store"));
+        }
+        Err(e) => return Err(failed(e.to_string())),
+    };
+    let size = file
+        .metadata()
+        .await
+        .map_err(|e| failed(e.to_string()))?
+        .len();
+    if size != artifact.bytes || size > hame_session::artifact::MAX_ARTIFACT_BYTES {
+        return Err(failed(format!(
+            "artifact {} is damaged: {size} bytes in the store, {} recorded",
+            artifact.short(),
+            artifact.bytes
+        )));
+    }
+    let expected = artifact.sha256.clone();
+    // The last chunk is sent only once the hash is known: a damaged file
+    // then stops short of its Content-Length, which every client reports.
+    let state = (file, Sha256::new(), size, expected, false);
+    let stream = futures_util::stream::unfold(
+        state,
+        |(mut file, mut hasher, left, expected, done)| async move {
+            if done || left == 0 {
+                return None;
+            }
+            let mut buffer = vec![0; CHUNK.min(left as usize)];
+            let read = match file.read(&mut buffer).await {
+                Ok(0) => Err(std::io::Error::other("the artifact ended early")),
+                Ok(read) => Ok(read),
+                Err(e) => Err(e),
+            };
+            let read = match read {
+                Ok(read) => read,
+                Err(e) => return Some((Err(e), (file, hasher, 0, expected, true))),
+            };
+            buffer.truncate(read);
+            hasher.update(&buffer);
+            let left = left - read as u64;
+            if left == 0 {
+                let actual: String = std::mem::take(&mut hasher)
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                if actual != expected {
+                    let damaged = std::io::Error::other(format!(
+                        "artifact {expected} is damaged: its bytes hash to {actual}"
+                    ));
+                    return Some((Err(damaged), (file, hasher, 0, expected, true)));
+                }
+            }
+            let chunk = axum::body::Bytes::from(buffer);
+            Some((Ok(chunk), (file, hasher, left, expected, false)))
+        },
+    );
+    Ok(axum::body::Body::from_stream(stream))
 }
 
 #[derive(Deserialize)]

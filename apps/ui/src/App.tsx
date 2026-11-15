@@ -384,6 +384,7 @@ export function App({ transport }: { transport: Transport }) {
         draftKey={activeId ?? "new"}
         running={view.running}
         queued={view.queued}
+        queuedFrom={view.queuedFrom}
         info={info}
         cwd={cwd}
         canChooseFolder={!activeId}

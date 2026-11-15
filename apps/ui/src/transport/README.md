@@ -136,7 +136,9 @@ allowed):
   or the default mode while `[sandbox] mode = "danger-full-access"`); a
   device may still lower such a session's mode;
 - "always allow" grants given on the host do not answer questions in turns
-  a remote device started or queued into.
+  a remote device started, or that received (or will receive) a message it
+  queued; the `steering` event names who queued each message in
+  `origins` (null for the host, else the device's label).
 
 Refusals are 403 with the reason as text. Choosing "Full access" (local or remote) is
 answered 428 `{"confirm": nonce, "message": …}` first; the same request

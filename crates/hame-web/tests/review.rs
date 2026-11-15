@@ -518,3 +518,168 @@ async fn a_confirmation_is_used_up_only_by_a_change_that_happens() {
         .await;
     assert_eq!(status, 200);
 }
+
+fn slow_text(words: usize) -> ScriptedResponse {
+    ScriptedResponse {
+        deltas: (0..words)
+            .map(|n| hame_session::Delta::Text {
+                text: format!("w{n} "),
+            })
+            .collect(),
+        stop: hame_session::StopReason::EndTurn,
+        usage: hame_session::Usage::default(),
+    }
+}
+
+/// A message a remote device queued into a turn that was then stopped
+/// stays remote: the next turn, started on this computer, picks it up, and
+/// a grant given on this computer does not answer for what it asks.
+#[tokio::test]
+async fn a_remote_message_left_queued_keeps_its_turn_remote() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = start(
+        dir.path(),
+        vec![
+            write_call("one.txt"),
+            ScriptedResponse::text("one"),
+            slow_text(2000),
+            tool_call("c2", "write", json!({"path": "two.txt", "content": "2"})),
+            ScriptedResponse::text("two"),
+        ],
+        5,
+    )
+    .await;
+    let session = page.session(json!({"mode": "ask"})).await;
+    let mut events = page.events(&session).await;
+    // A grant for `write`, given on this computer.
+    page.post(
+        &format!("/sessions/{session}/prompt"),
+        json!({"text": "write one"}),
+    )
+    .await;
+    let question = events
+        .until("the question", |event| event["kind"] == "approval")
+        .await
+        .pop()
+        .unwrap();
+    page.post(
+        &format!("/sessions/{session}/approval"),
+        json!({"id": question["id"], "allow": true, "always": true,
+               "tool_call_id": question["tool_call_id"], "args_sha256": question["args_sha256"]}),
+    )
+    .await;
+    events
+        .until("the end", |event| {
+            event["kind"] == "turn" && event["state"] == "ended"
+        })
+        .await;
+    // A local turn; a remote device queues into it; it is stopped.
+    page.post(
+        &format!("/sessions/{session}/prompt"),
+        json!({"text": "talk"}),
+    )
+    .await;
+    events
+        .until("streamed text", |event| {
+            event["record"]["type"] == "assistant/delta"
+        })
+        .await;
+    let (status, body) = page
+        .remote(
+            "POST",
+            &format!("/sessions/{session}/steer"),
+            Some(json!({"text": "write two"})),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let queued = events
+        .until("the queue", |event| {
+            event["kind"] == "steering" && event["queued"] == json!(["write two"])
+        })
+        .await
+        .pop()
+        .unwrap();
+    assert_eq!(
+        queued["origins"],
+        json!(["Ana's phone"]),
+        "the origin is shown"
+    );
+    page.post(&format!("/sessions/{session}/cancel"), json!({}))
+        .await;
+    events
+        .until("the stop", |event| {
+            event["kind"] == "turn" && event["state"] == "ended"
+        })
+        .await;
+    // The next local turn runs the remote message: the write is asked about.
+    let (status, body) = page
+        .post(
+            &format!("/sessions/{session}/prompt"),
+            json!({"text": "go on"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        finish(&page, &mut events, &session).await,
+        "the local grant did not answer for the remote message"
+    );
+    assert!(!dir.path().join("work/two.txt").exists());
+}
+
+#[tokio::test]
+async fn artifacts_stream_and_a_damaged_one_does_not_complete() {
+    use hame_session::{Block, CreateOptions, Event};
+    let dir = tempfile::tempdir().unwrap();
+    let page = start(dir.path(), vec![], 0).await;
+    let store = SessionStore::new(dir.path().join("home/sessions"));
+    let png: Vec<u8> = [
+        &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][..],
+        &vec![7u8; 300_000][..],
+    ]
+    .concat();
+    let stored = store.artifacts().put(&png, "image/png").unwrap();
+    let mut writer = store
+        .create(CreateOptions {
+            id: None,
+            cwd: dir.path().join("work").to_string_lossy().into_owned(),
+        })
+        .unwrap();
+    let session = writer.id().to_string();
+    writer
+        .append(Event::UserMessage {
+            content: vec![Block::Image {
+                artifact: stored.clone(),
+            }],
+        })
+        .unwrap();
+    drop(writer);
+    let get = || {
+        page.http
+            .get(format!(
+                "{}/api/artifacts/{}?session={session}",
+                page.base, stored.sha256
+            ))
+            .header("x-hame-token", &page.token)
+            .send()
+    };
+    let served = get().await.unwrap();
+    assert_eq!(served.status(), 200);
+    assert_eq!(served.headers()["content-length"], png.len().to_string());
+    assert_eq!(served.headers()["content-type"], "image/png");
+    assert_eq!(served.bytes().await.unwrap().as_ref(), png.as_slice());
+
+    // Same size, other bytes: the stream ends with an error.
+    let path = store.artifacts().path_of(&stored.sha256).unwrap();
+    let mut damaged = png.clone();
+    damaged[200_000] ^= 0xff;
+    std::fs::write(&path, &damaged).unwrap();
+    let response = get().await.unwrap();
+    assert_eq!(response.status(), 200, "the damage shows only at the end");
+    assert!(
+        response.bytes().await.is_err(),
+        "the body does not complete"
+    );
+    // Another size: refused before anything is sent.
+    std::fs::write(&path, &png[..1000]).unwrap();
+    assert_eq!(get().await.unwrap().status(), 500);
+}

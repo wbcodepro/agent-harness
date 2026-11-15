@@ -69,10 +69,14 @@ pub struct Channel {
     pub mode: Mutex<Mode>,
     /// The session's folder, which "Accept edits" keeps writes inside.
     pub cwd: PathBuf,
-    /// Set while a remote device drives the running turns (it started them
-    /// or queued a message into them): session-wide grants given on this
-    /// computer do not answer for it.
+    /// Set while a remote device drives the running turns: it started them,
+    /// or a message it queued has been handed to them. Session-wide grants
+    /// given on this computer do not answer for such turns.
     pub remote_run: AtomicBool,
+    /// Who queued each waiting message, in queue order: `None` for this
+    /// computer, the device's label for a remote one. Kept in step with the
+    /// steering queue (see [`Channel::settle_origins`]).
+    pub origins: Mutex<Vec<Option<String>>>,
 }
 
 impl Channel {
@@ -85,7 +89,33 @@ impl Channel {
             mode: Mutex::new(mode),
             cwd,
             remote_run: AtomicBool::new(false),
+            origins: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Brings `origins` in step with a queue that now holds `waiting`
+    /// messages. The agent takes the whole queue at once and new messages
+    /// join at the end, so the first `len - waiting` origins are those of
+    /// messages it has taken: if one came from a remote device, the turns
+    /// that received it are remote-driven from then on.
+    pub fn settle_origins(&self, origins: &mut Vec<Option<String>>, waiting: usize) {
+        let taken = origins.len().saturating_sub(waiting);
+        if origins[..taken].iter().any(Option::is_some) {
+            self.remote_run.store(true, Ordering::SeqCst);
+        }
+        origins.drain(..taken);
+    }
+
+    /// Whether questions now come from turns a remote device drives, or may
+    /// soon: one it started or fed, or one a remote message still waits for.
+    pub fn remote_driven(&self) -> bool {
+        self.remote_run.load(Ordering::SeqCst)
+            || self
+                .origins
+                .lock()
+                .expect("origins")
+                .iter()
+                .any(Option::is_some)
     }
 
     pub fn send(&self, event: Value) {
@@ -97,8 +127,14 @@ impl Channel {
         let _ = self.events.send(Outgoing::record(record));
     }
 
+    /// The queue and who queued each message.
     pub fn send_steering(&self, steering: &Steering) {
-        self.send(json!({"kind": "steering", "queued": steering.pending()}));
+        let mut origins = self.origins.lock().expect("origins");
+        let queued = steering.pending();
+        self.settle_origins(&mut origins, queued.len());
+        let from = origins.clone();
+        drop(origins);
+        self.send(json!({"kind": "steering", "queued": queued, "origins": from}));
     }
 
     /// Every question still waiting, in the order asked.
@@ -333,7 +369,7 @@ impl Prompter for PagePrompter {
                     return Some(true);
                 }
             }
-            if !channel.remote_run.load(Ordering::SeqCst)
+            if !channel.remote_driven()
                 && channel
                     .always
                     .lock()
@@ -469,6 +505,27 @@ mod tests {
             // Lexically inside, but the system follows the link first.
             assert!(!inside(&work, "deep/../escaped.txt"));
         }
+    }
+
+    #[test]
+    fn origins_follow_the_queue_and_a_taken_remote_message_marks_the_run() {
+        let channel = Channel::new(Mode::Ask, PathBuf::from("."));
+        let mut origins = vec![None, Some("phone".to_string())];
+        // Nothing taken: unchanged.
+        channel.settle_origins(&mut origins, 2);
+        assert_eq!(origins.len(), 2);
+        assert!(!channel.remote_run.load(Ordering::SeqCst));
+        // The agent took both; a new local one waits.
+        origins.push(None);
+        channel.settle_origins(&mut origins, 1);
+        assert_eq!(origins, vec![None]);
+        assert!(channel.remote_run.load(Ordering::SeqCst));
+        // A remote message still waiting keeps questions remote.
+        channel.remote_run.store(false, Ordering::SeqCst);
+        *channel.origins.lock().unwrap() = vec![Some("phone".to_string())];
+        assert!(channel.remote_driven());
+        channel.origins.lock().unwrap().clear();
+        assert!(!channel.remote_driven());
     }
 
     #[tokio::test]

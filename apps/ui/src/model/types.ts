@@ -116,7 +116,8 @@ export type StreamEvent =
   | { kind: "grants"; grants: string[] }
   | { kind: "approval_resolved"; id: number; allow: boolean }
   | { kind: "turn"; state: "started" | "ended"; error?: string | null }
-  | { kind: "steering"; queued: string[] }
+  /** `origins[i]`: who queued `queued[i]`: null for this computer, else the remote device's label. */
+  | { kind: "steering"; queued: string[]; origins?: (string | null)[] }
   | { kind: "warning"; text: string }
   | { kind: "settings"; mode: ModeName; provider?: string | null; model?: string | null }
   | { kind: "session"; session: SessionSummary };

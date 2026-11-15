@@ -298,12 +298,19 @@ async fn guard(
     next.run(request).await
 }
 
-/// Runs `attempt` again for a moment while it fails with 423. A session's
-/// lock (a file lock) can stay held for an instant after it is let go, for
-/// example while a child process started elsewhere in this process still
-/// shares the lock's file until it runs its program; a lock another hame
-/// process holds is still reported after the retries.
-async fn retry_locked<T>(mut attempt: impl FnMut() -> Result<T, Failure>) -> Result<T, Failure> {
+/// Runs `attempt` again for a moment while it fails with 423.
+///
+/// Why: a session's lock is an `flock` on its lock file, and an `flock`
+/// belongs to the open file description, not to the descriptor. When
+/// another thread of this process starts a child process, the child holds
+/// a copy of every open description between `fork` and `exec` (close-on-
+/// exec only closes them at `exec`), so a lock this process has just let
+/// go can still be held by that child for an instant: under a millisecond
+/// as measured on macOS. A lock another hame process holds is still
+/// reported after the retries (about 200 ms).
+pub(crate) async fn retry_locked<T>(
+    mut attempt: impl FnMut() -> Result<T, Failure>,
+) -> Result<T, Failure> {
     let mut tries = 0;
     loop {
         match attempt() {

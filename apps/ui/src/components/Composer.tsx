@@ -18,6 +18,8 @@ export interface ComposerProps {
   draftKey: string;
   running: boolean;
   queued: string[];
+  /** Who queued each message: null for this computer, else a device's label. */
+  queuedFrom?: (string | null)[];
   info: ServerInfo | null;
   cwd: string | null;
   /** Only a new session can choose its folder. */
@@ -138,7 +140,9 @@ export function Composer(props: ComposerProps) {
         <ul className={styles.queue} aria-label="Queued messages">
           {queued.map((message, index) => (
             <li key={`${index}:${message}`}>
-              <span className={styles.queuedTag}>queued</span>
+              <span className={styles.queuedTag}>
+                {props.queuedFrom?.[index] ? `queued from ${props.queuedFrom[index]}` : "queued"}
+              </span>
               <span className={styles.queuedText}>{message}</span>
               <button type="button" onClick={() => props.onWithdraw(index, message)} aria-label={`Remove queued message: ${message}`}>
                 <X size={14} aria-hidden />

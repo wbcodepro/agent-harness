@@ -148,6 +148,8 @@ export interface ViewState {
   running: boolean;
   approvals: ApprovalEvent[];
   queued: string[];
+  /** Who queued each message: null for this computer, else a device's label. */
+  queuedFrom: (string | null)[];
   /** Tools allowed for the rest of the session. */
   grants: string[];
   lastSeq: number | null;
@@ -265,6 +267,7 @@ export class Folder {
       running: false,
       approvals: [],
       queued: [],
+      queuedFrom: [],
       grants: [],
       lastSeq: null,
       error: null,
@@ -440,6 +443,7 @@ export class Folder {
         break;
       case "steering":
         this.state.queued = event.queued;
+        this.state.queuedFrom = event.queued.map((_, n) => event.origins?.[n] ?? null);
         break;
       case "grants":
         this.state.grants = event.grants;
