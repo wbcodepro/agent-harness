@@ -1,5 +1,4 @@
 //! Drives the real `hame` binary with scripted model responses.
-#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +22,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = hame_kernel::real_path(dir.path()).unwrap();
         let fixture = Self {
             home: root.join("home"),
             work: root.join("work"),
@@ -32,6 +31,16 @@ impl Fixture {
         };
         fs::create_dir_all(&fixture.work).unwrap();
         fs::create_dir_all(&fixture.scripts).unwrap();
+        // On Windows the user accepts once that only writes are confined.
+        #[cfg(windows)]
+        {
+            fs::create_dir_all(&fixture.home).unwrap();
+            fs::write(
+                fixture.home.join("config.toml"),
+                "[sandbox]\nallow_partial = true\n",
+            )
+            .unwrap();
+        }
         fixture
     }
 
