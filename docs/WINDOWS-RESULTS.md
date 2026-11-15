@@ -257,3 +257,53 @@ Một test bị bỏ qua theo thiết kế (cần server OAuth thật). `cargo c
 - Trong lần chạy mục 1, một Git Bash khác (của chính phần kiểm mục 2, đang cài pytest) đang mở ngoài sandbox. Vì vậy lệnh kiểm tra của agent và lệnh bash đầu tiên của người chấm không khởi động được (`NtCreateDirectoryObject … 0xC0000022`, giới hạn đã ghi ở lượt đầu). hame báo đúng nguyên nhân, agent nói rõ là chưa chạy được thay vì nhận là đã kiểm, và người chấm vẫn thử được sau khi Git Bash kia đóng. Đây không phải lỗi mới; nó cho thấy giới hạn đó gặp được trong thực tế.
 - Với Rust, ghi chú chỉ nêu test ở file khác (`tests/outer.rs`). Test trong chính file vừa sửa (mô-đun `tests` của `src/lib.rs`) không được nêu vì bộ tìm bỏ qua file đang sửa. Hành vi này giống nhau trên mọi hệ điều hành nên không sửa ở lượt này.
 - Trong Git Bash bị giam, `echo $TEMP` in `/tmp`, và `/tmp` trỏ tới `LocalLow\hame-tmp`, nên lời dặn "%TEMP%" cho người chấm dẫn đúng chỗ.
+
+# Lượt năm
+
+Thực hiện ngày 2026-11-16 trên cùng máy. Lượt này không có khối lệnh riêng trong `docs/WINDOWS.md`; phạm vi là các phần mới từ `cc2ac82` có dính tới Windows: `hame setup` và `hame doctor`, lệnh quá giờ chuyển sang chạy nền (`job_output`), nêu test trong chính file vừa sửa, cùng Retry-After và nén ngữ cảnh khi vượt cửa sổ (qua test). Sau khi sửa, cả bản dựng cuối được nghiệm thu lại: toàn bộ test, các kịch bản kiểm của bốn lượt trước, và một lần chạy bằng model thật.
+
+## Build và test
+
+| | đạt | hỏng |
+|---|---|---|
+| Sau `git pull` (commit `cc2ac82`), `cargo build --release -p hame-cli` đạt | 191 | 0 |
+| Nghiệm thu, sau các bản sửa | 204 | 0 |
+
+Một test bị bỏ qua theo thiết kế (cần server OAuth thật). Mười ba test thêm là các test trước đây chỉ chạy trên Unix, nay chạy trên Windows (bảy test `hame run` trong `crates/hame-cli/tests/run.rs`, bốn test chạy nền trong `jobs.rs`), và hai test mới trong `sandbox_windows.rs`. `cargo clippy --workspace --all-targets -- -D warnings` sạch.
+
+## Các lỗi đã sửa
+
+Mỗi lỗi một commit, tên commit ghi trong ngoặc.
+
+1. **Tool bị giam đọc được khóa API** ("Windows: confined tools cannot read hame's own keys, settings and sessions"). Trên macOS và Linux hame giấu thư mục dữ liệu của nó khỏi tool; trên Windows danh sách đó bị bỏ, nên tool đọc được `~/.hame/.env`, nơi `hame setup` giờ lưu khóa API, cùng session và token MCP. Log che giá trị (`[secret:…]`) nhưng chính tool đã cầm khóa và có thể gửi đi. Gắn nhãn toàn vẹn Medium kèm cờ "no read up" (không cần quyền admin) chặn tiến trình mức Low đọc file mà chương trình thường của người dùng vẫn đọc được. Mỗi session gắn nhãn `.env`, `config.toml`, `sessions`, `checkpoints`, `mcp-auth` và `approvals.jsonl` trong thư mục dữ liệu; `hame setup` gắn cho file khóa ngay sau khi lưu. Thư mục spill, skills và plugins vẫn đọc được vì tool cần chúng. Test mới hỏng trước bản sửa (tool `read` trả về file khóa) và đạt sau đó.
+2. **`hame setup` không chạy được trên Windows khi không có terminal** ("hame setup --allow-partial"). Không có terminal thì setup không hỏi được câu chấp nhận giam việc ghi, nên các bước kiểm cuối luôn hỏng, dù thông báo nói setup sẽ hỏi; test của setup còn bỏ qua lỗi này riêng cho Windows. Giờ có cờ `--allow-partial`, và test đòi đạt trên mọi hệ điều hành.
+3. **Test `hame run` chỉ chạy trên Unix** ("The hame run tests run on Windows too"). Fixture giờ chấp nhận giam việc ghi trên Windows và giữ đường dẫn dạng `C:\`; cả bảy test đạt, gồm test setup và doctor.
+4. **Dừng một job chạy nền không dừng hết** ("Windows: stopping a background job ends everything it started"). `job_output` với `kill: true` dùng `taskkill /T`. Bash của Git khởi động chương trình qua một tiến trình thoát ngay, nên tiến trình cha ghi nhận không còn tồn tại và `taskkill` không lần ra: `sleep`, server hay bản build của job đã dừng vẫn chạy ngầm. Giờ mỗi lệnh shell trên Windows chạy trong một job object riêng, mọi tiến trình nó tạo đều vào đó bất kể cha là ai. Dừng job (hoặc hết một giờ) thì kết thúc cả job; lệnh tự xong thì thả ra, nên tiến trình cố ý để chạy nền vẫn sống như trước; job còn chạy khi hame thoát thì kết thúc theo. Trong worker của sandbox, job này lồng trong job của worker. Hai test (một trong `jobs.rs`, một qua worker thật trong sandbox) hỏng trước bản sửa và đạt sau đó.
+5. **Job đã chết vẫn bị báo "still running"** ("A job whose hame has exited is not reported as still running"). Job chạy nền kết thúc cùng tiến trình hame giám sát nó. Một lần chạy sau (`hame run --session`) thấy thư mục job không có kết quả và cứ báo "still running" mãi. Giờ job không có kết quả và mười giây không được ghi gì thì được báo là không còn chạy, kèm phần đầu ra đã có. Không riêng Windows.
+
+README (tiếng Anh và tiếng Việt) và CHANGELOG được cập nhật theo các điểm trên.
+
+## Từng phần
+
+| Phần | Kết quả |
+|---|---|
+| `hame doctor` | Đúng: báo thiếu khóa và thiếu `allow_partial` với thư mục dữ liệu trống; với `~/.hame`, dòng sandbox chạy một lệnh qua worker bị giam và xác nhận ghi ra ngoài bị từ chối; tìm đúng bash của Git (5.2.37), git và `python` |
+| `hame setup` có terminal (qua ConPTY) | Đạt: chọn nhà cung cấp, gõ khóa (không lần nào hiện trên màn hình), trả lời câu hỏi về giam việc ghi, `config.toml` có `allow_partial = true`, mọi bước kiểm đạt, `.env` có khóa và mang nhãn `NW,NR` |
+| `hame setup` không có terminal | Hỏng lúc đầu (lỗi 2), đạt với `--allow-partial` |
+| Lệnh quá giờ chạy nền, `job_output` | Chuyển sang nền và đọc lại được; dừng không dừng hết lúc đầu (lỗi 4), đạt sau khi sửa; job còn chạy khi hame thoát thì kết thúc theo (test có sẵn); job của một hame đã thoát được báo đúng (lỗi 5) |
+| Nêu test trong chính file vừa sửa | Đạt: với Rust, ghi chú giờ nêu cả `adds_up` (mô-đun `tests` của file vừa sửa) bên cạnh `outer_total`: `cargo test -q -- outer_total adds_up` |
+| Retry-After, nén khi vượt cửa sổ | Các test liên quan đạt trên Windows |
+
+## Nghiệm thu
+
+Trên bản dựng cuối (release), sau tất cả các bản sửa:
+
+- **Test:** 204 đạt, 0 hỏng; clippy sạch.
+- **Kịch bản kiểm của các lượt trước, chạy lại:** apply_patch với CRLF, bảo vệ `.git`, `--output json`/`stream-json`, hooks kiểu Claude Code và `[[hook]]`, chốt đọc-trước-khi-ghi-đè, đường dẫn của `grep`/`glob`, MCP qua HTTP; lệnh từ file, loại subagent, cảnh báo cú pháp, tool `script` với server MCP stdio, thay secret tại proxy; pipefail, ghi nguyên khối khi file đang bị giữ, `then_run`, lọc đầu ra, `evidence`, hashline; rust-analyzer (diagnostics, references, rename); trích lệnh rút gọn trong `[hame check]`, chọn test (Python và Rust); dừng job trong sandbox; giao diện terminal. Tất cả cho cùng kết quả như lúc kiểm. Thay đổi duy nhất: bước `example.com 200` của kịch bản thay secret giờ hiện là lỗi, vì lệnh `curl` thứ hai trong cùng dòng (tới một host ngoài allowlist) thất bại và pipefail (thêm ở lượt ba) báo đúng điều đó.
+- **Model thật** (Claude Haiku 5.5; tài khoản DeepSeek vẫn hết số dư), với `~/.hame` thật: `hello.py` được tạo và chạy ra `xin chao`; ghi `C:\Users\Public\hame-escape.txt` bị từ chối và file không tồn tại; đọc `C:\Users\ADMIN\.hame\config.toml` bị từ chối ("Access is denied"). Model báo đúng từng bước và không thử đi đường vòng.
+
+## Ghi nhận
+
+- Thư mục dữ liệu thật `C:\Users\ADMIN\.hame` trên máy này giờ mang nhãn: `config.toml`, `sessions`, `checkpoints` và thư mục `mcp-auth` (được tạo, đang trống). Người dùng và mọi chương trình thường vẫn đọc, ghi được như trước; chỉ tiến trình mức Low (tool của hame, trình duyệt ở chế độ bảo vệ) bị chặn. Gỡ nhãn: `icacls <đường dẫn> /setintegritylevel M`.
+- Nhãn chỉ áp lên dữ liệu của hame. Tool vẫn đọc được các file khác của người dùng, kể cả `.env` trong thư mục dự án; cùng cơ chế này có thể giấu cả chúng, nhưng đó là thay đổi quyền ngoài dữ liệu của hame nên chưa làm.
+- Có một khoảng hở nhỏ: job object được gắn ngay sau khi bash khởi động, nên một tiến trình bash tạo ra trước thời điểm đó sẽ nằm ngoài job. Bash cần hàng chục mili giây để khởi động, và test chưa gặp trường hợp này.
