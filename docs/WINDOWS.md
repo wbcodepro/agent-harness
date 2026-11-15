@@ -214,6 +214,46 @@ Không in API key ra log hay kết quả. Commit các bản sửa và file kết
 (git fetch và rebase trước khi push).
 ```
 
+## Lượt tám: giao diện web mới, app desktop, relay và đồng bộ (2026-11-16)
+
+Từ lượt bảy, nhánh có thêm: giao diện web mới (`apps/ui`, được nhúng vào `hame web`), chính sách
+cho thiết bị từ xa (`[remote]` trong config), app desktop Tauri (`apps/desktop`, chạy server hame
+trong app), relay (`crates/hame-relay`), đồng bộ mã hoá đầu cuối và `hame connect`
+(`crates/hame-sync`, `packages/sync-js`). Lệnh nội bộ `tool-worker`/`sandbox-exec` đã chuyển sang
+`hame_sandbox::internal` và được cả `hame` lẫn app desktop dùng chung: đây là phần dễ hỏng nhất trên
+Windows. Nếu chưa làm lượt bảy thì làm lượt bảy trước.
+
+```text
+Hãy git fetch rồi git checkout unified-harness và git pull. Đọc CHANGELOG.md (Unreleased),
+docs/design/APPS-AND-SYNC.md, apps/desktop/README.md, docs/relay/DEPLOY.md, rồi kiểm và ghi vào mục
+"Lượt tám" của docs/WINDOWS-RESULTS.md (ghi commit, phiên bản Windows, rustc, node). Mỗi lỗi thật
+trên Windows: tìm nguyên nhân, sửa, thêm test nếu được, mỗi bản sửa một commit; chạy lại tới khi đạt.
+1. cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings,
+   cargo test --workspace --no-fail-fast. Ghi passed/failed/ignored. Riêng các test của
+   hame-sandbox, hame-web, hame-sync, hame-relay: ghi tên từng test hỏng và nguyên nhân.
+2. npm ci ở thư mục gốc, rồi npm test trong apps/ui và packages/sync-js;
+   bash scripts/check-ui-dist.sh (hoặc chạy tương đương) và python scripts/license-report.py --check.
+3. cargo install --path crates/hame-cli; hame web trong một thư mục thử: mở trang ở cửa sổ rộng và
+   hẹp (khoảng 390 px), tạo phiên, gửi tin ngắn với model rẻ, duyệt một yêu cầu ghi file
+   (Allow once), đổi chế độ sang Full access (phải hỏi xác nhận), dừng một lượt đang chạy, mở
+   About và licenses.txt. Ghi lỗi giao diện kèm ảnh chụp nếu có.
+4. App desktop (cần Visual Studio Build Tools, WebView2, Node): cd apps/desktop, npm ci,
+   npm run build:debug (bản ký ad-hoc chỉ dành cho macOS; trên Windows chỉ cần build chạy được).
+   Chạy app: cửa sổ mở và gửi được tin; đóng cửa sổ thì app ẩn xuống khay mà lượt vẫn chạy;
+   menu khay Open/New Session/Quit; mở liên kết hame://new và hame://open từ hộp Run
+   (Win+R) hoặc trình duyệt; Quit khi có lượt đang chạy phải hỏi xác nhận; thông báo khi lượt
+   xong lúc cửa sổ không ở trước. Một tool chạy trong sandbox (ví dụ bash: echo ok) phải chạy
+   được từ app (kiểm lệnh nội bộ dùng chung). Ghi kích thước bản build và RAM của app.
+5. Relay và hame connect cục bộ: chạy relay với RELAY_DEV=1, RELAY_MAILER=log, cơ sở dữ liệu
+   tạm (xem docs/relay/DEPLOY.md; không dùng Docker nếu không có), rồi
+   hame connect --relay http://127.0.0.1:<port> với HAME_HOME tạm: phải hiện mã thiết bị (device
+   code). Kiểm quyền các file trong %HAME_HOME%\sync bằng icacls: chỉ người dùng hiện tại đọc
+   được (nếu hame không đặt được quyền này trên Windows, ghi rõ và sửa). Chạy hai
+   hame connect cùng HAME_HOME: cái thứ hai phải bị từ chối (connect.lock).
+Không in API key, token hay mã ghép nối ra log hay kết quả. Commit các bản sửa và file kết quả lên
+unified-harness rồi push (git fetch và rebase trước khi push).
+```
+
 ## Đã kiểm trên GitHub Actions (Windows Server)
 
 Lần chạy gần nhất: commit `3fea852` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Lần đó gồm cả các phần thêm sau lượt kiểm trên máy thật (lệnh và loại subagent từ file, cài plugin, MCP không trạng thái, đăng nhập OAuth, tool `script`, thay secret tại proxy), nhưng chỉ ở mức biên dịch và test tự động: chúng chưa được dùng thử bằng tay trên Windows.
