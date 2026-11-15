@@ -67,6 +67,9 @@ pub fn window_line(w: &Value) -> String {
             .collect();
         line.push_str(&format!(" [sheet open: {}]", names.join(", ")));
     }
+    if let Some(doc) = w["document"].as_str().filter(|d| !d.is_empty()) {
+        line.push_str(&format!(" [file: {}]", quote(doc, 240)));
+    }
     line
 }
 
@@ -213,6 +216,21 @@ pub fn selection(what: &str, result: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_document_window_names_its_file() {
+        let w = json!({"window_id": 7, "title": "bien-ban", "app": "TextEdit",
+                       "bundle_id": "com.apple.TextEdit", "pid": 42,
+                       "document": "/tmp/out/vi/bien-ban"});
+        assert!(
+            window_line(&w).ends_with("[file: \"/tmp/out/vi/bien-ban\"]"),
+            "{}",
+            window_line(&w)
+        );
+        let untitled = json!({"window_id": 7, "title": "Untitled", "app": "TextEdit",
+                              "bundle_id": "com.apple.TextEdit", "pid": 42});
+        assert!(!window_line(&untitled).contains("[file:"));
+    }
 
     #[test]
     fn observations_render_full_refs_dialogs_and_untrusted_text_on_one_line() {

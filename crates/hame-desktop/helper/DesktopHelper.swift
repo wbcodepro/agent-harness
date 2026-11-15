@@ -336,6 +336,11 @@ func windowJSON(_ window: AXUIElement, app: NSRunningApplication, appEl: AXUIEle
         "sheets": sheetsOf(window).map { nameOf($0) },
     ]
     if let f = rectJSON(frameOf(window)) { out["frame"] = f }
+    // The file a document window shows (AXDocument is a file URL), so a
+    // save can be checked by name and folder: titles hide extensions.
+    if let doc = strAttr(window, kAXDocumentAttribute), let url = URL(string: doc), url.isFileURL {
+        out["document"] = url.path
+    }
     if let date = app.launchDate {
         out["launch_ms"] = Int64(date.timeIntervalSince1970 * 1000)
     }

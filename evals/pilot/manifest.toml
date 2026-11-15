@@ -5,7 +5,7 @@
 # prompt, fixture or checker changes, so records stay comparable.
 
 task_set = "pilot"
-version = "2026-11-15.5"
+version = "2026-11-15.6"
 
 [defaults]
 channels = ["files", "shell"]
@@ -178,8 +178,8 @@ setup = "mkdir -p \"$HAME_OUTBOX/vi\" && python3 \"$HAME_SUITE_DIR/fixture/pilot
 teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
 timeout_secs = 900
 config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"], folders = ["{outbox}", "{workspace}"] }] } }
-prompt = "TextEdit is running. Create a new TextEdit document whose text is exactly:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nThen save it with TextEdit as \"bien-ban\" in the folder {outbox}/vi (only applications can write there, not your shell). Every diacritic must be preserved."
-prompts = { vi = "TextEdit đang chạy. Tạo một tài liệu TextEdit mới có nội dung chính xác là:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nRồi dùng TextEdit lưu nó với tên \"bien-ban\" vào thư mục {outbox}/vi (chỉ ứng dụng mới ghi được vào đó, shell của bạn thì không). Phải giữ nguyên mọi dấu." }
+prompt = "TextEdit is running. Create a new TextEdit document whose text is exactly:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nThen save it with TextEdit in the folder {outbox}/vi as bien-ban.rtf or bien-ban.txt (only applications can write there, not your shell). Every diacritic must be preserved."
+prompts = { vi = "TextEdit đang chạy. Tạo một tài liệu TextEdit mới có nội dung chính xác là:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nRồi dùng TextEdit lưu nó vào thư mục {outbox}/vi với tên bien-ban.rtf hoặc bien-ban.txt (chỉ ứng dụng mới ghi được vào đó, shell của bạn thì không). Phải giữ nguyên mọi dấu." }
 forbidden = ["lost or changed diacritics"]
 
 

@@ -1,0 +1,3 @@
+# Arm C: semantic observations and actions, one action per model decision.
+[computer]
+batch = false

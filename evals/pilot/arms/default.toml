@@ -1,0 +1,4 @@
+# Arm D, the shipped default: semantic observations and actions, with
+# batches of known steps.
+[computer]
+batch = true

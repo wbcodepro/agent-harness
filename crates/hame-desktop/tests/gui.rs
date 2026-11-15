@@ -493,6 +493,13 @@ async fn d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names.len(), 2, "{names:?}");
+        // The window names the file it now shows, extension included.
+        let listed = gui.ok(json!({"action": "windows", "app": TEXTEDIT})).await;
+        let line = line_of(&listed, &format!("window {doc} "));
+        assert!(
+            line.contains("[file: \"") && line.contains("hame-d01.rtf\"]"),
+            "{line}"
+        );
 
         // Receipts: the confirming press was journalled as a commit with an
         // idempotency key, before and after dispatch.
@@ -553,6 +560,69 @@ async fn d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy()
         gui.ok(json!({"action": "wait", "app": TEXTEDIT, "window": doc, "until": "window_gone"}))
             .await;
     });
+}
+
+/// The screenshot-loop configuration: no accessibility observations or
+/// refs; every acting call comes back with a screenshot, and click_at and
+/// typing work from it.
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
+async fn pixels_mode_acts_from_screenshots_only() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        let doc = gui.new_document().await;
+        let mut cfg = config(gui._home.path(), textedit_grants(all_caps()));
+        cfg.pixels = true;
+        let pixels = DesktopTool::new(cfg);
+        let call = |input: Value| {
+            let pixels = &pixels;
+            let ctx = &gui.ctx;
+            async move { pixels.call(&input, ctx).await }
+        };
+        let refused = call(json!({"action": "observe", "app": TEXTEDIT, "window": doc})).await;
+        assert!(
+            refused.is_error && refused.text.contains("not offered"),
+            "{}",
+            refused.text
+        );
+
+        let focused = call(json!({"action": "focus", "app": TEXTEDIT, "window": doc})).await;
+        assert!(!focused.is_error, "{}", focused.text);
+        assert!(
+            focused.text.contains("Screenshot of window"),
+            "{}",
+            focused.text
+        );
+        let shot = image_of(&focused);
+
+        let typed = call(json!({"action": "type", "app": TEXTEDIT, "window": doc,
+                                "text": "pixel loop"}))
+        .await;
+        assert!(!typed.is_error, "{}", typed.text);
+        assert!(typed.parts.iter().any(|p| matches!(p, Block::Image { .. })));
+        gui.observe_until(doc, "textarea = \"pixel loop\"").await;
+
+        // A click in the middle of the text area, from the first screenshot.
+        let (w, h) = image_size(&gui, &shot);
+        let clicked = call(json!({"action": "click_at", "artifact": &shot.sha256[..12],
+                                  "x": w / 2, "y": h / 2}))
+        .await;
+        assert!(!clicked.is_error, "{}", clicked.text);
+        assert!(
+            clicked.text.contains("Screenshot of window"),
+            "{}",
+            clicked.text
+        );
+    });
+}
+
+/// Width and height of a stored PNG screenshot.
+fn image_size(gui: &Gui, artifact: &hame_session::ArtifactRef) -> (u32, u32) {
+    let store = gui.ctx.artifacts.as_ref().unwrap();
+    let png = store.get(artifact).unwrap();
+    let w = u32::from_be_bytes(png[16..20].try_into().unwrap());
+    let h = u32::from_be_bytes(png[20..24].try_into().unwrap());
+    (w, h)
 }
 
 /// Return in a save panel saves the file, so it needs Commit and FileWrite

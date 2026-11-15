@@ -1,0 +1,19 @@
+# Arm A, the screenshot-loop baseline (research "Controlled experiments"):
+# screenshots only, pixel clicks, typing and keys, one action per model
+# decision, a fresh screenshot after every action. Screenshots need the
+# Screen capability, and desktop pixel clicks go through the Visual
+# channel, so this arm adds those grants on top of each task's own.
+[computer]
+observation = "pixels"
+batch = false
+
+[[computer.grant]]
+channel = "browser"
+origin = "http://127.0.0.1:*"
+capabilities = ["observe", "screen"]
+
+[[computer.grant]]
+channel = "visual"
+app = "com.apple.TextEdit"
+capabilities = ["observe", "interact", "commit", "file_write", "global_input", "screen"]
+folders = ["{outbox}", "{workspace}"]
