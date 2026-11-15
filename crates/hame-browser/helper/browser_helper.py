@@ -846,6 +846,9 @@ class Tab:
         # response the frame will commit (not a redirect, 204/205 or
         # download): the commit may then still be on its way.
         self.commit_expected = False
+        # Whether the latest main-frame navigation response was a redirect:
+        # its request finishes before the browser issues the next one.
+        self.redirecting = False
         self.nav_idle = asyncio.Event()
         self.nav_idle.set()
         self.last_status = None
@@ -1064,6 +1067,7 @@ class Helper:
                     tab.pending.add(request)
                     tab.nav_count += 1
                     tab.commit_expected = False
+                    tab.redirecting = False
                     tab.nav_idle.clear()
             except Exception:
                 pass
@@ -1078,6 +1082,7 @@ class Helper:
             try:
                 if response.request.is_navigation_request() and response.frame.parent_frame is None:
                     tab.last_status = response.status
+                    tab.redirecting = 300 <= response.status < 400
                     disposition = response.headers.get("content-disposition", "").lower()
                     tab.commit_expected = (
                         not (300 <= response.status < 400)
@@ -1180,25 +1185,44 @@ class Helper:
     async def settle(self, tab, nav_before, gen_before, timeout_ms):
         """Waits for a navigation the action started to finish loading."""
         await asyncio.sleep(0)
-        if tab.nav_count != nav_before:
+        if tab.nav_count == nav_before:
+            return tab.generation != gen_before
+        deadline = time.monotonic() + timeout_ms / 1000
+
+        def left():
+            return max(0.0, deadline - time.monotonic())
+
+        while True:
             try:
-                await asyncio.wait_for(tab.nav_idle.wait(), timeout_ms / 1000)
+                await asyncio.wait_for(tab.nav_idle.wait(), left())
             except asyncio.TimeoutError:
                 raise OpError("timeout", "a navigation the action started did not finish", effect="unknown")
-            if tab.generation == gen_before and tab.commit_expected:
+            if tab.generation != gen_before or tab.closed:
+                break
+            if tab.redirecting:
+                # A redirect's request finishes before the browser issues the
+                # request it redirects to: wait for that one, then settle it.
+                seen = tab.nav_count
+                while (tab.nav_count == seen and tab.redirecting and tab.generation == gen_before
+                       and not tab.closed and left() > 0):
+                    await asyncio.sleep(0.02)
+                if tab.nav_count != seen:
+                    continue
+                break
+            if tab.commit_expected:
                 # The request can finish before the frame commits the new
                 # document (framenavigated), most visibly on a loaded
                 # machine: wait for the commit rather than report no
                 # navigation.
-                deadline = time.monotonic() + timeout_ms / 1000
                 while (tab.generation == gen_before and tab.commit_expected
-                       and not tab.closed and time.monotonic() < deadline):
+                       and not tab.closed and left() > 0):
                     await asyncio.sleep(0.02)
-            if tab.generation != gen_before:
-                try:
-                    await tab.page.wait_for_load_state("load", timeout=timeout_ms)
-                except Exception as e:
-                    raise OpError("timeout", f"the new page did not finish loading: {pw_reason(e)}", effect="unknown")
+            break
+        if tab.generation != gen_before:
+            try:
+                await tab.page.wait_for_load_state("load", timeout=timeout_ms)
+            except Exception as e:
+                raise OpError("timeout", f"the new page did not finish loading: {pw_reason(e)}", effect="unknown")
         return tab.generation != gen_before
 
     # -- refs -----------------------------------------------------------------
