@@ -19,7 +19,9 @@ hame-tools.workspace = true
 hame-verify.workspace = true
 include_dir = "0.7.4"
 serde.workspace = true
-serde_json.workspace = true
+# Exact float parsing, so canonical JSON (jcs) hashes what devices hash.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+ryu = "1.0.23"
 sha2.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 uuid.workspace = true
