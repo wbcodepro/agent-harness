@@ -68,8 +68,9 @@ for archive in "$src" "$bin"; do
 done
 
 echo "== secrets"
-# Long enough not to match the short fake keys the tests use.
-secret_re='sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN ([A-Z]+ )*PRIVATE KEY-----'
+# Long enough not to match the short fake keys the tests use. `sk-` must
+# start a word, so a heading anchor like `#…-task-set-2026-…` is not a key.
+secret_re='(^|[^A-Za-z0-9])sk-(ant-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN ([A-Z]+ )*PRIVATE KEY-----'
 scan=$(mktemp -d)
 trap 'rm -rf "$scan"' EXIT
 for archive in "$src" "$bin"; do
