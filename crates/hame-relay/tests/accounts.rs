@@ -556,37 +556,66 @@ async fn hosts_publish_signed_grants() {
 
     let doc = format!("{{\"devices\":[\"{client_dev}\"]}}");
     let doc_b64 = hame_relay::util::b64url(doc.as_bytes());
+    let signed = |k: &DeviceKeys, version: i64| {
+        k.sign(&hame_relay::protocol::grants_message(
+            &host,
+            version,
+            doc.as_bytes(),
+        ))
+    };
+    let publish = |token: String, version: i64, signature: String| {
+        let r = &r;
+        let host = host.clone();
+        let doc_b64 = doc_b64.clone();
+        async move {
+            r.post(
+                &format!("/v1/hosts/{host}/grants"),
+                json!({ "version": version, "document": doc_b64, "signature": signature }),
+                Some(&token),
+            )
+            .await
+            .0
+        }
+    };
     // Bad signature.
-    let (s, _) = r
-        .post(
-            &format!("/v1/hosts/{host}/grants"),
-            json!({ "document": doc_b64, "signature": DeviceKeys::generate().sign(doc.as_bytes()) }),
-            Some(&host_token),
-        )
-        .await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let other = DeviceKeys::generate();
+    assert_eq!(
+        publish(host_token.clone(), 1, signed(&other, 1)).await,
+        StatusCode::BAD_REQUEST
+    );
+    // A signature for another version does not verify.
+    assert_eq!(
+        publish(host_token.clone(), 2, signed(&keys, 1)).await,
+        StatusCode::BAD_REQUEST
+    );
     // Only the host itself may publish.
-    let (s, _) = r
-        .post(
-            &format!("/v1/hosts/{host}/grants"),
-            json!({ "document": doc_b64, "signature": keys.sign(doc.as_bytes()) }),
-            Some(&client),
-        )
-        .await;
-    assert_eq!(s, StatusCode::FORBIDDEN);
-    let (s, _) = r
-        .post(
-            &format!("/v1/hosts/{host}/grants"),
-            json!({ "document": doc_b64, "signature": keys.sign(doc.as_bytes()) }),
-            Some(&host_token),
-        )
-        .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(
+        publish(client.clone(), 1, signed(&keys, 1)).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        publish(host_token.clone(), 2, signed(&keys, 2)).await,
+        StatusCode::NO_CONTENT
+    );
+    // An older or equal version is refused: no rollback.
+    assert_eq!(
+        publish(host_token.clone(), 1, signed(&keys, 1)).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        publish(host_token.clone(), 2, signed(&keys, 2)).await,
+        StatusCode::CONFLICT
+    );
     let (s, g) = r
         .get(&format!("/v1/hosts/{host}/grants"), Some(&client))
         .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(g["document"], doc_b64.as_str());
+    assert_eq!(g["version"], 2);
+    assert_eq!(
+        publish(host_token.clone(), 3, signed(&keys, 3)).await,
+        StatusCode::NO_CONTENT
+    );
 }
 
 #[tokio::test]

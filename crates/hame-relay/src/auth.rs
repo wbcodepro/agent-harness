@@ -1,7 +1,7 @@
 //! Tokens, the bearer-token extractor and the client-IP extractor.
 
 use crate::error::{ApiError, ApiResult};
-use crate::repo::AuthContext;
+use crate::repo::{AuthContext, SCOPE_FULL, SCOPE_HOST};
 use crate::state::AppState;
 use crate::util;
 use axum::extract::{ConnectInfo, FromRequestParts};
@@ -35,9 +35,16 @@ pub async fn issue_tokens(
 ) -> ApiResult<TokenResponse> {
     let now = util::now();
     let session_id = uuid::Uuid::new_v4().to_string();
+    // Device-code sign-ins never proved a credential on this device: they
+    // may only register and connect a host.
+    let scope = if method == "device_code" {
+        SCOPE_HOST
+    } else {
+        SCOPE_FULL
+    };
     state
         .repo
-        .create_session(&session_id, account_id, device_id, method, now)
+        .create_session(&session_id, account_id, device_id, method, scope, now)
         .await?;
     let access = util::random_token(ACCESS_PREFIX);
     let refresh = util::random_token(REFRESH_PREFIX);
@@ -105,6 +112,40 @@ impl FromRequestParts<AppState> for Authed {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
         let token = bearer_token(&parts.headers).ok_or_else(ApiError::unauthorized)?;
         authenticate(state, token).await.map(Authed)
+    }
+}
+
+/// A request with a full (not device-code) session.
+#[derive(Clone, Debug)]
+pub struct FullAuthed(pub AuthContext);
+
+impl FromRequestParts<AppState> for FullAuthed {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
+        let Authed(ctx) = Authed::from_request_parts(parts, state).await?;
+        if !ctx.is_full() {
+            return Err(ApiError::host_scope());
+        }
+        Ok(FullAuthed(ctx))
+    }
+}
+
+/// A request with a full session that proved a credential within
+/// `recent_auth_window` (sign-in or `POST /v1/auth/reauth`).
+#[derive(Clone, Debug)]
+pub struct RecentAuthed(pub AuthContext);
+
+impl FromRequestParts<AppState> for RecentAuthed {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
+        let FullAuthed(ctx) = FullAuthed::from_request_parts(parts, state).await?;
+        let window = state.config.recent_auth_window.as_secs() as i64;
+        if util::now() - ctx.auth_at > window {
+            return Err(ApiError::reauth_required());
+        }
+        Ok(RecentAuthed(ctx))
     }
 }
 

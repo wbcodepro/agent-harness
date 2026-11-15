@@ -49,6 +49,12 @@ impl SqliteRepo {
     async fn begin(&self) -> RepoResult<Transaction<'static, Sqlite>> {
         self.pool.begin().await.map_err(db)
     }
+
+    /// A write transaction that takes the write lock at once, so that a
+    /// read-then-write sequence cannot interleave with another writer.
+    async fn begin_immediate(&self) -> RepoResult<Transaction<'static, Sqlite>> {
+        self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)
+    }
 }
 
 fn account_row(r: &SqliteRow) -> Account {
@@ -58,6 +64,7 @@ fn account_row(r: &SqliteRow) -> Account {
         email: r.get("email"),
         email_verified: r.get::<i64, _>("email_verified") != 0,
         password_hash: r.get("password_hash"),
+        password_proven: r.get::<i64, _>("password_proven") != 0,
         created_at: r.get("created_at"),
     }
 }
@@ -157,14 +164,34 @@ impl Repository for SqliteRepo {
         Ok(())
     }
 
-    async fn set_password(&self, id: &str, hash: Option<&str>, now: i64) -> RepoResult<()> {
-        sqlx::query("UPDATE accounts SET password_hash = ?, updated_at = ? WHERE id = ?")
-            .bind(hash)
-            .bind(now)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(db)?;
+    async fn set_password(
+        &self,
+        id: &str,
+        hash: Option<&str>,
+        proven: bool,
+        now: i64,
+    ) -> RepoResult<()> {
+        sqlx::query(
+            "UPDATE accounts SET password_hash = ?, password_proven = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(hash)
+        .bind((proven && hash.is_some()) as i64)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn mark_password_proven(&self, id: &str) -> RepoResult<()> {
+        sqlx::query(
+            "UPDATE accounts SET password_proven = 1 WHERE id = ? AND password_hash IS NOT NULL",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
         Ok(())
     }
 
@@ -309,21 +336,57 @@ impl Repository for SqliteRepo {
         account_id: &str,
         device_id: Option<&str>,
         method: &str,
+        scope: &str,
         now: i64,
     ) -> RepoResult<()> {
         sqlx::query(
-            "INSERT INTO sessions (id, account_id, device_id, method, created_at, last_used_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, account_id, device_id, method, scope, auth_at, created_at, last_used_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(account_id)
         .bind(device_id)
         .bind(method)
+        .bind(scope)
+        .bind(now)
         .bind(now)
         .bind(now)
         .execute(&self.pool)
         .await
         .map_err(db)?;
+        Ok(())
+    }
+
+    async fn sessions(&self, account_id: &str) -> RepoResult<Vec<SessionInfo>> {
+        let rows = sqlx::query(
+            "SELECT id, method, scope, device_id, created_at, last_used_at, auth_at FROM sessions \
+             WHERE account_id = ? AND revoked_at IS NULL ORDER BY created_at",
+        )
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| SessionInfo {
+                id: r.get("id"),
+                method: r.get("method"),
+                scope: r.get("scope"),
+                device_id: r.get("device_id"),
+                created_at: r.get("created_at"),
+                last_used_at: r.get("last_used_at"),
+                auth_at: r.get("auth_at"),
+            })
+            .collect())
+    }
+
+    async fn reauth_session(&self, id: &str, now: i64) -> RepoResult<()> {
+        sqlx::query("UPDATE sessions SET auth_at = ?, scope = 'full' WHERE id = ?")
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
         Ok(())
     }
 
@@ -367,7 +430,7 @@ impl Repository for SqliteRepo {
 
     async fn authenticate(&self, access_hash: &str, now: i64) -> RepoResult<Option<AuthContext>> {
         let row = sqlx::query(
-            "SELECT s.id AS session_id, s.account_id, s.device_id \
+            "SELECT s.id AS session_id, s.account_id, s.device_id, s.scope, s.auth_at, t.expires_at \
              FROM access_tokens t JOIN sessions s ON s.id = t.session_id \
              LEFT JOIN devices d ON d.id = s.device_id \
              WHERE t.token_hash = ? AND t.expires_at > ? AND s.revoked_at IS NULL \
@@ -382,6 +445,9 @@ impl Repository for SqliteRepo {
             session_id: r.get("session_id"),
             account_id: r.get("account_id"),
             device_id: r.get("device_id"),
+            scope: r.get("scope"),
+            auth_at: r.get("auth_at"),
+            token_expires_at: r.get("expires_at"),
         }))
     }
 
@@ -392,9 +458,10 @@ impl Repository for SqliteRepo {
         new_expires_at: i64,
         now: i64,
     ) -> RepoResult<RefreshOutcome> {
-        let mut tx = self.begin().await?;
+        let mut tx = self.begin_immediate().await?;
         let row = sqlx::query(
-            "SELECT t.used_at, t.expires_at, s.id AS session_id, s.account_id, s.device_id, s.revoked_at \
+            "SELECT t.used_at, t.expires_at, s.id AS session_id, s.account_id, s.device_id, s.revoked_at, \
+             s.scope, s.auth_at \
              FROM refresh_tokens t JOIN sessions s ON s.id = t.session_id WHERE t.token_hash = ?",
         )
         .bind(old_hash)
@@ -408,6 +475,9 @@ impl Repository for SqliteRepo {
             session_id: row.get("session_id"),
             account_id: row.get("account_id"),
             device_id: row.get("device_id"),
+            scope: row.get("scope"),
+            auth_at: row.get("auth_at"),
+            token_expires_at: 0,
         };
         if row.get::<Option<i64>, _>("revoked_at").is_some() {
             return Ok(RefreshOutcome::Invalid);
@@ -506,7 +576,19 @@ impl Repository for SqliteRepo {
         Ok(())
     }
 
-    async fn create_device(&self, d: &Device) -> RepoResult<()> {
+    async fn create_device(&self, d: &Device, max_active: i64) -> RepoResult<bool> {
+        let mut tx = self.begin_immediate().await?;
+        let active: i64 = sqlx::query(
+            "SELECT COUNT(*) AS n FROM devices WHERE account_id = ? AND revoked_at IS NULL",
+        )
+        .bind(&d.account_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?
+        .get("n");
+        if active >= max_active {
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO devices (id, account_id, name, kind, ed25519, x25519, created_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -518,10 +600,11 @@ impl Repository for SqliteRepo {
         .bind(&d.ed25519)
         .bind(&d.x25519)
         .bind(d.created_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(db)?;
-        Ok(())
+        tx.commit().await.map_err(db)?;
+        Ok(true)
     }
 
     async fn device(&self, id: &str) -> RepoResult<Option<Device>> {
@@ -549,7 +632,7 @@ impl Repository for SqliteRepo {
     async fn revoke_device(&self, id: &str, now: i64) -> RepoResult<()> {
         let mut tx = self.begin().await?;
         sqlx::query(
-            "UPDATE devices SET revoked_at = ?, push_provider = NULL, push_token = NULL \
+            "UPDATE devices SET revoked_at = ?, push_provider = NULL, push_token = NULL, queued_bytes = 0 \
              WHERE id = ? AND revoked_at IS NULL",
         )
         .bind(now)
@@ -609,34 +692,38 @@ impl Repository for SqliteRepo {
     async fn put_grants(
         &self,
         host_id: &str,
+        version: i64,
         document: &[u8],
         signature: &[u8],
         now: i64,
-    ) -> RepoResult<()> {
-        sqlx::query(
-            "INSERT INTO host_grants (host_id, document, signature, updated_at) VALUES (?, ?, ?, ?) \
-             ON CONFLICT(host_id) DO UPDATE SET document = excluded.document, \
-             signature = excluded.signature, updated_at = excluded.updated_at",
+    ) -> RepoResult<bool> {
+        let r = sqlx::query(
+            "INSERT INTO host_grants (host_id, version, document, signature, updated_at) VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(host_id) DO UPDATE SET version = excluded.version, document = excluded.document, \
+             signature = excluded.signature, updated_at = excluded.updated_at \
+             WHERE excluded.version > host_grants.version",
         )
         .bind(host_id)
+        .bind(version)
         .bind(document)
         .bind(signature)
         .bind(now)
         .execute(&self.pool)
         .await
         .map_err(db)?;
-        Ok(())
+        Ok(r.rows_affected() == 1)
     }
 
     async fn grants(&self, host_id: &str) -> RepoResult<Option<Grants>> {
         let row = sqlx::query(
-            "SELECT document, signature, updated_at FROM host_grants WHERE host_id = ?",
+            "SELECT version, document, signature, updated_at FROM host_grants WHERE host_id = ?",
         )
         .bind(host_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(db)?;
         Ok(row.map(|r| Grants {
+            version: r.get("version"),
             document: r.get("document"),
             signature: r.get("signature"),
             updated_at: r.get("updated_at"),
@@ -649,33 +736,56 @@ impl Repository for SqliteRepo {
         sender_id: &str,
         envelope: &[u8],
         now: i64,
-        max_queued: i64,
+        quota: QueueQuota,
     ) -> RepoResult<EnqueueOutcome> {
-        let mut tx = self.begin().await?;
-        let queued: i64 = sqlx::query("SELECT COUNT(*) AS n FROM mailbox WHERE recipient_id = ?")
-            .bind(recipient_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?
-            .get("n");
-        if queued >= max_queued {
+        let size = envelope.len() as i64;
+        let mut tx = self.begin_immediate().await?;
+        let row = sqlx::query(
+            "SELECT d.account_id, d.queued_bytes, \
+             (SELECT COUNT(*) FROM mailbox WHERE recipient_id = d.id) AS n \
+             FROM devices d WHERE d.id = ?",
+        )
+        .bind(recipient_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        let account_id: String = row.get("account_id");
+        if row.get::<i64, _>("n") >= quota.max_envelopes_per_device {
             return Ok(EnqueueOutcome::Full);
         }
-        let seq: i64 = sqlx::query(
-            "UPDATE devices SET last_seq = last_seq + 1 WHERE id = ? RETURNING last_seq",
+        if row.get::<i64, _>("queued_bytes") + size > quota.max_bytes_per_device {
+            return Ok(EnqueueOutcome::DeviceBytes);
+        }
+        let account_bytes: i64 = sqlx::query(
+            "SELECT COALESCE(SUM(queued_bytes), 0) AS b FROM devices WHERE account_id = ?",
         )
+        .bind(&account_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?
+        .get("b");
+        if account_bytes + size > quota.max_bytes_per_account {
+            return Ok(EnqueueOutcome::AccountBytes);
+        }
+        let seq: i64 = sqlx::query(
+            "UPDATE devices SET last_seq = last_seq + 1, queued_bytes = queued_bytes + ? \
+             WHERE id = ? RETURNING last_seq",
+        )
+        .bind(size)
         .bind(recipient_id)
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?
         .get("last_seq");
         sqlx::query(
-            "INSERT INTO mailbox (recipient_id, seq, sender_id, envelope, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO mailbox (recipient_id, seq, sender_id, envelope, size, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(recipient_id)
         .bind(seq)
         .bind(sender_id)
         .bind(envelope)
+        .bind(size)
         .bind(now)
         .execute(&mut *tx)
         .await
@@ -688,15 +798,39 @@ impl Repository for SqliteRepo {
         &self,
         recipient_id: &str,
         after: i64,
-        limit: i64,
+        max_bytes: i64,
+        max_rows: i64,
     ) -> RepoResult<Vec<MailItem>> {
-        let rows = sqlx::query(
-            "SELECT seq, sender_id, envelope FROM mailbox WHERE recipient_id = ? AND seq > ? \
-             ORDER BY seq LIMIT ?",
+        // Sizes first (no envelope bytes), to find where the budget ends.
+        let sizes = sqlx::query(
+            "SELECT seq, size FROM mailbox WHERE recipient_id = ? AND seq > ? ORDER BY seq LIMIT ?",
         )
         .bind(recipient_id)
         .bind(after)
-        .bind(limit)
+        .bind(max_rows.max(1))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        let mut last = None;
+        let mut total = 0i64;
+        for r in &sizes {
+            let size: i64 = r.get("size");
+            if last.is_some() && total + size > max_bytes {
+                break;
+            }
+            total += size;
+            last = Some(r.get::<i64, _>("seq"));
+        }
+        let Some(last) = last else {
+            return Ok(Vec::new());
+        };
+        let rows = sqlx::query(
+            "SELECT seq, sender_id, envelope FROM mailbox WHERE recipient_id = ? AND seq > ? AND seq <= ? \
+             ORDER BY seq",
+        )
+        .bind(recipient_id)
+        .bind(after)
+        .bind(last)
         .fetch_all(&self.pool)
         .await
         .map_err(db)?;
@@ -711,19 +845,32 @@ impl Repository for SqliteRepo {
     }
 
     async fn ack(&self, recipient_id: &str, upto: i64) -> RepoResult<()> {
-        let mut tx = self.begin().await?;
+        let mut tx = self.begin_immediate().await?;
+        let freed: i64 = sqlx::query(
+            "SELECT COALESCE(SUM(size), 0) AS b FROM mailbox WHERE recipient_id = ? AND seq <= ?",
+        )
+        .bind(recipient_id)
+        .bind(upto)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?
+        .get("b");
         sqlx::query("DELETE FROM mailbox WHERE recipient_id = ? AND seq <= ?")
             .bind(recipient_id)
             .bind(upto)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        sqlx::query("UPDATE devices SET acked_seq = MAX(acked_seq, MIN(?, last_seq)) WHERE id = ?")
-            .bind(upto)
-            .bind(recipient_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        sqlx::query(
+            "UPDATE devices SET acked_seq = MAX(acked_seq, MIN(?, last_seq)), \
+             queued_bytes = MAX(0, queued_bytes - ?) WHERE id = ?",
+        )
+        .bind(upto)
+        .bind(freed)
+        .bind(recipient_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(())
     }
@@ -784,6 +931,15 @@ impl Repository for SqliteRepo {
             .await
             .map_err(db)?;
         Ok(r.rows_affected() == 1)
+    }
+
+    async fn delete_passkeys(&self, account_id: &str) -> RepoResult<u64> {
+        let r = sqlx::query("DELETE FROM passkeys WHERE account_id = ?")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(r.rows_affected())
     }
 
     async fn put_ephemeral(
@@ -946,8 +1102,47 @@ impl Repository for SqliteRepo {
             .collect())
     }
 
+    async fn recent_login_ips(
+        &self,
+        account_id: &str,
+        since: i64,
+        limit: i64,
+    ) -> RepoResult<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT ip FROM audit_log WHERE account_id = ? AND event = 'login' AND at >= ? \
+             AND ip IS NOT NULL ORDER BY id DESC LIMIT ?",
+        )
+        .bind(account_id)
+        .bind(since)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows.iter().map(|r| r.get("ip")).collect())
+    }
+
     async fn purge(&self, now: i64, mailbox_cutoff: i64) -> RepoResult<u64> {
-        let statements: [(&'static str, i64); 7] = [
+        // Old envelopes first, keeping the per-device byte counters right.
+        let mut tx = self.begin_immediate().await?;
+        sqlx::query(
+            "UPDATE devices SET queued_bytes = MAX(0, queued_bytes - \
+             (SELECT COALESCE(SUM(size), 0) FROM mailbox WHERE recipient_id = devices.id AND created_at <= ?)) \
+             WHERE id IN (SELECT DISTINCT recipient_id FROM mailbox WHERE created_at <= ?)",
+        )
+        .bind(mailbox_cutoff)
+        .bind(mailbox_cutoff)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        let mut removed = sqlx::query("DELETE FROM mailbox WHERE created_at <= ?")
+            .bind(mailbox_cutoff)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?
+            .rows_affected();
+        tx.commit().await.map_err(db)?;
+
+        let statements: [(&'static str, i64); 6] = [
             // Accounts never verified within a week (and never linked to a
             // provider, which marks them verified).
             (
@@ -960,9 +1155,7 @@ impl Repository for SqliteRepo {
             ("DELETE FROM ephemeral WHERE expires_at <= ?", now),
             // Keep expired device codes an hour so late polls get expired_token.
             ("DELETE FROM device_codes WHERE expires_at <= ? - 3600", now),
-            ("DELETE FROM mailbox WHERE created_at <= ?", mailbox_cutoff),
         ];
-        let mut removed = 0;
         for (sql, arg) in statements {
             removed += sqlx::query(sql)
                 .bind(arg)

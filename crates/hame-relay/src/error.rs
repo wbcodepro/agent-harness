@@ -70,6 +70,36 @@ impl ApiError {
         }
     }
 
+    /// The server is saturated (password hashing queue full).
+    pub fn busy() -> Self {
+        Self {
+            retry_after: Some(1),
+            ..Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "busy",
+                "the server is busy, try again shortly",
+            )
+        }
+    }
+
+    /// The session was not signed in with a full sign-in (device code).
+    pub fn host_scope() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "this session may only register and connect a host; sign in fully first",
+        )
+    }
+
+    /// The action needs a credential proved in the last minutes.
+    pub fn reauth_required() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "reauth_required",
+            "confirm your password or sign in again first",
+        )
+    }
+
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_configured", message)
     }

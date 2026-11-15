@@ -19,6 +19,7 @@ async-trait = "0.1.89"
 aws-lc-rs = "1.19"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 base64.workspace = true
+curve25519-dalek = "4.1"
 jsonwebtoken = { version = "12.0.0", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "pool", "hostname", "tokio1", "tokio1-rustls", "rustls-platform-verifier", "aws-lc-rs"] }
 rand = "0.9"
@@ -35,6 +36,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 url.workspace = true
 uuid.workspace = true
 webauthn-rs = { version = "0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["fs"] }
 
 [dev-dependencies]
 futures-util = "0.3.34"

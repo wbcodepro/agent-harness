@@ -9,6 +9,7 @@
 //! relay → client  {"op":"deliver","seq":42,"from":"<device id>","envelope":"<b64url>"}
 //! client → relay  {"op":"ack","seq":42}
 //! client → relay  {"op":"resume","after":40}
+//! client → relay  {"op":"auth","token":"<new access token>"}
 //! relay → client  {"op":"presence","device":"<id>","online":true}
 //! relay → client  {"op":"error","code":"...","message":"..."}
 //! both            {"op":"ping"} / {"op":"pong"}
@@ -16,24 +17,29 @@
 //!
 //! The relay never looks inside an envelope; it checks only that it is
 //! base64url and at most 1 MiB once decoded.
+//!
+//! A connection lives as long as the access token it was opened (or last
+//! renewed with `auth`) with: when the token expires, or its session or
+//! device is revoked, the relay sends `unauthorized` or `forbidden` and
+//! closes it.
 
 use crate::auth::{authenticate, bearer_token};
 use crate::error::ApiError;
 use crate::push::{PushError, PushMessage, PushProvider};
 use crate::ratelimit::{Limit, LocalBucket};
-use crate::repo::{AuthContext, EnqueueOutcome};
+use crate::repo::{AuthContext, EnqueueOutcome, QueueQuota};
 use crate::state::AppState;
 use crate::util;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// The largest envelope, decoded.
@@ -42,6 +48,10 @@ pub const MAX_ENVELOPE: usize = 1024 * 1024;
 /// frame around it, with room to answer `too_large` rather than drop the
 /// connection).
 pub const MAX_MESSAGE: usize = 2 * 1024 * 1024;
+/// Queued envelopes are read from storage in batches of at most this many
+/// bytes (and rows), so a long queue never sits in memory at once.
+pub const DELIVERY_BATCH_BYTES: i64 = 4 * 1024 * 1024;
+const DELIVERY_BATCH_ROWS: i64 = 256;
 /// The WebSocket subprotocol; browsers, which cannot set headers on a
 /// WebSocket, send the token as a second protocol `bearer.<token>`.
 pub const PROTOCOL: &str = "hame-relay.v1";
@@ -78,15 +88,32 @@ pub struct Hub {
 }
 
 impl Hub {
-    fn register(&self, account: &str, device: &str, tx: mpsc::UnboundedSender<HubMsg>) -> u64 {
+    /// Whether the account may open a connection for `device` (a device
+    /// that is already connected replaces its old connection).
+    fn has_room(&self, account: &str, device: &str, max: usize) -> bool {
+        self.inner
+            .lock()
+            .map(|i| match i.by_account.get(account) {
+                Some(m) => m.contains_key(device) || m.len() < max,
+                None => true,
+            })
+            .unwrap_or(false)
+    }
+
+    /// Registers a connection; `None` when the account is at `max`.
+    fn register(
+        &self,
+        account: &str,
+        device: &str,
+        tx: mpsc::UnboundedSender<HubMsg>,
+        max: usize,
+    ) -> Option<u64> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let Ok(mut inner) = self.inner.lock() else {
-            return id;
-        };
-        inner
-            .account_of
-            .insert(device.to_string(), account.to_string());
+        let mut inner = self.inner.lock().ok()?;
         let conns = inner.by_account.entry(account.to_string()).or_default();
+        if !conns.contains_key(device) && conns.len() >= max {
+            return None;
+        }
         if let Some(old) = conns.insert(device.to_string(), ConnHandle { id, tx }) {
             let _ = old.tx.send(HubMsg::Kick);
         }
@@ -98,7 +125,10 @@ impl Hub {
                 });
             }
         }
-        id
+        inner
+            .account_of
+            .insert(device.to_string(), account.to_string());
+        Some(id)
     }
 
     fn unregister(&self, account: &str, device: &str, id: u64) {
@@ -203,11 +233,25 @@ pub async fn handler(
     if ctx.device_id.as_deref() != Some(q.device.as_str()) {
         return ApiError::forbidden("the token does not belong to this device").into_response();
     }
+    if !state
+        .hub
+        .has_room(&ctx.account_id, &q.device, state.config.max_ws_per_account)
+    {
+        return ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_connections",
+            "this account has too many open connections",
+        )
+        .into_response();
+    }
+    let token_hash = util::token_hash(&token);
     ws.protocols([PROTOCOL])
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
         .on_upgrade(move |socket| async move {
-            Connection::new(state, ctx, q.device, socket).run().await;
+            Connection::new(state, ctx, token_hash, q.device, socket)
+                .run()
+                .await;
         })
 }
 
@@ -226,6 +270,10 @@ enum ClientFrame {
     Resume {
         after: i64,
     },
+    /// Renews the connection with a fresh access token of the same device.
+    Auth {
+        token: String,
+    },
     Ping,
     Pong,
 }
@@ -242,6 +290,9 @@ struct Connection {
     state: AppState,
     account: String,
     device: String,
+    session: String,
+    token_hash: String,
+    token_expires_at: i64,
     socket: WebSocket,
     resumed: bool,
     last_delivered: i64,
@@ -250,11 +301,40 @@ struct Connection {
 /// Why the loop stops.
 struct Closed;
 
+async fn still_authorized(
+    state: AppState,
+    token_hash: String,
+    session: String,
+    device: String,
+) -> bool {
+    match state.repo.authenticate(&token_hash, util::now()).await {
+        Ok(Some(ctx)) => ctx.session_id == session && ctx.device_id.as_deref() == Some(&device),
+        Ok(None) => false,
+        // A database hiccup does not close connections.
+        Err(_) => true,
+    }
+}
+
+/// The `Instant` at which a Unix time is reached.
+fn instant_at(unix: i64) -> tokio::time::Instant {
+    let left = (unix - util::now()).max(0) as u64;
+    tokio::time::Instant::now() + Duration::from_secs(left)
+}
+
 impl Connection {
-    fn new(state: AppState, ctx: AuthContext, device: String, socket: WebSocket) -> Self {
+    fn new(
+        state: AppState,
+        ctx: AuthContext,
+        token_hash: String,
+        device: String,
+        socket: WebSocket,
+    ) -> Self {
         Self {
             state,
             account: ctx.account_id,
+            session: ctx.session_id,
+            token_expires_at: ctx.token_expires_at,
+            token_hash,
             device,
             socket,
             resumed: false,
@@ -269,9 +349,61 @@ impl Connection {
             .map_err(|_| Closed)
     }
 
+    /// Whether the token is still valid and its session and device are not
+    /// revoked. (Borrows no part of the socket, which is not `Sync`.)
+    fn still_authorized(&self) -> impl std::future::Future<Output = bool> + Send + 'static {
+        still_authorized(
+            self.state.clone(),
+            self.token_hash.clone(),
+            self.session.clone(),
+            self.device.clone(),
+        )
+    }
+
+    fn expired(&self) -> bool {
+        util::now() >= self.token_expires_at
+    }
+
+    async fn close_unauthorized(&mut self) -> Result<(), Closed> {
+        let _ = self
+            .send(error_frame(
+                "unauthorized",
+                "the access token expired or was revoked; reconnect with a fresh token",
+                None,
+            ))
+            .await;
+        Err(Closed)
+    }
+
     async fn run(mut self) {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let conn_id = self.state.hub.register(&self.account, &self.device, tx);
+        let max = self.state.config.max_ws_per_account;
+        let Some(conn_id) = self
+            .state
+            .hub
+            .register(&self.account, &self.device, tx, max)
+        else {
+            let _ = self
+                .send(error_frame(
+                    "rate_limited",
+                    "this account has too many open connections",
+                    None,
+                ))
+                .await;
+            let _ = self.socket.send(Message::Close(None)).await;
+            return;
+        };
+        // A revocation that happened between the handshake's check and the
+        // registration above found no connection to kick: check again now
+        // that a kick would reach this one.
+        if !self.still_authorized().await {
+            let _ = self.close_unauthorized().await;
+            let _ = self.socket.send(Message::Close(None)).await;
+            self.state
+                .hub
+                .unregister(&self.account, &self.device, conn_id);
+            return;
+        }
         let _ = self
             .state
             .repo
@@ -289,12 +421,15 @@ impl Connection {
         let mut last_rx = Instant::now();
 
         loop {
+            let expiry = tokio::time::sleep_until(instant_at(self.token_expires_at));
             let step: Result<(), Closed> = tokio::select! {
                 msg = self.socket.recv() => match msg {
                     None | Some(Err(_)) | Some(Ok(Message::Close(_))) => Err(Closed),
                     Some(Ok(Message::Text(text))) => {
                         last_rx = Instant::now();
-                        if bucket.take() {
+                        if self.expired() {
+                            self.close_unauthorized().await
+                        } else if bucket.take() {
                             self.on_text(text.as_str()).await
                         } else {
                             self.send(error_frame("rate_limited", "too many frames", None)).await
@@ -321,9 +456,13 @@ impl Connection {
                         Err(Closed)
                     }
                 },
+                _ = expiry => self.close_unauthorized().await,
                 _ = ping.tick() => {
                     if last_rx.elapsed() > idle {
                         Err(Closed)
+                    } else if !self.still_authorized().await {
+                        // Backstop for revocations whose kick was missed.
+                        self.close_unauthorized().await
                     } else {
                         self.send(json!({ "op": "ping" })).await
                     }
@@ -358,7 +497,8 @@ impl Connection {
                     .await;
             }
         };
-        if !self.resumed && !matches!(frame, ClientFrame::Resume { .. }) {
+        if !self.resumed && !matches!(frame, ClientFrame::Resume { .. } | ClientFrame::Auth { .. })
+        {
             // No resume first: continue from the last acknowledged envelope.
             let after = match self.state.repo.device(&self.device).await {
                 Ok(Some(d)) => d.acked_seq,
@@ -377,8 +517,30 @@ impl Connection {
                 Ok(())
             }
             ClientFrame::Resume { after } => self.resume(after).await,
+            ClientFrame::Auth { token } => self.renew(&token).await,
             ClientFrame::Ping => self.send(json!({ "op": "pong" })).await,
             ClientFrame::Pong => Ok(()),
+        }
+    }
+
+    /// Switches the connection to a fresh access token of the same device.
+    async fn renew(&mut self, token: &str) -> Result<(), Closed> {
+        match authenticate(&self.state, token).await {
+            Ok(ctx) if ctx.device_id.as_deref() == Some(&self.device) => {
+                self.token_hash = util::token_hash(token);
+                self.session = ctx.session_id;
+                self.token_expires_at = ctx.token_expires_at;
+                self.send(json!({ "op": "auth", "expires_at": ctx.token_expires_at }))
+                    .await
+            }
+            _ => {
+                self.send(error_frame(
+                    "unauthorized",
+                    "the token is invalid or belongs to another device",
+                    None,
+                ))
+                .await
+            }
         }
     }
 
@@ -409,7 +571,12 @@ impl Connection {
             let items = match self
                 .state
                 .repo
-                .fetch_after(&self.device, self.last_delivered, 64)
+                .fetch_after(
+                    &self.device,
+                    self.last_delivered,
+                    DELIVERY_BATCH_BYTES,
+                    DELIVERY_BATCH_ROWS,
+                )
                 .await
             {
                 Ok(items) => items,
@@ -487,26 +654,41 @@ impl Connection {
                     .await;
             }
         };
+        if !self.state.disk.has_room() {
+            return self
+                .send(error_frame(
+                    "unavailable",
+                    "the relay is low on storage; try again later",
+                    Some(&to),
+                ))
+                .await;
+        }
         let cfg = &self.state.config;
+        let quota = QueueQuota {
+            max_envelopes_per_device: cfg.mailbox_max_per_device,
+            max_bytes_per_device: cfg.mailbox_max_bytes_per_device,
+            max_bytes_per_account: cfg.mailbox_max_bytes_per_account,
+        };
         let outcome = self
             .state
             .repo
-            .enqueue(
-                &to,
-                &self.device,
-                &bytes,
-                util::now(),
-                cfg.mailbox_max_per_device,
-            )
+            .enqueue(&to, &self.device, &bytes, util::now(), quota)
             .await;
+        let refused = |msg: &str| error_frame("rate_limited", msg, Some(&to));
         let seq = match outcome {
             Ok(EnqueueOutcome::Queued(seq)) => seq,
             Ok(EnqueueOutcome::Full) => {
+                return self.send(refused("the recipient's queue is full")).await;
+            }
+            Ok(EnqueueOutcome::DeviceBytes) => {
                 return self
-                    .send(error_frame(
-                        "rate_limited",
-                        "the recipient's queue is full",
-                        Some(&to),
+                    .send(refused("the recipient's queue has reached its size quota"))
+                    .await;
+            }
+            Ok(EnqueueOutcome::AccountBytes) => {
+                return self
+                    .send(refused(
+                        "this account's queues have reached their size quota",
                     ))
                     .await;
             }

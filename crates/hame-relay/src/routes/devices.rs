@@ -1,9 +1,9 @@
 //! Devices, hosts, host grants and push tokens.
 
-use crate::auth::{Authed, ClientIp};
+use crate::auth::{Authed, ClientIp, FullAuthed};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::push::PushProvider;
-use crate::repo::{AuthContext, Device};
+use crate::repo::{AuthContext, Device, SCOPE_HOST};
 use crate::state::AppState;
 use crate::util;
 use axum::Json;
@@ -26,6 +26,32 @@ fn decode_key(field: &str, value: &str) -> ApiResult<Vec<u8>> {
                 format!("{field} must be a 32-byte public key, base64url"),
             )
         })
+}
+
+/// Whether `key` is a canonical encoding of an Ed25519 point that is not of
+/// small order.
+pub fn valid_ed25519_key(key: &[u8]) -> bool {
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+    let Ok(bytes) = <[u8; 32]>::try_from(key) else {
+        return false;
+    };
+    match CompressedEdwardsY(bytes).decompress() {
+        Some(p) => !p.is_small_order() && p.compress().to_bytes() == bytes,
+        None => false,
+    }
+}
+
+/// Whether `key` is an X25519 public key of large order (all-zero and
+/// the other low-order points give a predictable shared secret).
+pub fn valid_x25519_key(key: &[u8]) -> bool {
+    use curve25519_dalek::montgomery::MontgomeryPoint;
+    use curve25519_dalek::scalar::Scalar;
+    let Ok(bytes) = <[u8; 32]>::try_from(key) else {
+        return false;
+    };
+    // A point of order dividing the cofactor maps to the identity (u = 0).
+    let p = MontgomeryPoint(bytes) * Scalar::from(8u8);
+    p.to_bytes() != [0u8; 32]
 }
 
 /// Verifies an Ed25519 signature with a base64url public key.
@@ -78,7 +104,9 @@ pub struct RegisterBody {
     x25519: String,
 }
 
-/// Registers the calling session's device. A session has at most one.
+/// Registers the calling session's device. A session has at most one; an
+/// account at most `max_devices_per_account` that are not revoked.
+/// Device-code sessions may only register a host.
 pub async fn register(
     State(state): State<AppState>,
     ip: ClientIp,
@@ -98,8 +126,21 @@ pub async fn register(
             "kind must be web, desktop, ios, android or host",
         ));
     }
-    decode_key("ed25519", &body.ed25519)?;
-    decode_key("x25519", &body.x25519)?;
+    if ctx.scope == SCOPE_HOST && body.kind != "host" {
+        return Err(ApiError::host_scope());
+    }
+    if !valid_ed25519_key(&decode_key("ed25519", &body.ed25519)?) {
+        return Err(ApiError::bad_request(
+            "invalid_key",
+            "ed25519 is not a valid public key",
+        ));
+    }
+    if !valid_x25519_key(&decode_key("x25519", &body.x25519)?) {
+        return Err(ApiError::bad_request(
+            "invalid_key",
+            "x25519 is a low-order point",
+        ));
+    }
     let device = Device {
         id: uuid::Uuid::new_v4().to_string(),
         account_id: ctx.account_id.clone(),
@@ -115,7 +156,19 @@ pub async fn register(
         push_provider: None,
         push_token: None,
     };
-    state.repo.create_device(&device).await?;
+    if !state
+        .repo
+        .create_device(&device, state.config.max_devices_per_account)
+        .await?
+    {
+        return Err(ApiError::conflict(
+            "too_many_devices",
+            format!(
+                "an account may have at most {} devices; revoke one first",
+                state.config.max_devices_per_account
+            ),
+        ));
+    }
     state
         .repo
         .bind_session_device(&ctx.session_id, &device.id)
@@ -127,6 +180,18 @@ pub async fn register(
             Some(&device.id),
             Some(ip.0),
             Some(format!("{} {}", device.kind, fingerprint(&device))),
+        )
+        .await;
+    state
+        .notify_account(
+            &ctx.account_id,
+            "A device was added to your hame account",
+            &format!(
+                "A {} device named \"{}\" was added to your account (key fingerprint {}).",
+                device.kind,
+                device.name,
+                &fingerprint(&device)[..16]
+            ),
         )
         .await;
     Ok((StatusCode::CREATED, Json(device_json(&state, &device))).into_response())
@@ -151,7 +216,7 @@ pub async fn hosts(State(state): State<AppState>, Authed(ctx): Authed) -> ApiRes
 pub async fn revoke(
     State(state): State<AppState>,
     ip: ClientIp,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let device = own_device(&state, &ctx, &id).await?;
@@ -205,6 +270,9 @@ pub async fn rebind(
         ));
     }
     let device = own_device(&state, &ctx, &id).await?;
+    if ctx.scope == SCOPE_HOST && device.kind != "host" {
+        return Err(ApiError::host_scope());
+    }
     if (util::now() - body.timestamp).abs() > REBIND_SKEW {
         return Err(ApiError::bad_request(
             "invalid_proof",
@@ -281,11 +349,22 @@ pub async fn set_push(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The bytes a host signs for a grant list.
+pub fn grants_message(host_id: &str, version: i64, document: &[u8]) -> Vec<u8> {
+    let mut m = format!("hame-grants:v1\n{host_id}\n{version}\n").into_bytes();
+    m.extend_from_slice(document);
+    m
+}
+
 #[derive(Deserialize)]
 pub struct GrantsBody {
+    /// Increases with every new list; the relay refuses one that is not
+    /// higher than the stored version (no rollback to an older list).
+    version: i64,
     /// The host's grant list, opaque to the relay, base64url.
     document: String,
-    /// The host's Ed25519 signature over the document bytes, base64url.
+    /// The host's Ed25519 signature, base64url, over
+    /// `hame-grants:v1\n{host_id}\n{version}\n` followed by the document.
     signature: String,
 }
 
@@ -309,16 +388,29 @@ pub async fn put_grants(
         .ok_or_else(|| ApiError::bad_request("bad_request", "document must be base64url"))?;
     let signature = util::b64url_decode(&body.signature)
         .ok_or_else(|| ApiError::bad_request("bad_request", "signature must be base64url"))?;
-    if !verify_ed25519(&host.ed25519, &document, &signature) {
+    if body.version < 1 {
+        return Err(ApiError::bad_request(
+            "bad_request",
+            "version must be positive",
+        ));
+    }
+    let message = grants_message(&host.id, body.version, &document);
+    if !verify_ed25519(&host.ed25519, &message, &signature) {
         return Err(ApiError::bad_request(
             "invalid_signature",
             "signature does not verify",
         ));
     }
-    state
+    if !state
         .repo
-        .put_grants(&host.id, &document, &signature, util::now())
-        .await?;
+        .put_grants(&host.id, body.version, &document, &signature, util::now())
+        .await?
+    {
+        return Err(ApiError::conflict(
+            "stale_version",
+            "a grant list with this or a higher version is already stored",
+        ));
+    }
     state
         .audit(
             "grants_changed",
@@ -344,6 +436,7 @@ pub async fn get_grants(
         .ok_or_else(ApiError::not_found)?;
     Ok(Json(json!({
         "host_id": host.id,
+        "version": grants.version,
         "document": util::b64url(&grants.document),
         "signature": util::b64url(&grants.signature),
         "updated_at": grants.updated_at,

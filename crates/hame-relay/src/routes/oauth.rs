@@ -113,6 +113,17 @@ pub async fn start(
             "code_challenge must be a base64url SHA-256",
         ));
     }
+    // A custom scheme (hame://) can be claimed by any app on the device:
+    // the one-time code must then be useless without the app's verifier.
+    if let Some(rt) = &q.return_to
+        && !rt.starts_with("https://")
+        && q.code_challenge.is_none()
+    {
+        return Err(ApiError::bad_request(
+            "code_challenge_required",
+            "a return_to that is not https needs the app's code_challenge",
+        ));
+    }
     let flow_state = util::random_token("");
     let nonce = util::random_token("");
     let verifier = util::random_token("");
@@ -304,6 +315,7 @@ async fn callback(
         header::SET_COOKIE,
         HeaderValue::from_str(&clear).map_err(ApiError::internal)?,
     );
+    super::account::notify_new_sign_in(&state, &account_id, ip.0, kind.as_str()).await;
     state
         .audit(
             "login",
@@ -362,15 +374,32 @@ async fn resolve_account(
     let now = util::now();
     let account_id = match state.repo.account_by_email(&email).await? {
         Some(existing) => {
-            if !existing.email_verified {
-                state.repo.set_password(&existing.id, None, now).await?;
+            // Keep the password only if the verified owner has signed in
+            // with it: otherwise whoever registered the address may know
+            // it (pre-account hijacking).
+            let password_unproven = existing.password_hash.is_some() && !existing.password_proven;
+            if !existing.email_verified || password_unproven {
+                state
+                    .repo
+                    .set_password(&existing.id, None, false, now)
+                    .await?;
                 state.repo.set_email_verified(&existing.id, now).await?;
                 let devices = state
                     .repo
-                    .revoke_account_sessions(&existing.id, None, "unverified_account_claimed", now)
+                    .revoke_account_sessions(&existing.id, None, "account_claimed_by_provider", now)
                     .await?;
                 super::account::kick_all(state, &devices);
+                state
+                    .audit(
+                        "password_removed_on_claim",
+                        Some(&existing.id),
+                        None,
+                        Some(ip.0),
+                        Some(provider.into()),
+                    )
+                    .await;
             }
+            super::account::delete_email_links(state, &existing.id).await?;
             existing.id
         }
         None => {
@@ -386,6 +415,7 @@ async fn resolve_account(
                 email: email.clone(),
                 email_verified: true,
                 password_hash: None,
+                password_proven: false,
                 created_at: now,
             };
             state.repo.create_account(&account).await?;
@@ -412,6 +442,21 @@ async fn resolve_account(
             None,
             Some(ip.0),
             Some(provider.into()),
+        )
+        .await;
+    let name = match kind {
+        ProviderKind::Google => "Google",
+        ProviderKind::Apple => "Apple",
+    };
+    state
+        .notify_account(
+            &account_id,
+            &format!("{name} sign-in was linked to your hame account"),
+            &format!(
+                "Sign-in with {name} was linked to your account. If your account had a password \
+                 you never used, it was removed; set one with \"forgot password\" if you want one. \
+                 If your account has a password you did not set yourself, reset it now."
+            ),
         )
         .await;
     Ok(account_id)

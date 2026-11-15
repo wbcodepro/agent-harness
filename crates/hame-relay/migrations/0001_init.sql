@@ -8,6 +8,10 @@ CREATE TABLE accounts (
     email          TEXT NOT NULL UNIQUE,
     email_verified INTEGER NOT NULL DEFAULT 0,
     password_hash  TEXT,
+    -- 1 once the password signed in successfully after verification (or
+    -- was set through a reset link or a password change): only then does
+    -- a Google/Apple sign-in for the same address keep it.
+    password_proven INTEGER NOT NULL DEFAULT 0,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
@@ -46,6 +50,7 @@ CREATE TABLE devices (
     revoked_at    INTEGER,
     last_seq      INTEGER NOT NULL DEFAULT 0,
     acked_seq     INTEGER NOT NULL DEFAULT 0,
+    queued_bytes  INTEGER NOT NULL DEFAULT 0,
     push_provider TEXT,
     push_token    TEXT
 );
@@ -57,6 +62,11 @@ CREATE TABLE sessions (
     account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     device_id     TEXT REFERENCES devices(id) ON DELETE SET NULL,
     method        TEXT NOT NULL,
+    -- 'full', or 'host' for device-code sign-ins (host registration and
+    -- connection only).
+    scope         TEXT NOT NULL DEFAULT 'full',
+    -- When the user last proved a credential in this session.
+    auth_at       INTEGER NOT NULL,
     created_at    INTEGER NOT NULL,
     last_used_at  INTEGER NOT NULL,
     revoked_at    INTEGER,
@@ -85,6 +95,7 @@ CREATE INDEX refresh_tokens_session ON refresh_tokens(session_id);
 -- The latest grant list a host published (opaque, signed by the host).
 CREATE TABLE host_grants (
     host_id    TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    version    INTEGER NOT NULL,
     document   BLOB NOT NULL,
     signature  BLOB NOT NULL,
     updated_at INTEGER NOT NULL
@@ -96,6 +107,7 @@ CREATE TABLE mailbox (
     seq          INTEGER NOT NULL,
     sender_id    TEXT NOT NULL,
     envelope     BLOB NOT NULL,
+    size         INTEGER NOT NULL,
     created_at   INTEGER NOT NULL,
     PRIMARY KEY (recipient_id, seq)
 );

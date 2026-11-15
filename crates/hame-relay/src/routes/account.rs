@@ -1,24 +1,29 @@
 //! Email and password accounts: sign-up, verification, login, refresh,
-//! logout, password reset and the profile.
+//! logout, re-authentication, password reset, sessions and the profile.
 
-use crate::auth::{Authed, ClientIp, TokenResponse, issue_access_token, issue_tokens};
+use crate::auth::{Authed, ClientIp, FullAuthed, TokenResponse, issue_access_token, issue_tokens};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::mailer::Email;
 use crate::password::check_strength;
+use crate::ratelimit::{Limit, ip_key};
 use crate::repo::{Account, RefreshOutcome};
 use crate::state::AppState;
 use crate::util;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
+use std::net::IpAddr;
 
 const VERIFY_TTL: i64 = 24 * 3600;
 const RESET_TTL: i64 = 3600;
 pub const PURPOSE_VERIFY: &str = "verify";
 pub const PURPOSE_RESET: &str = "reset";
+/// Sign-ins from a network seen within this period are not notified.
+const KNOWN_NETWORK_PERIOD: i64 = 90 * 24 * 3600;
+const GLOBAL_FAILED_LOGINS: &str = "global:login_failed";
 
 /// The same answer whether or not the address has an account.
 fn accepted() -> Response {
@@ -78,7 +83,8 @@ async fn send_verification(state: &AppState, account: &Account) -> ApiResult<()>
         subject: "Verify your email for hame".into(),
         text: format!(
             "Hello {},\n\nconfirm your email address to finish creating your hame account:\n\n{link}\n\n\
-             The link is valid for 24 hours. If you did not sign up, ignore this message.\n",
+             The link is valid for 24 hours. If you did not sign up, ignore this message and do \
+             not open the link.\n",
             account.name
         ),
     });
@@ -101,11 +107,66 @@ async fn send_reset(state: &AppState, account: &Account, intro: &str) -> ApiResu
     Ok(())
 }
 
+/// Deletes outstanding verification and reset links of an account.
+pub async fn delete_email_links(state: &AppState, account_id: &str) -> ApiResult<()> {
+    state
+        .repo
+        .delete_email_tokens(account_id, PURPOSE_RESET)
+        .await?;
+    state
+        .repo
+        .delete_email_tokens(account_id, PURPOSE_VERIFY)
+        .await?;
+    Ok(())
+}
+
 /// Kicks the WebSocket connections of devices whose sessions were revoked.
 pub fn kick_all(state: &AppState, devices: &[String]) {
     for d in devices {
         state.hub.kick(d);
     }
+}
+
+/// The network an address belongs to for "new sign-in" notices: IPv4 /24,
+/// IPv6 /64.
+fn network(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            format!("{}.{}.{}.0/24", o[0], o[1], o[2])
+        }
+        IpAddr::V6(_) => ip_key(ip),
+    }
+}
+
+/// Emails the owner when a sign-in comes from a network not seen in the
+/// last 90 days (not for the very first sign-in). Call before the sign-in
+/// is written to the audit log.
+pub async fn notify_new_sign_in(state: &AppState, account_id: &str, ip: IpAddr, method: &str) {
+    let since = util::now() - KNOWN_NETWORK_PERIOD;
+    let Ok(ips) = state.repo.recent_login_ips(account_id, since, 500).await else {
+        return;
+    };
+    if ips.is_empty() {
+        return;
+    }
+    let net = network(ip);
+    if ips
+        .iter()
+        .filter_map(|s| s.parse::<IpAddr>().ok())
+        .any(|p| network(p) == net)
+    {
+        return;
+    }
+    state
+        .notify_account(
+            account_id,
+            "New sign-in to your hame account",
+            &format!(
+                "Someone signed in to your account ({method}) from {ip}, a network not seen before."
+            ),
+        )
+        .await;
 }
 
 #[derive(Deserialize)]
@@ -126,11 +187,7 @@ pub async fn signup(
     check_strength(&body.password, &email, &name)
         .map_err(|m| ApiError::bad_request("weak_password", m))?;
     // Hash before looking the address up, so both paths cost the same.
-    let hash = state
-        .hasher
-        .hash(&body.password)
-        .await
-        .map_err(ApiError::internal)?;
+    let hash = state.hasher.hash(&body.password).await?;
     if let Some(existing) = state.repo.account_by_email(&email).await? {
         send_reset(
             &state,
@@ -156,6 +213,7 @@ pub async fn signup(
         email,
         email_verified: false,
         password_hash: Some(hash),
+        password_proven: false,
         created_at: util::now(),
     };
     match state.repo.create_account(&account).await {
@@ -203,6 +261,19 @@ pub struct EmailBody {
     email: String,
 }
 
+/// Runs `work` after the response, so that its database work cannot be
+/// timed by the caller.
+fn off_response_path<F>(work: F)
+where
+    F: std::future::Future<Output = ApiResult<()>> + Send + 'static,
+{
+    tokio::spawn(async move {
+        if let Err(e) = work.await {
+            tracing::error!(error = %e.message, "background mail work failed");
+        }
+    });
+}
+
 pub async fn resend_verification(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<EmailBody>,
@@ -211,11 +282,14 @@ pub async fn resend_verification(
         return Ok(accepted());
     };
     state.check_account_limit("resend", &email)?;
-    if let Some(account) = state.repo.account_by_email(&email).await?
-        && !account.email_verified
-    {
-        send_verification(&state, &account).await?;
-    }
+    off_response_path(async move {
+        if let Some(account) = state.repo.account_by_email(&email).await?
+            && !account.email_verified
+        {
+            send_verification(&state, &account).await?;
+        }
+        Ok(())
+    });
     Ok(accepted())
 }
 
@@ -232,6 +306,13 @@ pub async fn login(
 ) -> ApiResult<Json<TokenResponse>> {
     let email = util::normalize_email(&body.email).unwrap_or_default();
     state.check_account_limit("login", &email)?;
+    // Across all addresses: a credential-stuffing wave stops password
+    // logins for a while instead of costing unlimited Argon2id work.
+    let global = Limit::per_minute(state.config.rate_limits.global_failed_logins_per_min);
+    state
+        .limiter
+        .peek(GLOBAL_FAILED_LOGINS, global)
+        .map_err(ApiError::rate_limited)?;
     let account = if email.is_empty() {
         None
     } else {
@@ -239,8 +320,9 @@ pub async fn login(
     };
     let phc = account.as_ref().and_then(|a| a.password_hash.as_deref());
     let ok = body.password.chars().count() <= crate::password::MAX_LEN
-        && state.hasher.verify(&body.password, phc).await;
+        && state.hasher.verify(&body.password, phc).await?;
     let Some(account) = account.clone().filter(|_| ok) else {
+        let _ = state.limiter.check(GLOBAL_FAILED_LOGINS, global);
         state
             .audit(
                 "login_failed",
@@ -259,7 +341,10 @@ pub async fn login(
             "confirm your email address first",
         ));
     }
+    // A verified owner signed in with this password: it is theirs.
+    state.repo.mark_password_proven(&account.id).await?;
     let tokens = issue_tokens(&state, &account.id, None, "password").await?;
+    notify_new_sign_in(&state, &account.id, ip.0, "password").await;
     state
         .audit(
             "login",
@@ -270,6 +355,61 @@ pub async fn login(
         )
         .await;
     Ok(Json(tokens))
+}
+
+#[derive(Deserialize)]
+pub struct ReauthBody {
+    password: String,
+}
+
+/// Proves the password again in this session: makes it recent (for adding
+/// passkeys) and upgrades a device-code session to a full one.
+pub async fn reauth(
+    State(state): State<AppState>,
+    ip: ClientIp,
+    Authed(ctx): Authed,
+    ApiJson(body): ApiJson<ReauthBody>,
+) -> ApiResult<StatusCode> {
+    state.check_account_limit("reauth", &ctx.account_id)?;
+    let account = state
+        .repo
+        .account(&ctx.account_id)
+        .await?
+        .ok_or_else(ApiError::unauthorized)?;
+    let Some(phc) = account.password_hash.as_deref() else {
+        return Err(ApiError::forbidden(
+            "this account has no password; sign in again with your provider or passkey",
+        ));
+    };
+    if body.password.chars().count() > crate::password::MAX_LEN
+        || !state.hasher.verify(&body.password, Some(phc)).await?
+    {
+        state
+            .audit(
+                "reauth_failed",
+                Some(&account.id),
+                ctx.device_id.as_deref(),
+                Some(ip.0),
+                None,
+            )
+            .await;
+        return Err(ApiError::invalid_credentials());
+    }
+    state.repo.mark_password_proven(&account.id).await?;
+    state
+        .repo
+        .reauth_session(&ctx.session_id, util::now())
+        .await?;
+    state
+        .audit(
+            "reauth",
+            Some(&account.id),
+            ctx.device_id.as_deref(),
+            Some(ip.0),
+            Some(ctx.scope),
+        )
+        .await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -366,23 +506,26 @@ pub async fn forgot_password(
         return Ok(accepted());
     };
     state.check_account_limit("forgot", &email)?;
-    if let Some(account) = state.repo.account_by_email(&email).await? {
-        send_reset(
-            &state,
-            &account,
-            "we received a request to reset the password of your hame account.",
-        )
-        .await?;
-        state
-            .audit(
-                "password_reset_requested",
-                Some(&account.id),
-                None,
-                Some(ip.0),
-                None,
+    off_response_path(async move {
+        if let Some(account) = state.repo.account_by_email(&email).await? {
+            send_reset(
+                &state,
+                &account,
+                "we received a request to reset the password of your hame account.",
             )
-            .await;
-    }
+            .await?;
+            state
+                .audit(
+                    "password_reset_requested",
+                    Some(&account.id),
+                    None,
+                    Some(ip.0),
+                    None,
+                )
+                .await;
+        }
+        Ok(())
+    });
     Ok(accepted())
 }
 
@@ -392,6 +535,9 @@ pub struct ResetBody {
     password: String,
 }
 
+/// Sets a new password through a reset link. Everything an intruder may
+/// have left behind goes: all sessions, all passkeys and every other
+/// outstanding link.
 pub async fn reset_password(
     State(state): State<AppState>,
     ip: ClientIp,
@@ -408,11 +554,7 @@ pub async fn reset_password(
     let account = state.repo.account(&account_id).await?.ok_or_else(invalid)?;
     check_strength(&body.password, &account.email, &account.name)
         .map_err(|m| ApiError::bad_request("weak_password", m))?;
-    let phc = state
-        .hasher
-        .hash(&body.password)
-        .await
-        .map_err(ApiError::internal)?;
+    let phc = state.hasher.hash(&body.password).await?;
     if state
         .repo
         .consume_email_token(&hash, PURPOSE_RESET, now)
@@ -421,25 +563,39 @@ pub async fn reset_password(
     {
         return Err(invalid());
     }
+    // The link proved control of the inbox: the password is the owner's.
     state
         .repo
-        .set_password(&account.id, Some(&phc), now)
+        .set_password(&account.id, Some(&phc), true, now)
         .await?;
-    // The link proved control of the inbox.
     state.repo.set_email_verified(&account.id, now).await?;
-    state
-        .repo
-        .delete_email_tokens(&account.id, PURPOSE_RESET)
-        .await?;
+    delete_email_links(&state, &account.id).await?;
+    let passkeys = state.repo.delete_passkeys(&account.id).await?;
     let devices = state
         .repo
         .revoke_account_sessions(&account.id, None, "password_reset", now)
         .await?;
     kick_all(&state, &devices);
     state
-        .audit("password_reset", Some(&account.id), None, Some(ip.0), None)
+        .audit(
+            "password_reset",
+            Some(&account.id),
+            None,
+            Some(ip.0),
+            Some(format!("{passkeys} passkeys removed")),
+        )
         .await;
-    Ok(Json(json!({ "status": "password_changed" })))
+    state
+        .notify_account(
+            &account.id,
+            "Your hame password was reset",
+            "Your password was reset. All sessions were signed out and all passkeys removed; \
+             add your passkeys again after signing in.",
+        )
+        .await;
+    Ok(Json(
+        json!({ "status": "password_changed", "passkeys_removed": passkeys }),
+    ))
 }
 
 pub async fn profile(
@@ -465,6 +621,7 @@ pub async fn profile(
             "id": p.id, "name": p.name, "created_at": p.created_at, "last_used_at": p.last_used_at,
         })).collect::<Vec<_>>(),
         "session_id": ctx.session_id,
+        "session_scope": ctx.scope,
         "device_id": ctx.device_id,
     })))
 }
@@ -476,7 +633,7 @@ pub struct ProfileBody {
 
 pub async fn update_profile(
     State(state): State<AppState>,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
     ApiJson(body): ApiJson<ProfileBody>,
 ) -> ApiResult<StatusCode> {
     let name = validate_name(&body.name)?;
@@ -491,15 +648,19 @@ pub async fn update_profile(
 pub struct ChangePasswordBody {
     current_password: String,
     new_password: String,
+    /// Also remove every passkey of the account.
+    #[serde(default)]
+    remove_passkeys: bool,
 }
 
 /// Changes the password (the current one is required; accounts without a
 /// password use the reset flow, which proves control of the inbox).
-/// Revokes every other session.
+/// Revokes every other session and outstanding reset or verification link,
+/// and optionally removes all passkeys.
 pub async fn change_password(
     State(state): State<AppState>,
     ip: ClientIp,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
     ApiJson(body): ApiJson<ChangePasswordBody>,
 ) -> ApiResult<StatusCode> {
     state.check_account_limit("password", &ctx.account_id)?;
@@ -516,7 +677,7 @@ pub async fn change_password(
     if !state
         .hasher
         .verify(&body.current_password, Some(current))
-        .await
+        .await?
     {
         state
             .audit(
@@ -531,16 +692,18 @@ pub async fn change_password(
     }
     check_strength(&body.new_password, &account.email, &account.name)
         .map_err(|m| ApiError::bad_request("weak_password", m))?;
-    let phc = state
-        .hasher
-        .hash(&body.new_password)
-        .await
-        .map_err(ApiError::internal)?;
+    let phc = state.hasher.hash(&body.new_password).await?;
     let now = util::now();
     state
         .repo
-        .set_password(&account.id, Some(&phc), now)
+        .set_password(&account.id, Some(&phc), true, now)
         .await?;
+    delete_email_links(&state, &account.id).await?;
+    let passkeys = if body.remove_passkeys {
+        state.repo.delete_passkeys(&account.id).await?
+    } else {
+        0
+    };
     let devices = state
         .repo
         .revoke_account_sessions(&account.id, Some(&ctx.session_id), "password_changed", now)
@@ -552,7 +715,14 @@ pub async fn change_password(
             Some(&account.id),
             ctx.device_id.as_deref(),
             Some(ip.0),
-            None,
+            Some(format!("{passkeys} passkeys removed")),
+        )
+        .await;
+    state
+        .notify_account(
+            &account.id,
+            "Your hame password was changed",
+            "Your password was changed and your other sessions were signed out.",
         )
         .await;
     Ok(StatusCode::NO_CONTENT)
@@ -560,8 +730,61 @@ pub async fn change_password(
 
 pub async fn audit_log(
     State(state): State<AppState>,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
 ) -> ApiResult<Json<serde_json::Value>> {
     let entries = state.repo.audit_for_account(&ctx.account_id, 100).await?;
     Ok(Json(json!({ "events": entries })))
+}
+
+/// The account's active sessions.
+pub async fn sessions(
+    State(state): State<AppState>,
+    FullAuthed(ctx): FullAuthed,
+) -> ApiResult<Json<serde_json::Value>> {
+    let list = state.repo.sessions(&ctx.account_id).await?;
+    let items: Vec<_> = list
+        .into_iter()
+        .map(|s| {
+            let current = s.id == ctx.session_id;
+            let mut v = serde_json::to_value(s).unwrap_or_default();
+            v["current"] = json!(current);
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "sessions": items })))
+}
+
+/// Revokes one session of the account (and closes its device's WebSocket).
+pub async fn revoke_session(
+    State(state): State<AppState>,
+    ip: ClientIp,
+    FullAuthed(ctx): FullAuthed,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let owned = state
+        .repo
+        .sessions(&ctx.account_id)
+        .await?
+        .into_iter()
+        .any(|s| s.id == id);
+    if !owned {
+        return Err(ApiError::not_found());
+    }
+    if let Some(d) = state
+        .repo
+        .revoke_session(&id, "revoked_by_user", util::now())
+        .await?
+    {
+        state.hub.kick(&d);
+    }
+    state
+        .audit(
+            "session_revoked",
+            Some(&ctx.account_id),
+            ctx.device_id.as_deref(),
+            Some(ip.0),
+            Some(id),
+        )
+        .await;
+    Ok(StatusCode::NO_CONTENT)
 }

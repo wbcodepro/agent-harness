@@ -4,7 +4,7 @@
 //! enters the code in a signed-in app, which calls `lookup` (to show what
 //! is asking) and `approve`.
 
-use crate::auth::{Authed, ClientIp, issue_tokens};
+use crate::auth::{ClientIp, FullAuthed, issue_tokens};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::repo::DeviceCodeRow;
 use crate::state::AppState;
@@ -142,7 +142,7 @@ async fn pending_code(
 
 pub async fn lookup(
     State(state): State<AppState>,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
     ApiJson(body): ApiJson<UserCodeBody>,
 ) -> ApiResult<Json<Value>> {
     let row = pending_code(&state, &ctx.account_id, &body.user_code).await?;
@@ -156,7 +156,7 @@ pub async fn lookup(
 pub async fn approve(
     State(state): State<AppState>,
     ip: ClientIp,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
     ApiJson(body): ApiJson<UserCodeBody>,
 ) -> ApiResult<StatusCode> {
     let row = pending_code(&state, &ctx.account_id, &body.user_code).await?;

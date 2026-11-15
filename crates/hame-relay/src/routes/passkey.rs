@@ -5,7 +5,7 @@
 //! does not reveal whether it is registered) or without one (a
 //! discoverable-credential challenge for conditional UI).
 
-use crate::auth::{Authed, ClientIp, TokenResponse, issue_tokens};
+use crate::auth::{ClientIp, FullAuthed, RecentAuthed, TokenResponse, issue_tokens};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::repo::StoredPasskey;
 use crate::state::AppState;
@@ -34,7 +34,7 @@ fn webauthn(state: &AppState) -> ApiResult<&Webauthn> {
 
 pub async fn register_start(
     State(state): State<AppState>,
-    Authed(ctx): Authed,
+    RecentAuthed(ctx): RecentAuthed,
 ) -> ApiResult<Json<Value>> {
     let wa = webauthn(&state)?;
     let account = state
@@ -83,7 +83,7 @@ pub struct RegisterFinish {
 pub async fn register_finish(
     State(state): State<AppState>,
     ip: ClientIp,
-    Authed(ctx): Authed,
+    RecentAuthed(ctx): RecentAuthed,
     ApiJson(body): ApiJson<RegisterFinish>,
 ) -> ApiResult<Json<Value>> {
     let wa = webauthn(&state)?;
@@ -136,6 +136,13 @@ pub async fn register_finish(
             None,
         )
         .await;
+    state
+        .notify_account(
+            &ctx.account_id,
+            "A passkey was added to your hame account",
+            &format!("A passkey named \"{name}\" was added; it can sign in to your account."),
+        )
+        .await;
     Ok(Json(json!({ "id": stored.id, "name": name })))
 }
 
@@ -163,16 +170,20 @@ pub async fn login_start(
         let email = util::normalize_email(raw)
             .ok_or_else(|| ApiError::bad_request("invalid_email", "not a valid email address"))?;
         state.check_account_limit("passkey", &email)?;
-        let mut ids: Vec<String> = Vec::new();
-        if let Some(account) = state.repo.account_by_email(&email).await? {
-            ids = state
-                .repo
-                .passkeys(&account.id)
-                .await?
-                .into_iter()
-                .map(|p| p.credential_id)
-                .collect();
-        }
+        // The same queries whether or not the address has an account.
+        let account_id = state
+            .repo
+            .account_by_email(&email)
+            .await?
+            .map(|a| a.id)
+            .unwrap_or_else(|| "00000000-0000-0000-0000-000000000000".into());
+        let mut ids: Vec<String> = state
+            .repo
+            .passkeys(&account_id)
+            .await?
+            .into_iter()
+            .map(|p| p.credential_id)
+            .collect();
         if ids.is_empty() {
             // A stable fake credential: the same answer every time for this
             // address, like a real account with one passkey.
@@ -285,6 +296,7 @@ pub async fn login_finish(
         )
         .await?;
     let tokens = issue_tokens(&state, &stored.account_id, None, "passkey").await?;
+    super::account::notify_new_sign_in(&state, &stored.account_id, ip.0, "passkey").await;
     state
         .audit(
             "login",
@@ -297,7 +309,10 @@ pub async fn login_finish(
     Ok(Json(tokens))
 }
 
-pub async fn list(State(state): State<AppState>, Authed(ctx): Authed) -> ApiResult<Json<Value>> {
+pub async fn list(
+    State(state): State<AppState>,
+    FullAuthed(ctx): FullAuthed,
+) -> ApiResult<Json<Value>> {
     let items: Vec<Value> = state
         .repo
         .passkeys(&ctx.account_id)
@@ -318,7 +333,7 @@ pub async fn list(State(state): State<AppState>, Authed(ctx): Authed) -> ApiResu
 pub async fn remove(
     State(state): State<AppState>,
     ip: ClientIp,
-    Authed(ctx): Authed,
+    FullAuthed(ctx): FullAuthed,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     if !state.repo.delete_passkey(&ctx.account_id, &id).await? {

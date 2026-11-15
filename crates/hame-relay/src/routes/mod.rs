@@ -2,7 +2,7 @@
 
 mod account;
 mod device_code;
-mod devices;
+pub(crate) mod devices;
 mod oauth;
 mod passkey;
 
@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
         .route("/login", post(account::login))
         .route("/refresh", post(account::refresh))
         .route("/logout", post(account::logout))
+        .route("/reauth", post(account::reauth))
         .route("/password/forgot", post(account::forgot_password))
         .route("/password/reset", post(account::reset_password))
         .route("/oauth/{provider}/start", get(oauth::start))
@@ -56,6 +57,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/account/password", post(account::change_password))
         .route("/account/audit", get(account::audit_log))
+        .route("/account/sessions", get(account::sessions))
+        .route("/account/sessions/{id}", delete(account::revoke_session))
         .route("/account/passkeys", get(passkey::list))
         .route("/account/passkeys/{id}", delete(passkey::remove))
         .route("/devices", post(devices::register).get(devices::list))
@@ -162,7 +165,7 @@ async fn ip_rate_limit(State(state): State<AppState>, req: Request, next: Next) 
     let ip = req
         .extensions()
         .get::<ClientIp>()
-        .map(|c| c.0.to_string())
+        .map(|c| crate::ratelimit::ip_key(c.0))
         .unwrap_or_default();
     let limit = Limit::per_minute(state.config.rate_limits.auth_per_ip_per_min);
     if let Err(wait) = state.limiter.check(&format!("ip:{ip}"), limit) {

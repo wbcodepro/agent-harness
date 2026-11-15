@@ -29,6 +29,9 @@ pub struct Account {
     /// Argon2id PHC string; `None` for accounts that only sign in with a
     /// provider or a passkey.
     pub password_hash: Option<String>,
+    /// The password signed in successfully after verification, or was set
+    /// through a reset link or a password change: the owner chose it.
+    pub password_proven: bool,
     pub created_at: i64,
 }
 
@@ -58,12 +61,40 @@ pub struct Device {
     pub push_token: Option<String>,
 }
 
+pub const SCOPE_FULL: &str = "full";
+/// Device-code sessions: host registration and connection only.
+pub const SCOPE_HOST: &str = "host";
+
 /// Who a valid access token belongs to.
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     pub session_id: String,
     pub account_id: String,
     pub device_id: Option<String>,
+    /// [`SCOPE_FULL`] or [`SCOPE_HOST`].
+    pub scope: String,
+    /// When a credential was last proved in this session.
+    pub auth_at: i64,
+    /// When the presented access token expires (0 when not known).
+    pub token_expires_at: i64,
+}
+
+impl AuthContext {
+    pub fn is_full(&self) -> bool {
+        self.scope == SCOPE_FULL
+    }
+}
+
+/// A signed-in session, for the session list.
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub method: String,
+    pub scope: String,
+    pub device_id: Option<String>,
+    pub created_at: i64,
+    pub last_used_at: i64,
+    pub auth_at: i64,
 }
 
 /// The result of presenting a refresh token.
@@ -77,11 +108,23 @@ pub enum RefreshOutcome {
     Invalid,
 }
 
-#[derive(Debug)]
+/// Limits on what may be queued.
+#[derive(Clone, Copy, Debug)]
+pub struct QueueQuota {
+    pub max_envelopes_per_device: i64,
+    pub max_bytes_per_device: i64,
+    pub max_bytes_per_account: i64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum EnqueueOutcome {
     Queued(i64),
     /// The recipient's queue holds the maximum number of envelopes.
     Full,
+    /// The recipient's queued bytes would exceed its quota.
+    DeviceBytes,
+    /// The account's queued bytes would exceed its quota.
+    AccountBytes,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +136,7 @@ pub struct MailItem {
 
 #[derive(Clone, Debug)]
 pub struct Grants {
+    pub version: i64,
     pub document: Vec<u8>,
     pub signature: Vec<u8>,
     pub updated_at: i64,
@@ -144,7 +188,16 @@ pub trait Repository: Send + Sync + 'static {
     async fn account(&self, id: &str) -> RepoResult<Option<Account>>;
     async fn account_by_email(&self, email: &str) -> RepoResult<Option<Account>>;
     async fn set_email_verified(&self, id: &str, now: i64) -> RepoResult<()>;
-    async fn set_password(&self, id: &str, hash: Option<&str>, now: i64) -> RepoResult<()>;
+    /// Sets (or clears) the password; `proven` records whether the owner
+    /// demonstrably chose it.
+    async fn set_password(
+        &self,
+        id: &str,
+        hash: Option<&str>,
+        proven: bool,
+        now: i64,
+    ) -> RepoResult<()>;
+    async fn mark_password_proven(&self, id: &str) -> RepoResult<()>;
     async fn set_name(&self, id: &str, name: &str, now: i64) -> RepoResult<()>;
 
     // Email verification and reset tokens.
@@ -192,8 +245,13 @@ pub trait Repository: Send + Sync + 'static {
         account_id: &str,
         device_id: Option<&str>,
         method: &str,
+        scope: &str,
         now: i64,
     ) -> RepoResult<()>;
+    /// The account's sessions that are not revoked.
+    async fn sessions(&self, account_id: &str) -> RepoResult<Vec<SessionInfo>>;
+    /// Records a fresh proof of a credential: `auth_at = now`, scope full.
+    async fn reauth_session(&self, id: &str, now: i64) -> RepoResult<()>;
     async fn insert_access_token(
         &self,
         hash: &str,
@@ -231,7 +289,9 @@ pub trait Repository: Send + Sync + 'static {
     async fn bind_session_device(&self, session_id: &str, device_id: &str) -> RepoResult<()>;
 
     // Devices and hosts.
-    async fn create_device(&self, device: &Device) -> RepoResult<()>;
+    /// Creates the device unless the account already has `max_active`
+    /// devices that are not revoked; returns whether it did.
+    async fn create_device(&self, device: &Device, max_active: i64) -> RepoResult<bool>;
     async fn device(&self, id: &str) -> RepoResult<Option<Device>>;
     /// The account's devices that are not revoked.
     async fn devices(&self, account_id: &str) -> RepoResult<Vec<Device>>;
@@ -245,13 +305,16 @@ pub trait Repository: Send + Sync + 'static {
         token: Option<&str>,
     ) -> RepoResult<()>;
     async fn touch_device(&self, id: &str, now: i64) -> RepoResult<()>;
+    /// Stores the host's grants if `version` is higher than the stored one;
+    /// returns whether it did.
     async fn put_grants(
         &self,
         host_id: &str,
+        version: i64,
         document: &[u8],
         signature: &[u8],
         now: i64,
-    ) -> RepoResult<()>;
+    ) -> RepoResult<bool>;
     async fn grants(&self, host_id: &str) -> RepoResult<Option<Grants>>;
 
     // Mailbox.
@@ -261,13 +324,16 @@ pub trait Repository: Send + Sync + 'static {
         sender_id: &str,
         envelope: &[u8],
         now: i64,
-        max_queued: i64,
+        quota: QueueQuota,
     ) -> RepoResult<EnqueueOutcome>;
+    /// Envelopes after `after`, in order, up to `max_bytes` in total (at
+    /// least one envelope) and at most `max_rows`.
     async fn fetch_after(
         &self,
         recipient_id: &str,
         after: i64,
-        limit: i64,
+        max_bytes: i64,
+        max_rows: i64,
     ) -> RepoResult<Vec<MailItem>>;
     /// Drops queued envelopes with `seq <= upto` and records the ack.
     async fn ack(&self, recipient_id: &str, upto: i64) -> RepoResult<()>;
@@ -279,6 +345,7 @@ pub trait Repository: Send + Sync + 'static {
     -> RepoResult<Option<StoredPasskey>>;
     async fn update_passkey_data(&self, id: &str, data: &str, now: i64) -> RepoResult<()>;
     async fn delete_passkey(&self, account_id: &str, id: &str) -> RepoResult<bool>;
+    async fn delete_passkeys(&self, account_id: &str) -> RepoResult<u64>;
 
     // Ceremony state.
     async fn put_ephemeral(
@@ -323,6 +390,13 @@ pub trait Repository: Send + Sync + 'static {
     // Audit log.
     async fn audit(&self, entry: &AuditEntry) -> RepoResult<()>;
     async fn audit_for_account(&self, account_id: &str, limit: i64) -> RepoResult<Vec<AuditEntry>>;
+    /// IP addresses of the account's successful sign-ins since `since`.
+    async fn recent_login_ips(
+        &self,
+        account_id: &str,
+        since: i64,
+        limit: i64,
+    ) -> RepoResult<Vec<String>>;
 
     /// Deletes expired tokens, codes, ceremony state and envelopes older
     /// than `mailbox_cutoff`. Returns the number of rows removed.

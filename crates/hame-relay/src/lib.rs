@@ -8,6 +8,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod disk;
 pub mod error;
 pub mod mailer;
 pub mod oidc;
@@ -19,6 +20,14 @@ mod routes;
 pub mod state;
 pub mod util;
 pub mod ws;
+
+/// Message formats that devices and hosts sign, and key checks, for clients
+/// of the relay (the host connector and its tests).
+pub mod protocol {
+    pub use crate::routes::devices::{
+        grants_message, rebind_message, valid_ed25519_key, valid_x25519_key,
+    };
+}
 
 pub use config::Config;
 pub use state::{AppState, Services};
@@ -57,9 +66,13 @@ impl Relay {
         services: Services,
         repo: Arc<dyn Repository>,
     ) -> Result<Self, StartError> {
-        let hasher = password::PasswordHasher::new(config.argon2, config.argon2_concurrency)
-            .await
-            .map_err(|e| StartError(format!("password hasher: {e}")))?;
+        let hasher = password::PasswordHasher::new(
+            config.argon2,
+            config.argon2_concurrency,
+            config.argon2_queue_timeout,
+        )
+        .await
+        .map_err(|e| StartError(format!("password hasher: {e}")))?;
         let webauthn = match &config.webauthn {
             Some(w) => {
                 let first = w
@@ -95,7 +108,8 @@ impl Relay {
             mailer: services.mailer,
             push: services.push,
             hub: ws::Hub::default(),
-            limiter: ratelimit::RateLimiter::default(),
+            limiter: ratelimit::RateLimiter::new(config.rate_limits.max_buckets),
+            disk: disk::DiskGuard::new(&config.database_path, config.min_free_disk_bytes),
             hasher,
             webauthn,
             google,

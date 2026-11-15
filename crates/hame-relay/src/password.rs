@@ -5,6 +5,7 @@ use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher as _, PasswordVerifier as _};
 use argon2::{Algorithm, Argon2, Params, Version};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 
 /// Minimum and maximum password length in characters.
@@ -70,19 +71,44 @@ pub fn check_strength(password: &str, email: &str, name: &str) -> Result<(), Str
     Ok(())
 }
 
+/// Why hashing did not happen.
+#[derive(Debug, thiserror::Error)]
+pub enum HashError {
+    /// No hashing slot became free in time.
+    #[error("password hashing is busy")]
+    Busy,
+    #[error("password hashing failed: {0}")]
+    Failed(String),
+}
+
+impl From<HashError> for crate::error::ApiError {
+    fn from(e: HashError) -> Self {
+        match e {
+            HashError::Busy => crate::error::ApiError::busy(),
+            HashError::Failed(m) => crate::error::ApiError::internal(m),
+        }
+    }
+}
+
 /// Hashes and verifies passwords on blocking threads, at most
-/// `concurrency` at a time (each hash uses `m_kib` of memory).
+/// `concurrency` at a time (each hash uses `m_kib` of memory). A request
+/// that waits longer than `queue_timeout` for a slot gets [`HashError::Busy`].
 #[derive(Clone)]
 pub struct PasswordHasher {
     params: Argon2Params,
     permits: Arc<Semaphore>,
+    queue_timeout: Duration,
     /// A hash of a random password, verified against when an account does
     /// not exist so that the response time does not reveal it.
     dummy: Arc<String>,
 }
 
 impl PasswordHasher {
-    pub async fn new(params: Argon2Params, concurrency: usize) -> Result<Self, String> {
+    pub async fn new(
+        params: Argon2Params,
+        concurrency: usize,
+        queue_timeout: Duration,
+    ) -> Result<Self, String> {
         let random = crate::util::b64url(&crate::util::random_bytes::<24>());
         let dummy = tokio::task::spawn_blocking(move || hash_sync(params, &random))
             .await
@@ -90,26 +116,34 @@ impl PasswordHasher {
         Ok(Self {
             params,
             permits: Arc::new(Semaphore::new(concurrency.max(1))),
+            queue_timeout,
             dummy: Arc::new(dummy),
         })
     }
 
+    async fn permit(&self) -> Result<tokio::sync::SemaphorePermit<'_>, HashError> {
+        match tokio::time::timeout(self.queue_timeout, self.permits.acquire()).await {
+            Ok(Ok(p)) => Ok(p),
+            Ok(Err(e)) => Err(HashError::Failed(e.to_string())),
+            Err(_) => Err(HashError::Busy),
+        }
+    }
+
     /// The PHC string for `password`.
-    pub async fn hash(&self, password: &str) -> Result<String, String> {
-        let _permit = self.permits.acquire().await.map_err(|e| e.to_string())?;
+    pub async fn hash(&self, password: &str) -> Result<String, HashError> {
+        let _permit = self.permit().await?;
         let params = self.params;
         let password = password.to_string();
         tokio::task::spawn_blocking(move || hash_sync(params, &password))
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| HashError::Failed(e.to_string()))?
+            .map_err(HashError::Failed)
     }
 
     /// Whether `password` matches `phc`. With `None`, verifies against a
     /// dummy hash and returns false (constant work for unknown accounts).
-    pub async fn verify(&self, password: &str, phc: Option<&str>) -> bool {
-        let Ok(_permit) = self.permits.acquire().await else {
-            return false;
-        };
+    pub async fn verify(&self, password: &str, phc: Option<&str>) -> Result<bool, HashError> {
+        let _permit = self.permit().await?;
         let known = phc.is_some();
         let phc = phc
             .map(str::to_string)
@@ -118,7 +152,7 @@ impl PasswordHasher {
         let ok = tokio::task::spawn_blocking(move || verify_sync(&password, &phc))
             .await
             .unwrap_or(false);
-        ok && known
+        Ok(ok && known)
     }
 }
 
@@ -161,13 +195,30 @@ mod tests {
 
     #[tokio::test]
     async fn production_parameters_hash_and_verify() {
-        let h = PasswordHasher::new(Argon2Params::default(), 1)
+        let h = PasswordHasher::new(Argon2Params::default(), 1, Duration::from_secs(60))
             .await
             .unwrap();
         let phc = h.hash("correct horse battery").await.unwrap();
         assert!(phc.starts_with("$argon2id$v=19$m=65536,t=3,p=1$"), "{phc}");
-        assert!(h.verify("correct horse battery", Some(&phc)).await);
-        assert!(!h.verify("wrong horse battery", Some(&phc)).await);
-        assert!(!h.verify("correct horse battery", None).await);
+        assert!(h.verify("correct horse battery", Some(&phc)).await.unwrap());
+        assert!(!h.verify("wrong horse battery", Some(&phc)).await.unwrap());
+        assert!(!h.verify("correct horse battery", None).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_answers_busy() {
+        let params = Argon2Params {
+            m_kib: 1024,
+            t: 1,
+            p: 1,
+        };
+        let h = PasswordHasher::new(params, 1, Duration::from_millis(50))
+            .await
+            .unwrap();
+        let held = h.permits.clone().acquire_owned().await.unwrap();
+        assert!(matches!(h.hash("x").await, Err(HashError::Busy)));
+        assert!(matches!(h.verify("x", None).await, Err(HashError::Busy)));
+        drop(held);
+        assert!(h.hash("x").await.is_ok());
     }
 }

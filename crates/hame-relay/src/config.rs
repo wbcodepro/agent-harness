@@ -172,6 +172,11 @@ pub struct RateLimits {
     pub auth_per_account_per_min: u32,
     /// WebSocket frames per second per connection (burst is four times).
     pub ws_frames_per_sec: u32,
+    /// Failed password logins per minute across all accounts and addresses;
+    /// beyond it every password login is refused for a while.
+    pub global_failed_logins_per_min: u32,
+    /// Rate-limit buckets kept in memory at most.
+    pub max_buckets: usize,
 }
 
 impl Default for RateLimits {
@@ -180,6 +185,8 @@ impl Default for RateLimits {
             auth_per_ip_per_min: 30,
             auth_per_account_per_min: 10,
             ws_frames_per_sec: 50,
+            global_failed_logins_per_min: 300,
+            max_buckets: 100_000,
         }
     }
 }
@@ -231,6 +238,24 @@ pub struct Config {
     /// Device-code flow: minimum polling interval and code lifetime.
     pub device_code_interval: Duration,
     pub device_code_ttl: Duration,
+    /// Devices (not revoked) per account.
+    pub max_devices_per_account: i64,
+    /// Queued envelope bytes per device and per account.
+    pub mailbox_max_bytes_per_device: i64,
+    pub mailbox_max_bytes_per_account: i64,
+    /// New envelopes are refused while the database's file system has less
+    /// free space than this.
+    pub min_free_disk_bytes: u64,
+    /// Open WebSocket connections per account.
+    pub max_ws_per_account: usize,
+    /// How long a request waits for a free password-hashing slot before it
+    /// is answered 503.
+    pub argon2_queue_timeout: Duration,
+    /// Adding a passkey needs a credential proved this recently.
+    pub recent_auth_window: Duration,
+    /// Development mode (`RELAY_DEV=1`): allows the log mailer with an
+    /// https public URL.
+    pub dev: bool,
 }
 
 impl Config {
@@ -264,6 +289,14 @@ impl Config {
             ws_idle_timeout: Duration::from_secs(75),
             device_code_interval: Duration::from_secs(5),
             device_code_ttl: Duration::from_secs(600),
+            max_devices_per_account: 20,
+            mailbox_max_bytes_per_device: 64 * 1024 * 1024,
+            mailbox_max_bytes_per_account: 256 * 1024 * 1024,
+            min_free_disk_bytes: 0,
+            max_ws_per_account: 20,
+            argon2_queue_timeout: Duration::from_secs(5),
+            recent_auth_window: Duration::from_secs(300),
+            dev: false,
         }
     }
 
@@ -344,7 +377,16 @@ impl Config {
             cfg.max_body_bytes = n;
         }
 
-        cfg.mailer = match var("RELAY_MAILER").as_deref().unwrap_or("log") {
+        cfg.dev = flag("RELAY_DEV")?.unwrap_or(false);
+        let mailer = var("RELAY_MAILER")
+            .ok_or_else(|| bad("RELAY_MAILER is required: smtp, log (development) or disabled"))?;
+        if mailer == "log" && public_url.scheme() == "https" && !cfg.dev {
+            return Err(bad(
+                "RELAY_MAILER=log writes reset links to the log; refused with an https \
+                 RELAY_PUBLIC_URL unless RELAY_DEV=1",
+            ));
+        }
+        cfg.mailer = match mailer.as_str() {
             "smtp" => MailerConfig::Smtp(SmtpConfig {
                 host: var("RELAY_SMTP_HOST").ok_or_else(|| bad("RELAY_SMTP_HOST is required"))?,
                 port: num::<u16>("RELAY_SMTP_PORT", var("RELAY_SMTP_PORT"))?.unwrap_or(587),
@@ -476,6 +518,39 @@ impl Config {
             key.copy_from_slice(&bytes);
             cfg.enumeration_key = Some(key);
         }
+        if let Some(n) = num::<i64>(
+            "RELAY_MAX_DEVICES_PER_ACCOUNT",
+            var("RELAY_MAX_DEVICES_PER_ACCOUNT"),
+        )? {
+            cfg.max_devices_per_account = n.max(1);
+        }
+        const MIB: i64 = 1024 * 1024;
+        if let Some(n) = num::<i64>(
+            "RELAY_QUEUE_MAX_MB_PER_DEVICE",
+            var("RELAY_QUEUE_MAX_MB_PER_DEVICE"),
+        )? {
+            cfg.mailbox_max_bytes_per_device = n.max(1) * MIB;
+        }
+        if let Some(n) = num::<i64>(
+            "RELAY_QUEUE_MAX_MB_PER_ACCOUNT",
+            var("RELAY_QUEUE_MAX_MB_PER_ACCOUNT"),
+        )? {
+            cfg.mailbox_max_bytes_per_account = n.max(1) * MIB;
+        }
+        cfg.min_free_disk_bytes =
+            num::<u64>("RELAY_MIN_FREE_DISK_MB", var("RELAY_MIN_FREE_DISK_MB"))?.unwrap_or(1024)
+                * 1024
+                * 1024;
+        if let Some(n) = num::<usize>("RELAY_MAX_WS_PER_ACCOUNT", var("RELAY_MAX_WS_PER_ACCOUNT"))?
+        {
+            cfg.max_ws_per_account = n.max(1);
+        }
+        if let Some(n) = num::<u32>(
+            "RELAY_RATE_GLOBAL_FAILED_LOGINS_PER_MIN",
+            var("RELAY_RATE_GLOBAL_FAILED_LOGINS_PER_MIN"),
+        )? {
+            cfg.rate_limits.global_failed_logins_per_min = n.max(1);
+        }
         Ok(cfg)
     }
 }
@@ -496,7 +571,13 @@ mod tests {
     #[test]
     fn public_url_is_required() {
         assert!(cfg(&[]).is_err());
-        let c = cfg(&[("RELAY_PUBLIC_URL", "https://relay.example.com")]).unwrap();
+        let c = cfg(&[
+            ("RELAY_PUBLIC_URL", "https://relay.example.com"),
+            ("RELAY_MAILER", "disabled"),
+        ])
+        .unwrap();
+        assert_eq!(c.min_free_disk_bytes, 1024 * 1024 * 1024);
+        assert_eq!(c.max_devices_per_account, 20);
         assert!(c.hsts);
         assert!(c.google.is_none());
         assert_eq!(c.argon2.m_kib, 65536);
@@ -508,6 +589,7 @@ mod tests {
     fn providers_and_lists_are_parsed() {
         let c = cfg(&[
             ("RELAY_PUBLIC_URL", "http://localhost:8080"),
+            ("RELAY_MAILER", "log"),
             (
                 "RELAY_CORS_ORIGINS",
                 "https://app.example.com, https://x.example.com",
@@ -525,9 +607,38 @@ mod tests {
         assert!(
             cfg(&[
                 ("RELAY_PUBLIC_URL", "http://localhost:8080"),
+                ("RELAY_MAILER", "log"),
                 ("RELAY_GOOGLE_CLIENT_ID", "gid"),
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_log_mailer_needs_dev_mode_on_https() {
+        // No default mailer.
+        assert!(cfg(&[("RELAY_PUBLIC_URL", "http://localhost:8080")]).is_err());
+        // Log mailer: fine on http, refused on https without RELAY_DEV.
+        assert!(
+            cfg(&[
+                ("RELAY_PUBLIC_URL", "http://localhost:8080"),
+                ("RELAY_MAILER", "log")
+            ])
+            .is_ok()
+        );
+        let err = cfg(&[
+            ("RELAY_PUBLIC_URL", "https://relay.example.com"),
+            ("RELAY_MAILER", "log"),
+        ])
+        .unwrap_err();
+        assert!(err.0.contains("RELAY_DEV"), "{err}");
+        assert!(
+            cfg(&[
+                ("RELAY_PUBLIC_URL", "https://relay.example.com"),
+                ("RELAY_MAILER", "log"),
+                ("RELAY_DEV", "1"),
+            ])
+            .is_ok()
         );
     }
 }

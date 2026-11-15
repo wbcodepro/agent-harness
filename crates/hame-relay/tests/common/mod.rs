@@ -49,6 +49,8 @@ pub async fn spawn(customize: impl FnOnce(&mut Config)) -> TestRelay {
         auth_per_ip_per_min: 10_000,
         auth_per_account_per_min: 10_000,
         ws_frames_per_sec: 10_000,
+        global_failed_logins_per_min: 10_000,
+        max_buckets: 100_000,
     };
     config.device_code_interval = Duration::from_secs(1);
     customize(&mut config);

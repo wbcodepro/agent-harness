@@ -58,12 +58,13 @@ Every variable that holds a secret can instead name a file with the
 | `RELAY_BIND` | `127.0.0.1:8080` (image: `0.0.0.0:8080`) | Listen address. |
 | `RELAY_DATABASE_PATH` | `relay.db` (image: `/data/relay.db`) | SQLite file. |
 | `RELAY_CORS_ORIGINS` | empty | Comma-separated origins allowed to call the API from a browser. Empty: none. |
-| `RELAY_TRUST_PROXY` | `false` | Use the last `X-Forwarded-For` entry as the client IP. Set only behind a proxy that overwrites it. |
+| `RELAY_TRUST_PROXY` | `false` | Use the last `X-Forwarded-For` entry as the client IP. Set only behind a proxy that overwrites it, and read "Trusting the proxy" below. |
 | `RELAY_HSTS` | `true` for https | Send `Strict-Transport-Security`. |
 | `RELAY_MAX_BODY_BYTES` | `65536` | Largest HTTP request body. |
 | `RELAY_LOG` | `info` | Log filter (`tracing` syntax, e.g. `info,hame_relay=debug`). |
 | `RELAY_LOG_FORMAT` | `json` | `json` or `text`. |
-| `RELAY_MAILER` | `log` | `smtp`, `log` (development: mails go to the log, including their links) or `disabled`. |
+| `RELAY_MAILER` | (required) | `smtp`, `log` (development: mails go to the log, including their reset links) or `disabled`. `log` with an https `RELAY_PUBLIC_URL` is refused unless `RELAY_DEV=1`. |
+| `RELAY_DEV` | `false` | Development mode: allows the `log` mailer with an https public URL. Never on a public relay. |
 | `RELAY_SMTP_HOST`, `RELAY_SMTP_PORT` | –, `587` | SMTP server. |
 | `RELAY_SMTP_TLS` | `starttls` | `starttls`, `tls` (implicit, usually port 465) or `none` (local relay only). |
 | `RELAY_SMTP_USERNAME`, `RELAY_SMTP_PASSWORD(_FILE)` | – | SMTP credentials. |
@@ -83,13 +84,45 @@ Every variable that holds a secret can instead name a file with the
 | `RELAY_RATE_AUTH_IP_PER_MIN` | `30` | Requests per minute per IP on `/v1/auth/*`. |
 | `RELAY_RATE_AUTH_ACCOUNT_PER_MIN` | `10` | Attempts per minute per account or email (login, sign-up, reset, passkey, device-code approval). |
 | `RELAY_RATE_WS_FRAMES_PER_SEC` | `50` | WebSocket frames per second per connection (burst ×4). |
-| `RELAY_ARGON2_CONCURRENCY` | `4` | Password hashes at once (64 MiB each). |
+| `RELAY_ARGON2_CONCURRENCY` | `4` | Password hashes at once (64 MiB each); a request that waits more than 5 s for a slot gets `503 busy`. |
+| `RELAY_RATE_GLOBAL_FAILED_LOGINS_PER_MIN` | `300` | Failed password logins per minute across all addresses; beyond it password logins are refused for a while. |
+| `RELAY_MAX_DEVICES_PER_ACCOUNT` | `20` | Devices (not revoked) per account. |
+| `RELAY_QUEUE_MAX_MB_PER_DEVICE` | `64` | Queued envelope bytes per device. |
+| `RELAY_QUEUE_MAX_MB_PER_ACCOUNT` | `256` | Queued envelope bytes per account. |
+| `RELAY_MIN_FREE_DISK_MB` | `1024` | New envelopes are refused while the database's file system has less free space (Unix only). |
+| `RELAY_MAX_WS_PER_ACCOUNT` | `20` | Open WebSocket connections per account. |
 | `RELAY_ENUMERATION_KEY(_FILE)` | random per start | 32 bytes base64url; keeps fake passkey ids for unknown emails stable across restarts. |
 
 Fixed by design (code constants or defaults): access token 15 min,
 refresh token 30 days, queue retention 24 h, 10 000 queued envelopes per
-device, envelope limit 1 MiB, device codes 10 min with a 5 s interval,
+device, envelope limit 1 MiB, delivery batches of 4 MiB, recent
+authentication window for adding passkeys 5 min, 100 000 rate-limit
+buckets, device codes 10 min with a 5 s interval,
 ping every 25 s, idle close after 75 s.
+
+### Trusting the proxy
+
+With `RELAY_TRUST_PROXY=true` the relay believes the last
+`X-Forwarded-For` entry. That is right only when **every** request
+passes through a proxy that sets that entry itself:
+
+- **Never publish the relay port** (`ports:` on the relay service, or a
+  host firewall that lets 8080 through). A client that reaches the relay
+  directly can send any `X-Forwarded-For` and pick its own rate-limit
+  key. The example compose file only `expose`s the port to Caddy.
+- The proxy must **overwrite** the header (the example Caddyfile sets it
+  to `{remote_host}`), not append to a client-supplied one; with an
+  appending proxy the last entry is still the proxy's own view, which is
+  fine, but check it.
+- **Behind a CDN** (Cloudflare and the like) the address Caddy sees is
+  the CDN's edge, so every client shares a few rate-limit buckets.
+  Either configure Caddy's `trusted_proxies` with the CDN's ranges and
+  take the client address from the CDN's header (`CF-Connecting-IP`),
+  or leave `RELAY_TRUST_PROXY` off and accept per-edge limits.
+- Without a proxy (or with one that does not set the header) leave it
+  `false`: the socket peer address is then used.
+
+IPv6 clients are limited per /64.
 
 ## 4. Identity providers
 
@@ -136,6 +169,9 @@ FCM a service account with the Firebase Messaging role.
   devices added and revoked, refresh-token reuse, password changes,
   grants changed, passkeys added and removed). Users see their own
   through `GET /v1/account/audit`.
+- **Disk**: queues are bounded per device and per account, and the relay
+  refuses new envelopes below `RELAY_MIN_FREE_DISK_MB`; watch free space
+  anyway (the WAL file and backups grow too).
 - **Housekeeping**: every 5 minutes the relay deletes expired tokens,
   codes, ceremony state, envelopes older than 24 h and accounts never
   verified within 7 days.
@@ -145,7 +181,7 @@ FCM a service account with the Firebase Messaging role.
 ## 6. Local development
 
 ```sh
-RELAY_PUBLIC_URL=http://localhost:8080 RELAY_LOG_FORMAT=text \
+RELAY_PUBLIC_URL=http://localhost:8080 RELAY_MAILER=log RELAY_LOG_FORMAT=text \
   cargo run -p hame-relay
 ```
 

@@ -37,6 +37,7 @@ pub struct Inner {
     pub google: Option<OidcProvider>,
     pub apple: Option<OidcProvider>,
     pub enumeration_key: [u8; 32],
+    pub disk: crate::disk::DiskGuard,
 }
 
 impl Deref for AppState {
@@ -95,12 +96,49 @@ impl AppState {
             burst: 3,
             per_hour: 6,
         };
+        self.send_limited(email, "mail", limit);
+    }
+
+    /// Sends a security notification (new sign-in, passkey, device,
+    /// provider linked). These have their own per-address budget, so they
+    /// never use up the one for verification and reset mails.
+    pub fn notify(&self, to: &str, subject: &str, text: String) {
+        let limit = Limit {
+            burst: 5,
+            per_hour: 20,
+        };
+        let email = Email {
+            to: to.to_string(),
+            subject: subject.to_string(),
+            text,
+        };
+        self.send_limited(email, "notify", limit);
+    }
+
+    /// Sends a security notification to the account's address.
+    pub async fn notify_account(&self, account_id: &str, subject: &str, body: &str) {
+        match self.repo.account(account_id).await {
+            Ok(Some(a)) => self.notify(
+                &a.email,
+                subject,
+                format!(
+                    "Hello {},\n\n{body}\n\nIf this was not you, sign in, revoke unknown devices \
+                     and sessions, and change your password.\n",
+                    a.name
+                ),
+            ),
+            Ok(None) => {}
+            Err(e) => tracing::error!(error = %e, "notification: account lookup failed"),
+        }
+    }
+
+    fn send_limited(&self, email: Email, scope: &str, limit: Limit) {
         if self
             .limiter
-            .check(&format!("mail:{}", email.to), limit)
+            .check(&format!("{scope}:{}", email.to), limit)
             .is_err()
         {
-            tracing::warn!("email to one address rate limited; not sent");
+            tracing::warn!(scope, "email to one address rate limited; not sent");
             return;
         }
         let mailer = self.mailer.clone();

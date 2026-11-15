@@ -121,7 +121,12 @@ async fn deliver_ack_resume_and_presence() {
     ws_quiet(&mut host, 200).await;
 
     // The queue is empty in storage too.
-    let left = p.r.state.repo.fetch_after(&p.h, 0, 10).await.unwrap();
+    let left =
+        p.r.state
+            .repo
+            .fetch_after(&p.h, 0, 1 << 30, 10)
+            .await
+            .unwrap();
     assert!(left.is_empty());
 
     // The host can answer the app.
@@ -168,7 +173,7 @@ async fn routing_is_refused_across_accounts() {
     assert!(
         p.r.state
             .repo
-            .fetch_after(&p.h, 0, 10)
+            .fetch_after(&p.h, 0, 1 << 30, 10)
             .await
             .unwrap()
             .is_empty()
