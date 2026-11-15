@@ -94,11 +94,15 @@ impl FolderNames {
 /// "Where:" pop-up does, or only "folder" for some folders) points at one
 /// of `folders` or a direct subfolder of one. Only these names are
 /// visible, so a different folder with the same names would match too;
-/// with no parent shown, the folder's own name must be a granted one.
+/// with no parent shown (the panel does that after Go To Folder), the name
+/// must be that of a granted folder or of a direct subfolder of one.
 pub fn save_place_allowed(place: &str, folders: &[FolderNames]) -> bool {
     let Some((name, parent)) = place.rsplit_once(" \u{2014} ") else {
         let name = place.trim();
-        return !name.is_empty() && folders.iter().any(|f| f.name == name);
+        return !name.is_empty()
+            && folders
+                .iter()
+                .any(|f| f.name == name || f.children.iter().any(|c| c == name));
     };
     let (name, parent) = (name.trim(), parent.trim());
     folders.iter().any(|f| {
@@ -236,6 +240,9 @@ pub struct FocusContext {
     pub app: String,
     /// The save panel's destination as its "Where:" pop-up shows it.
     pub save_where: Option<String>,
+    /// Focus is in a panel's Go To Folder sheet: Return there moves the
+    /// panel to a folder and saves nothing.
+    pub go_to_folder: bool,
 }
 
 /// Document editors, where Return in a text area of an ordinary window
@@ -282,6 +289,7 @@ impl FocusContext {
             save_panel: v["save_panel"].as_bool().unwrap_or(true),
             app: String::new(),
             save_where: v["save_where"].as_str().map(String::from),
+            go_to_folder: v["go_to_folder"].as_bool().unwrap_or(false),
         })
     }
 
@@ -869,7 +877,7 @@ mod tests {
         assert!(!ok("missing \u{2014} work"));
         // Some folders show no parent: the name alone must be granted.
         assert!(ok("work"));
-        assert!(!ok("out"));
+        assert!(ok("out"));
         assert!(!ok("Documents"));
         assert!(!save_place_allowed("work \u{2014} w", &[]));
     }

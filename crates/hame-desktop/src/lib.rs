@@ -1359,7 +1359,9 @@ impl DesktopTool {
         self.authorize_need(&target, &need)?;
         if caps::type_needs_focus(text)
             && need.caps.contains(&Capability::FileWrite)
-            && focus.as_ref().is_none_or(|f| f.save_panel)
+            && focus
+                .as_ref()
+                .is_none_or(|f| f.save_panel && !f.go_to_folder)
         {
             let place = focus.as_ref().and_then(|f| f.save_where.as_deref());
             self.check_save_folder(&target, place, ctx).await?;
@@ -1481,7 +1483,9 @@ impl DesktopTool {
         self.authorize_need(&target, &need)?;
         if caps::key_needs_focus(&combo)
             && need.caps.contains(&Capability::FileWrite)
-            && focus.as_ref().is_none_or(|f| f.save_panel)
+            && focus
+                .as_ref()
+                .is_none_or(|f| f.save_panel && !f.go_to_folder)
         {
             let place = focus.as_ref().and_then(|f| f.save_where.as_deref());
             self.check_save_folder(&target, place, ctx).await?;
@@ -2916,6 +2920,25 @@ mod tests {
             out.text
         );
         assert!(unknown.requests("key").is_empty());
+        // Return in a Go To Folder sheet only moves the panel.
+        let mut go_to = in_panel("TextEdit \u{2014} iCloud");
+        go_to["go_to_folder"] = json!(true);
+        let moving = fixture(
+            &caps,
+            &[],
+            &[
+                (
+                    "window_state",
+                    json!({"window": window(), "frontmost_pid": 42}),
+                ),
+                ("focus_context", go_to),
+                ("key", json!({"pressed": "return", "window": window()})),
+            ],
+        );
+        let out = moving
+            .call(json!({"action": "key", "app": APP, "window": 7, "keys": "return"}))
+            .await;
+        assert!(!out.is_error, "{}", out.text);
     }
 
     #[tokio::test]

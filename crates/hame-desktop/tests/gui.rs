@@ -612,8 +612,29 @@ async fn return_in_the_save_panel_needs_commit_and_file_write() {
                       "value": dir.path().to_str().unwrap()}))
             .await;
         tokio::time::sleep(Duration::from_millis(300)).await;
-        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}))
+        // Return in Go To Folder only moves the panel: allowed under
+        // file_write for this folder although the panel still shows another.
+        let go_home = tempfile::tempdir().unwrap();
+        let go = DesktopTool::new(config(
+            go_home.path(),
+            textedit_grants_in(
+                vec![
+                    Capability::Observe,
+                    Capability::Interact,
+                    Capability::Commit,
+                    Capability::FileWrite,
+                    Capability::GlobalInput,
+                ],
+                &[dir.path()],
+            ),
+        ));
+        let went = go
+            .call(
+                &json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}),
+                &gui.ctx,
+            )
             .await;
+        assert!(!went.is_error, "{}", went.text);
         let folder = dir.path().file_name().unwrap().to_str().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {

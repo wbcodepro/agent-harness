@@ -61,7 +61,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 ## Known limitations
 
 - Desktop control is macOS only and was tested with TextEdit, Numbers 14.4 and Pages 14.4 on macOS 26.6.2 (Excel exposes no cell grid; Word and Keynote not tried); no scroll, drag or hover; US key layout for `key`.
-- A desktop `file_write` grant is limited to its `folders` by the names a save panel shows (folder and parent), so a different folder with the same two names would pass; saving an already saved document in place writes where it is.
+- A desktop `file_write` grant is limited to its `folders` by the names a save panel shows (folder and parent, or the folder alone after Go To Folder), so a different folder with the same two names would pass; saving an already saved document in place writes where it is.
 - The browser tool was verified on macOS arm64 with Chrome 157 only; only top-level navigation is limited to granted origins; commit detection is heuristic.
 - Browser and desktop tools act outside the shell sandbox with the user's permissions; grant narrowly.
 - Prices exist only for Anthropic models; a `max_cost_usd` budget stops a task on other providers because its spending cannot be measured.

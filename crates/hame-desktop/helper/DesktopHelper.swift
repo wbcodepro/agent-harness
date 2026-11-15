@@ -806,6 +806,25 @@ func surroundings(_ e: AXUIElement?, windows: [AXUIElement]) -> (inDialog: Bool,
     return (inDialog, savePanel, panel.flatMap(saveDestination))
 }
 
+/// Whether `e` is in a save or open panel's Go To Folder sheet, where
+/// Return only moves the panel to the typed folder.
+func inGoToFolder(_ e: AXUIElement) -> Bool {
+    if strAttr(e, kAXIdentifierAttribute) == "PathTextField" { return true }
+    var cursor: AXUIElement? = e
+    var hops = 0
+    while let c = cursor, hops < 40 {
+        let role = roleOf(c).0 ?? ""
+        if role == "AXSheet" || isDialogLike(c) {
+            return findFirst(c, limit: 200) { strAttr($0, kAXIdentifierAttribute) == "PathTextField" } != nil
+                && findFirst(c, limit: 200) { strAttr($0, kAXIdentifierAttribute) == "saveAsNameTextField" } == nil
+        }
+        if role == "AXWindow" { return false }
+        cursor = elementAttr(c, kAXParentAttribute)
+        hops += 1
+    }
+    return false
+}
+
 /// Where keyboard input would go: the focused element's role, name and a
 /// short value, and its surroundings. `known` is false when nothing has
 /// focus (or it cannot be read); the Rust side then requires the stricter
@@ -817,6 +836,7 @@ func focusContext(_ e: AXUIElement?, windows: [AXUIElement]) -> [String: Any] {
     guard let e = e, let role = roleOf(e).0, !role.isEmpty else { return out }
     out["known"] = true
     out["role"] = role
+    out["go_to_folder"] = inGoToFolder(e)
     out["subrole"] = strAttr(e, kAXSubroleAttribute) ?? ""
     out["name"] = nameOf(e)
     if role != "AXSecureTextField" { out["value"] = valueString(e, limit: 200) ?? "" }
