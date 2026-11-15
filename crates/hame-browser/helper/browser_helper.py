@@ -20,13 +20,18 @@ anywhere else is blocked before a request leaves the machine.
 
 import asyncio
 import base64
+import errno
 import hashlib
 import json
 import os
+import re
+import secrets
 import shutil
+import stat
 import sys
 import tempfile
 import time
+import unicodedata
 from urllib.parse import urljoin, urlsplit
 
 PROTOCOL = 1
@@ -92,6 +97,324 @@ def origin_of(url):
         host = f"[{host}]"
     default = 80 if parts.scheme == "http" else 443
     return f"{parts.scheme}://{host}" + (f":{port}" if port and port != default else "")
+
+
+# ---------------------------------------------------------------------------
+# Redirect targets, resolved the way Chrome resolves them.
+
+SPECIAL_SCHEMES = ("http", "https", "ws", "wss", "ftp", "file")
+_SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*):")
+_PLAIN_HOST = re.compile(r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)(:[0-9]*)?")
+_C0_AND_SPACE = "".join(chr(i) for i in range(0x21))
+
+
+def resolve_redirect(base, location):
+    """The absolute URL a `Location` header sends a request for `base` to,
+    following the WHATWG URL rules Chrome uses rather than Python's RFC 3986
+    `urljoin`. The two differ where it matters: for http(s), WHATWG reads a
+    backslash as a slash and skips any run of slashes before a host, so
+    `/\\evil.example/x`, `\\\\evil.example/x`, `http:\\\\evil.example/x` and
+    `http:///evil.example/x` all lead to evil.example, while `urljoin` keeps
+    them on the base's host. Returns None when unsure (a host with anything
+    beyond letters, digits, dots, hyphens and a port, or a base that is not
+    a special URL); the caller then refuses the redirect."""
+    s = re.sub(r"[\t\n\r]", "", (location or "").strip(_C0_AND_SPACE))
+    base_scheme = urlsplit(base).scheme.lower()
+    if base_scheme not in SPECIAL_SCHEMES:
+        return None
+    scheme, rest, authority = base_scheme, s, False
+    m = _SCHEME.match(s)
+    if m:
+        scheme, rest = m.group(1).lower(), s[m.end():]
+        if scheme not in SPECIAL_SCHEMES:
+            # Not a web origin; no grant covers it.
+            return s
+        if scheme != base_scheme or rest.startswith("//"):
+            authority = True
+    if not authority and rest[:1] in ("/", "\\") and rest[1:2] in ("/", "\\"):
+        authority = True
+    if authority:
+        rest = rest.lstrip("/\\")
+        end = next((i for i, c in enumerate(rest) if c in "/\\?#"), len(rest))
+        host = rest[:end].rpartition("@")[2]
+        if not host or not _PLAIN_HOST.fullmatch(host):
+            return None
+        tail = rest[end:]
+        cut = next((i for i, c in enumerate(tail) if c in "?#"), len(tail))
+        return f"{scheme}://{host}" + tail[:cut].replace("\\", "/") + tail[cut:]
+    cut = next((i for i, c in enumerate(rest) if c in "?#"), len(rest))
+    return urljoin(base, rest[:cut].replace("\\", "/") + rest[cut:])
+
+
+# ---------------------------------------------------------------------------
+# Files in the workspace. The Rust side checks a path before an action is
+# sent; these functions are what makes the write or read itself safe while
+# the sandboxed agent may be changing the workspace at the same moment.
+# Each directory is opened one component at a time without following a
+# symbolic link, a download is written to a new temporary file and moved
+# into place (which replaces a directory entry and never writes through a
+# link or into another hard link of the same file), and an upload is copied
+# out through a descriptor opened without following a link.
+
+O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+O_BINARY = getattr(os, "O_BINARY", 0)
+NOFOLLOW_DIRS = (
+    hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
+    and {os.open, os.mkdir, os.stat, os.rename, os.unlink, os.link} <= os.supports_dir_fd
+)
+_WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                     *(f"LPT{i}" for i in range(1, 10))}
+MAX_NAME_BYTES = 120
+
+
+def safe_filename(name, fallback="download"):
+    """A file name a page suggested, made safe to create in a directory: its
+    last path component only, without control or format characters, without
+    the characters Windows forbids, without leading dots (no hidden files
+    such as `.envrc`, no `..`) or trailing dots and spaces, at most
+    MAX_NAME_BYTES bytes of UTF-8 with its extension kept."""
+    name = re.split(r"[/\\]", name or "")[-1]
+    name = "".join(c for c in name
+                   if unicodedata.category(c) not in ("Cc", "Cf") and c not in '<>:"|?*')
+    name = name.strip(" .")
+    if name.split(".")[0].upper() in _WINDOWS_RESERVED:
+        name = "_" + name
+    if len(name.encode("utf-8")) > MAX_NAME_BYTES:
+        stem, dot, ext = name.rpartition(".")
+        if not dot or len(ext) > 16:
+            stem, ext = name, ""
+        ext = "." + ext if ext else ""
+        budget = MAX_NAME_BYTES - len(ext.encode("utf-8"))
+        name = stem.encode("utf-8")[:budget].decode("utf-8", "ignore").rstrip(" .") + ext
+    return name or fallback
+
+
+def _check_part(part):
+    if part in ("", ".", "..") or "/" in part or "\\" in part or "\0" in part:
+        raise OpError("invalid_input", f"{part!r} is not a usable path component")
+
+
+def _kind(st):
+    """`link` for a symbolic link or a Windows junction, else `dir`, `file`
+    or `other`."""
+    if stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) in (0xA000000C, 0xA0000003):
+        return "link"
+    if stat.S_ISDIR(st.st_mode):
+        return "dir"
+    if stat.S_ISREG(st.st_mode):
+        return "file"
+    return "other"
+
+
+def _through_link(shown):
+    return OpError("unauthorized", f"{shown} is a symbolic link or not a directory; files are never "
+                                   "written or read through a link, which could lead outside the workspace")
+
+
+def _open_dir(root, parts, create):
+    """A descriptor for `root/parts...`, opened one component at a time
+    without following a symbolic link; missing components are created when
+    `create`. POSIX only (NOFOLLOW_DIRS)."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | O_CLOEXEC)
+    try:
+        for i, part in enumerate(parts):
+            _check_part(part)
+            shown = "/".join(parts[:i + 1])
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | O_CLOEXEC
+            try:
+                try:
+                    nfd = os.open(part, flags, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise OpError("not_found", f"{shown} does not exist")
+                    try:
+                        os.mkdir(part, 0o777, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                    nfd = os.open(part, flags, dir_fd=fd)
+            except OSError as e:
+                if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EEXIST):
+                    raise _through_link(shown)
+                raise OpError("invalid_input", f"cannot open {shown}: {e.strerror}")
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _portable_dir(root, parts, create):
+    """`root/parts...` as a path, refusing any component that is a link or
+    junction; for platforms without NOFOLLOW_DIRS (Windows)."""
+    path = root
+    for i, part in enumerate(parts):
+        _check_part(part)
+        shown = "/".join(parts[:i + 1])
+        path = os.path.join(path, part)
+        try:
+            kind = _kind(os.lstat(path))
+        except FileNotFoundError:
+            if not create:
+                raise OpError("not_found", f"{shown} does not exist")
+            try:
+                os.mkdir(path)
+            except FileExistsError:
+                pass
+            kind = _kind(os.lstat(path))
+        if kind != "dir":
+            raise _through_link(shown)
+    return path
+
+
+def _check_target(lstat, shown, overwrite):
+    """Refuses a save over anything but a missing name or, with `overwrite`,
+    a regular file."""
+    try:
+        kind = _kind(lstat())
+    except FileNotFoundError:
+        return
+    if kind == "link":
+        raise OpError("unauthorized", f"{shown} is a symbolic link; a download never writes through a link, "
+                                      "which could lead outside the workspace")
+    if kind != "file":
+        raise OpError("invalid_input", f"{shown} exists and is not a regular file")
+    if not overwrite:
+        raise OpError("exists", f"{shown} already exists and was not replaced; pass overwrite:true to replace "
+                                "it, or choose another path")
+
+
+def _copy_into(src, fd):
+    """Copies the file `src` into the descriptor `fd` (closing it); returns
+    the size and SHA-256 of what was written."""
+    digest, size = hashlib.sha256(), 0
+    with os.fdopen(fd, "wb") as out, open(src, "rb") as data:
+        while True:
+            chunk = data.read(1 << 20)
+            if not chunk:
+                break
+            digest.update(chunk)
+            out.write(chunk)
+            size += len(chunk)
+        out.flush()
+        os.fsync(out.fileno())
+    return size, digest.hexdigest()
+
+
+def save_file(src, root, dir_parts, name, overwrite):
+    """Saves a copy of `src` as `root/dir_parts.../name`, creating missing
+    directories. Never follows a symbolic link anywhere below `root`, never
+    writes into an existing file (a replacement is a new file renamed over
+    the old entry), and replaces an existing regular file only when
+    `overwrite`. Returns (path, size, sha256)."""
+    _check_part(name)
+    shown = "/".join(list(dir_parts) + [name])
+    tmp = f".{name[:40]}.hame-{secrets.token_hex(6)}.part"
+    if not NOFOLLOW_DIRS:
+        directory = _portable_dir(root, dir_parts, create=True)
+        target, tmp_path = os.path.join(directory, name), os.path.join(directory, tmp)
+        _check_target(lambda: os.lstat(target), shown, overwrite)
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_BINARY, 0o666)
+        try:
+            size, sha = _copy_into(src, fd)
+            _check_target(lambda: os.lstat(target), shown, overwrite)
+            if overwrite:
+                os.replace(tmp_path, target)
+            else:
+                try:
+                    # Refuses an existing target on Windows.
+                    os.rename(tmp_path, target)
+                except FileExistsError:
+                    _check_target(lambda: os.lstat(target), shown, False)
+                    raise
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+        return target, size, sha
+    dfd = _open_dir(root, dir_parts, create=True)
+    try:
+        def lstat():
+            return os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        _check_target(lstat, shown, overwrite)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | O_CLOEXEC, 0o666, dir_fd=dfd)
+        try:
+            size, sha = _copy_into(src, fd)
+            if overwrite:
+                # Right before the rename; and rename replaces a link that
+                # appeared since rather than writing through it.
+                _check_target(lstat, shown, True)
+                os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            else:
+                try:
+                    # link() refuses any existing entry, atomically.
+                    os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+                except FileExistsError:
+                    _check_target(lstat, shown, False)
+                    raise
+                except OSError:
+                    # A file system without hard links.
+                    _check_target(lstat, shown, False)
+                    os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        finally:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(dfd)
+    return os.path.join(root, *dir_parts, name), size, sha
+
+
+def copy_upload(root, parts, private_dir):
+    """Copies the workspace file `root/parts...` into a new directory under
+    `private_dir` and returns the copy's path, so the browser reads a file
+    nothing in the workspace can swap. Refuses a link anywhere below `root`,
+    anything but a regular file, and a file with other hard links (one of
+    them may be outside the workspace)."""
+    if not parts:
+        raise OpError("invalid_input", "no file to upload")
+    name = parts[-1]
+    _check_part(name)
+    shown = "/".join(parts)
+    if NOFOLLOW_DIRS:
+        dfd = _open_dir(root, parts[:-1], create=False)
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | O_CLOEXEC, dir_fd=dfd)
+        except FileNotFoundError:
+            raise OpError("not_found", f"{shown} does not exist")
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise OpError("unauthorized", f"{shown} is a symbolic link; only files inside the workspace "
+                                              "can be uploaded")
+            raise OpError("invalid_input", f"cannot open {shown}: {e.strerror}")
+        finally:
+            os.close(dfd)
+    else:
+        path = os.path.join(_portable_dir(root, parts[:-1], create=False), name)
+        try:
+            kind = _kind(os.lstat(path))
+        except FileNotFoundError:
+            raise OpError("not_found", f"{shown} does not exist")
+        if kind == "link":
+            raise OpError("unauthorized", f"{shown} is a symbolic link; only files inside the workspace can "
+                                          "be uploaded")
+        fd = os.open(path, os.O_RDONLY | O_BINARY)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OpError("invalid_input", f"{shown} is not a regular file")
+        if st.st_nlink > 1:
+            raise OpError("unauthorized", f"{shown} has {st.st_nlink} hard links, and one may be outside the "
+                                          "workspace; upload a copy of it instead")
+        copy = os.path.join(tempfile.mkdtemp(dir=private_dir), name)
+        out = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_BINARY, 0o600)
+        with os.fdopen(out, "wb") as dst, os.fdopen(fd, "rb", closefd=False) as data:
+            shutil.copyfileobj(data, dst, 1 << 20)
+        return copy
+    finally:
+        os.close(fd)
 
 
 ACTIONABILITY = (
@@ -534,6 +857,7 @@ class Helper:
         self.executable = None
         self.headless = True
         self.download_dir = tempfile.mkdtemp(prefix="hame-browser-dl-")
+        self.upload_dir = tempfile.mkdtemp(prefix="hame-browser-up-")
         self.opening = False
 
     def next_gen(self):
@@ -567,8 +891,10 @@ class Helper:
 
     async def attach_redirect_guard(self, tab):
         """Playwright hands a route only the first URL of a redirect chain.
-        This checks every redirect a document request gets, at the response,
-        before the browser follows it."""
+        This checks every redirect a document request gets twice: at the
+        redirect response, resolving its Location the way Chrome does, and
+        again at the request Chrome then makes, whose URL is Chrome's own
+        resolution, before it is sent."""
         if tab.guarded:
             return
         tab.guarded = True
@@ -576,24 +902,39 @@ class Helper:
             cdp = await self.contexts[tab.profile].new_cdp_session(tab.page)
             cdp.on("Fetch.requestPaused", lambda ev: asyncio.ensure_future(self.on_paused(tab, cdp, ev)))
             await cdp.send("Fetch.enable", {"patterns": [
+                {"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"},
                 {"urlPattern": "*", "resourceType": "Document", "requestStage": "Response"}]})
         except Exception as e:
             self.events.append(f"the redirect guard is not active in {tab.id}: {pw_reason(e)}")
 
     async def on_paused(self, tab, cdp, ev):
         rid = ev["requestId"]
+
+        async def block(target, why="origin not granted"):
+            self.blocked.append(target)
+            self.events.append(f"blocked a redirect to {target} ({why} for profile {tab.profile})")
+            await cdp.send("Fetch.failRequest", {"requestId": rid, "errorReason": "Aborted"})
+
         try:
-            status = ev.get("responseStatusCode") or 0
-            if 300 <= status < 400:
+            status = ev.get("responseStatusCode")
+            if status is None:
+                # Request stage. A first request went through the route
+                # guard already; a redirected one is checked here, at the
+                # URL Chrome resolved.
+                url = ev["request"]["url"]
+                if ev.get("redirectedRequestId") and not self.allowed(tab.profile, url):
+                    await block(url)
+                    return
+            elif 300 <= status < 400:
                 location = next((h["value"] for h in ev.get("responseHeaders", [])
                                  if h["name"].lower() == "location"), None)
-                if location:
-                    target = urljoin(ev["request"]["url"], location)
+                if location is not None:
+                    target = resolve_redirect(ev["request"]["url"], location)
+                    if target is None:
+                        await block(location.strip()[:300], "cannot tell where it leads; refused")
+                        return
                     if not self.allowed(tab.profile, target):
-                        self.blocked.append(target)
-                        self.events.append(f"blocked a redirect to {target} (origin not granted for "
-                                           f"profile {tab.profile})")
-                        await cdp.send("Fetch.failRequest", {"requestId": rid, "errorReason": "Aborted"})
+                        await block(target)
                         return
             await cdp.send("Fetch.continueRequest", {"requestId": rid})
         except Exception:
@@ -1174,7 +1515,7 @@ class Helper:
                 await page.keyboard.press(key)
             return {}
         if kind == "upload":
-            path = req["path"]
+            path = copy_upload(req["upload_root"], req["upload_parts"], self.upload_dir)
             is_file = await h.evaluate("e => e.tagName === 'INPUT' && e.type === 'file'")
             if is_file:
                 await h.set_input_files(path, timeout=t)
@@ -1217,15 +1558,26 @@ class Helper:
         failure = await download.failure()
         if failure:
             raise OpError("download_failed", f"download failed: {failure}", effect="done")
-        dest = req["dest"]
-        if req.get("dest_is_dir"):
-            name = os.path.basename(download.suggested_filename) or "download"
-            dest = os.path.join(dest, name)
-        await download.save_as(dest)
-        with open(dest, "rb") as f:
-            data = f.read()
-        return {"path": dest, "suggested": download.suggested_filename, "url": download.url,
-                "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        # The browser wrote the file into this helper's private download
+        # directory; it is copied into the workspace from there, never
+        # through `save_as`, which would follow a link at the destination.
+        source = await download.path()
+        name = req.get("dest_name") or safe_filename(download.suggested_filename)
+        try:
+            path, size, sha = save_file(source, req["dest_root"], req.get("dest_dir") or [], name,
+                                        bool(req.get("overwrite")))
+        except OpError as e:
+            e.effect = "done"
+            e.message += " (the download finished but was not saved)"
+            raise
+        except OSError as e:
+            raise OpError("download_failed", f"cannot save the download: {e}", effect="done")
+        try:
+            await download.delete()
+        except Exception:
+            pass
+        return {"path": path, "suggested": download.suggested_filename, "saved_as": name,
+                "url": download.url, "bytes": size, "sha256": sha}
 
     async def op_wait(self, req):
         tab = self.tab(req)
@@ -1482,6 +1834,7 @@ class Helper:
                 pass
             self.pw = None
         shutil.rmtree(self.download_dir, ignore_errors=True)
+        shutil.rmtree(self.upload_dir, ignore_errors=True)
 
     async def handle(self, req):
         op = req.get("op")

@@ -198,7 +198,7 @@ A grant has a `channel` (`browser`, `desktop`, or `visual` for screenshots and p
 | `observe` | read pages, windows and accessibility trees; wait; extract |
 | `interact` | click, fill, select, press, set values, menus that only open something |
 | `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model) |
-| `file_write` | downloads into the workspace; confirming a save panel |
+| `file_write` | downloads into the workspace (see below); confirming a save panel |
 | `clipboard` | read and set the clipboard (desktop; the previous contents are restored) |
 | `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease |
 | `screen` | screenshots (stored as artifacts) |
@@ -207,12 +207,13 @@ Security model:
 
 - **Grants come only from you**: `[computer]` in `~/.hame/config.toml`, or a task file you pass to `hame task`. A project's `.hame/config.toml` cannot grant them (it may only set `[verify]`). Text in a page, a document, an accessibility label or a screenshot is marked untrusted, and the agent is told it can never widen its scope. A refused action says which capability on which target was missing.
 - **Desktop and browser authority is separate from the shell sandbox and is not confined by it.** The helpers run as your user, with your terminal's macOS privacy permissions (Accessibility, Screen Recording) and your browser profiles' cookies. Seatbelt, Landlock and the network allowlist apply to `bash` and other confined tools, not to these. Grant narrowly: an app or origin pattern, and only the capabilities the task needs.
-- The browser helper blocks top-level navigation to origins no grant covers, before the request leaves the machine. A page's own requests (scripts, images, API calls) are not filtered, and the browser does not go through hame's proxy.
+- The browser helper blocks top-level navigation to origins no grant covers, before the request leaves the machine. Each redirect is checked twice: its `Location` is resolved the way Chrome resolves it (a backslash counts as a slash, so `/\evil.example/` leads to evil.example; a target it cannot resolve with certainty is refused), and the request Chrome then makes is checked at the URL Chrome itself computed. A page's own requests (scripts, images, API calls) are not filtered, and the browser does not go through hame's proxy.
+- Downloads are saved only inside the workspace, and never through a symbolic link: a destination that is a link (wherever it points), or a directory path that leads outside through one, is refused. An existing file is replaced only when the call passes `overwrite: true`, and then only a regular file; the download is written to a new temporary file and renamed into place, so it never writes into an existing file, a link or another hard link of it. When the path is a directory, the page's suggested name is reduced to a plain file name (no separators, `..`, leading dots, control characters or Windows-reserved names; at most 120 bytes). An upload reads only a regular file inside the workspace, not through a link and not one with other hard links, and the browser is given a private copy.
 - Every acting operation is journalled (`not_started`, `dispatched`, then `completed`, `failed` or `outcome_unknown`) before and after it is sent. A commit carries an idempotency key; one that may already have taken effect is not repeated until the page or window has been observed again and the agent names the earlier operation (`reconciled`). After a crash, dispatched actions become `outcome_unknown` and the agent is told to check the state; hame never replays them.
 - Refs (`e12`, `o3:e7`) belong to one observation. A ref whose page navigated, whose element changed or was removed, or whose window closed is refused (`stale_ref`, `stale_window`), and two matching targets are refused as `ambiguous`; the tools never re-target a "similar" element. Physical input stops when focus moves (`interference`) or a dialog appears (`unexpected_dialog`) and reports exactly what was typed.
 - Commit detection is a heuristic over control names and form methods: a button that posts through JavaScript may count as `interact`. Do not rely on withholding `commit` as the only safeguard on a site where a click can do damage.
 
-Browser profiles are persistent directories (`~/.hame/browser-profiles/<name>`), so a profile you sign in to stays signed in; treat it like a browser profile of your own. Downloads go into the workspace. The desktop helper is a Swift program built on first use into `~/.hame/helpers/` (about 4 seconds). Details per tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
+Browser profiles are persistent directories (`~/.hame/browser-profiles/<name>`), so a profile you sign in to stays signed in; treat it like a browser profile of your own. Downloads go into the workspace, under the rules above. The desktop helper is a Swift program built on first use into `~/.hame/helpers/` (about 4 seconds). Details per tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
 
 ## Workflows
 
@@ -247,7 +248,7 @@ tool = "browser"
 input = { action = "fill", text = "To", value = "{{to}}" }
 [[steps]]
 tool = "browser"
-input = { action = "download", text = "Export CSV", path = "out/ledger.csv" }
+input = { action = "download", text = "Export CSV", path = "out/ledger.csv", overwrite = true }
 note = "the server takes a second or two"
 
 [[post]]                         # at least one; the run fails if these do not hold

@@ -4,6 +4,16 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Security
+
+- Browser downloads could write outside the workspace: a destination that was a symbolic link (for example `out.csv -> ~/.zshrc`, created by the sandboxed agent) was followed, a directory path through a link was created outside, and a page's suggested file name could replace any existing file in the destination directory. Downloads now refuse a destination that is a link or leads outside through one, never replace an existing file unless the call passes `overwrite: true` (and then only a regular file), are written to a new temporary file and renamed into place through directories opened without following links, and reduce a suggested name to a plain file name (no separators, `..`, leading dots, control characters or Windows-reserved names). The file stored as an artifact is the one the helper wrote (checked by SHA-256).
+- Browser uploads read the file again below the workspace without following links, refuse a file with other hard links, and give the browser a private copy, so a file swapped for a link after the check is not uploaded.
+- The browser's redirect guard resolved `Location` with Python's `urljoin`, which keeps `/\evil.example/x`, `\\evil.example/x`, `http:\\evil.example/x` and `http:///evil.example/x` on the granted host while Chrome goes to evil.example. Locations are now resolved as WHATWG (and Chrome) do, an unclear one is refused, and each redirected request is checked again at the URL Chrome computed. `open` and `navigate` hand the helper the WHATWG form of the URL.
+
+### Changed
+
+- Browser `download` and `wait` (with `download`) take `overwrite`; without it an existing file is refused as `[exists]`. A workflow that downloads to the same path on every run needs `overwrite = true` in that step.
+
 ## 0.1.0-rc.1 — 2026-11-15
 
 Release candidate. Details, breaking changes and verification: [docs/release/RELEASE-NOTES.md](docs/release/RELEASE-NOTES.md).

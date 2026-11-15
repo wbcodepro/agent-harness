@@ -134,6 +134,25 @@ push luôn git fetch và rebase.
 Không chạy CI trên GitHub trừ khi cần (gh workflow run ci).
 ```
 
+## Lượt năm: tải file và upload của tool browser không đi qua link (2026-11-15)
+
+Trên Windows helper trình duyệt không mở được thư mục theo descriptor, nên nó kiểm từng thành phần đường dẫn bằng `lstat` (từ chối symlink và junction) rồi ghi file tạm và đổi tên (`os.rename` không đè, `os.replace` khi có `overwrite`). Phần này mới chỉ chạy trên macOS.
+
+```text
+Hãy git pull, chạy cargo test -p hame-browser (cần Python có Playwright và Chrome; không có thì
+các test trình duyệt tự bỏ qua, riêng tests/helper.rs vẫn chạy), rồi kiểm và ghi kết quả vào mục
+"Lượt năm" trong docs/WINDOWS-RESULTS.md:
+1. Trong một workspace thử, tạo junction trỏ ra ngoài: mklink /J away C:\Users\Public
+   rồi gọi tool browser tải một file với path "away/x.csv": phải bị từ chối [unauthorized] và
+   không có file nào xuất hiện trong C:\Users\Public. Làm lại với path "away\x.csv".
+2. Nếu tạo được symlink file (Developer Mode): mklink out.csv C:\Users\Public\victim.txt, tải về
+   path "out.csv" có và không có overwrite: cả hai phải bị từ chối, victim.txt giữ nguyên.
+3. Tải hai lần vào cùng một path: lần hai báo [exists]; thêm overwrite:true thì thay được, kể cả
+   khi file đích đang mở trong Notepad (nếu Windows từ chối đổi tên, lỗi phải rõ và file cũ còn
+   nguyên, không sót file ".*.hame-*.part").
+4. Upload một file qua junction ra ngoài: phải bị từ chối.
+```
+
 ## Đã kiểm trên GitHub Actions (Windows Server)
 
 Lần chạy gần nhất: commit `3fea852` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Lần đó gồm cả các phần thêm sau lượt kiểm trên máy thật (lệnh và loại subagent từ file, cài plugin, MCP không trạng thái, đăng nhập OAuth, tool `script`, thay secret tại proxy), nhưng chỉ ở mức biên dịch và test tự động: chúng chưa được dùng thử bằng tay trên Windows.
