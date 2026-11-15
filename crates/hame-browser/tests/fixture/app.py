@@ -24,6 +24,7 @@ STATE = {
     "exports": [],
     "prefs_saved": [],
     "evil_hits": 0,
+    "hits": [],
 }
 
 COLORS = ["red", "blue", "green", "gold"]
@@ -210,6 +211,41 @@ def promo_page():
 <p><a href="/form">Back to the order form</a></p>""")
 
 
+def pixels_page():
+    """Controls at fixed CSS positions, for the pixels mode's tests: each
+    box is `left top width height` in the style, so a test knows where to
+    click without reading the page. What the page saw is recorded through
+    `/pixels/hit` and echoed into its text for `page_state`."""
+    def box(left, top, width, height):
+        return f"position:absolute;left:{left}px;top:{top}px;width:{width}px;height:{height}px;" \
+               "box-sizing:border-box;margin:0"
+    return page("Pixels", f"""
+<button type="button" id="hello" style="{box(40, 40, 200, 40)}">Say hello</button>
+<button type="button" id="ask" style="{box(260, 40, 200, 40)}">Ask first</button>
+<input id="field" aria-label="Field" style="{box(40, 120, 300, 36)}">
+<p id="echo" style="{box(400, 120, 300, 36)}">echo: </p>
+<form method="post" action="/submit" id="order">
+  <input name="ship_name" aria-label="Ship to" style="{box(40, 200, 300, 36)}">
+  <button type="submit" style="{box(360, 200, 160, 36)}">Place order</button>
+</form>
+<input type="password" id="pw" aria-label="Password" style="{box(40, 280, 300, 36)}">
+<input type="file" id="file" aria-label="Attachment" style="{box(40, 360, 300, 36)}">
+<a id="dl" href="/file?name=report.txt" style="display:block;{box(40, 440, 200, 30)}">Download report</a>
+<iframe title="Embedded" srcdoc="<button>Inside</button>" style="{box(600, 40, 300, 200)}"></iframe>
+<p id="pos" style="position:fixed;left:600px;top:300px;margin:0">scrollY=0</p>
+<div style="{box(0, 2400, 10, 10)}"></div>""", """
+const hit = what => fetch('/pixels/hit?what=' + encodeURIComponent(what));
+document.getElementById('hello').onclick = () => hit('hello');
+document.getElementById('ask').onclick = () => hit(confirm('Really go on?') ? 'confirmed' : 'declined');
+const field = document.getElementById('field');
+field.addEventListener('input', () => { document.getElementById('echo').textContent = 'echo: ' + field.value; });
+document.getElementById('file').addEventListener('change', e => {
+  for (const f of e.target.files) hit('file:' + f.name + ':' + f.size);
+});
+window.addEventListener('scroll', () => { document.getElementById('pos').textContent = 'scrollY=' + Math.round(window.scrollY); });
+""")
+
+
 DOWNLOADS = [("Plain", "report.txt"), ("Parent", "../escape.txt"), ("Hidden", ".envrc"),
              ("Nested", "a/b.txt"), ("Backslash", "..\\win.txt")]
 
@@ -299,6 +335,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_body(promo_page())
         if path == "/files":
             return self.send_body(files_page())
+        if path == "/pixels":
+            return self.send_body(pixels_page())
+        if path == "/pixels/hit":
+            with LOCK:
+                STATE["hits"].append(query.get("what", [""])[0])
+            return self.send_body("{}", ctype="application/json")
         if path == "/file":
             # The name the page suggests goes out as sent, hostile or not.
             name = query.get("name", ["file.txt"])[0]

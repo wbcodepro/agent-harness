@@ -915,7 +915,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         tools.insert(desktop.clone());
     }
     if computer.any() {
-        system.push_str(computer::COMPUTER_GUIDANCE);
+        system.push_str(computer.guidance());
     }
     // Saved workflows, offered only when there are some.
     let workflow_dirs = vec![cwd.join(".hame").join("workflows"), home.join("workflows")];

@@ -39,7 +39,7 @@ CONTRACT = 1
 VERSION = "0.1.0"
 OPERATIONS = [
     "open", "navigate", "back", "observe", "inspect", "act", "wait", "extract",
-    "screenshot", "tabs", "dialog", "close", "check", "state",
+    "screenshot", "tabs", "dialog", "close", "check", "state", "inspect_point",
 ]
 
 # The real stdout carries the protocol; anything printed by accident goes to
@@ -742,11 +742,40 @@ FACTS = LIB + r"""
     control: (el.getAttribute('name') || '') + '|' + H.role(el) + '|' + H.name(el) + '|' + H.context(el),
     href: link ? link.href : null,
     file_input: tag === 'input' && type === 'file',
+    frame: tag === 'iframe' || tag === 'frame',
+    src: (tag === 'iframe' || tag === 'frame') ? (el.src || null) : null,
     password: type === 'password',
     select: tag === 'select',
     options: tag === 'select' ? Array.from(el.options).map(o => ({label: H.norm(o.label || o.text), value: o.value})) : null,
     role: H.role(el), name: H.name(el),
   };
+}
+"""
+
+# The element a click at a viewport point (CSS pixels) reaches: the topmost
+# element there (inside open shadow roots too), then the control it belongs
+# to (the nearest interactive ancestor, the control of a label), so a click
+# on the text inside a submit button is a click on that button. An iframe
+# is returned as itself: its content is another document. Returns an
+# object with `error` when nothing is there.
+POINT = LIB + r"""
+(args) => {
+  const {x, y} = args;
+  if (!(x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight)) return {error: 'outside the viewport'};
+  let hit = document.elementFromPoint(x, y);
+  if (!hit) return {error: 'no element there'};
+  for (let depth = 0; hit.shadowRoot && depth < 20; depth++) {
+    const inner = hit.shadowRoot.elementFromPoint(x, y);
+    if (!inner || inner === hit) break;
+    hit = inner;
+  }
+  const up = a => a.parentElement || (a.getRootNode() instanceof ShadowRoot ? a.getRootNode().host : null);
+  for (let a = hit; a; a = up(a)) {
+    if (a.tagName === 'IFRAME' || a.tagName === 'FRAME') return a;
+    if (a.tagName === 'LABEL') return a.control || a;
+    if (H.interactive(a, H.role(a))) return a;
+  }
+  return hit;
 }
 """
 
@@ -1422,11 +1451,49 @@ class Helper:
                 lines.append(f'- text: "{name}"')
         return "\n".join(lines), refs, complete, len(keep)
 
+    async def point_target(self, tab, x, y):
+        """The element a click at viewport point (x, y), in CSS pixels,
+        reaches, and its facts (as for a ref) with `fp`, a fingerprint of
+        what decides how the click is authorized. Refuses when nothing
+        there can be resolved: hame never clicks blind."""
+        try:
+            result = await asyncio.wait_for(tab.page.evaluate_handle(POINT, {"x": x, "y": y}), 10)
+        except asyncio.TimeoutError:
+            raise OpError("timeout", "could not find what is under the point; the page is not responding")
+        el = result.as_element()
+        if el is None:
+            why = ""
+            try:
+                why = (await result.json_value() or {}).get("error", "")
+            except Exception:
+                pass
+            raise OpError("not_found", f"cannot tell what is at ({x:.0f}, {y:.0f}) CSS px ({why or 'nothing there'}); "
+                                       "nothing was clicked")
+        facts = await asyncio.wait_for(el.evaluate(FACTS, None), 10)
+        facts["fp"] = json.dumps([facts.get(k) for k in
+                                  ("tag", "type", "role", "name", "form", "action", "method", "submits",
+                                   "href", "frame", "src", "control")])
+        return el, facts
+
+    async def op_inspect_point(self, req):
+        tab = self.tab(req)
+        if tab.dialog is not None:
+            raise self.dialog_error(tab, during=False)
+        _, facts = await self.point_target(tab, float(req["x"]), float(req["y"]))
+        info = await self.tab_info(tab)
+        info.update(ref=None, role=facts.get("role"), name=facts.get("name"), facts=facts)
+        return info
+
     async def op_inspect(self, req):
         tab = self.tab(req)
         kind = req.get("kind", "click")
         if tab.dialog is not None:
             raise self.dialog_error(tab, during=False)
+        if kind == "scroll":
+            # Wheel input aims at no element.
+            info = await self.tab_info(tab)
+            info.update(ref=None, facts=None)
+            return info
         ref = await self.resolve(req, tab)
         if ref is None:
             info = await self.tab_info(tab)
@@ -1478,6 +1545,11 @@ class Helper:
             if "Timeout" in type(e).__name__:
                 raise OpError("timeout", pw_reason(e), effect="unknown")
             raise OpError("action_failed", pw_reason(e), effect="unknown")
+        if kind in ("click_at", "type", "scroll"):
+            # Raw mouse and keyboard input does not wait for a navigation it
+            # starts, as an element action does: give one a moment to begin
+            # so that settling waits for it.
+            await self.navigation_grace(tab, nav_before, 3.0 if req.get("expect_navigation") else 0.3)
         navigated = await self.settle(tab, nav_before, gen_before, t)
         info = await self.tab_info(tab)
         info.update(result or {})
@@ -1491,6 +1563,11 @@ class Helper:
                 info["modal"] = opened[0]
         return info
 
+    async def navigation_grace(self, tab, nav_before, seconds=0.3):
+        deadline = time.monotonic() + seconds
+        while tab.nav_count == nav_before and tab.dialog is None and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+
     async def modals(self, tab):
         """Names of the in-page modal dialogs showing now."""
         try:
@@ -1501,6 +1578,42 @@ class Helper:
     async def do_act(self, tab, ref, kind, req, t):
         page = tab.page
         h = ref.handle if ref else None
+        if kind == "click_at":
+            x, y = float(req["x"]), float(req["y"])
+            # The element under the point must still be the one hame
+            # authorized; a page that changed in between gets no click.
+            _, facts = await self.point_target(tab, x, y)
+            if facts["fp"] != req.get("expect_fp"):
+                raise OpError("stale_point", "what is under the point changed after it was checked "
+                                             f"(now {facts.get('tag')} {facts.get('name')!r}); nothing was clicked")
+            if req.get("upload_list"):
+                paths = [copy_upload(req["upload_root"], parts, self.upload_dir) for parts in req["upload_list"]]
+                async with page.expect_file_chooser(timeout=t) as chooser:
+                    # A round trip first, so the browser intercepts the
+                    # chooser before the click opens it (the subscription
+                    # is sent without waiting; an element click's own
+                    # checks give it that time, a raw click does not).
+                    await page.evaluate("0")
+                    await page.mouse.click(x, y)
+                await (await chooser.value).set_files(paths)
+                return {"files": [os.path.basename(p) for p in paths]}
+            if req.get("dest_root") is not None:
+                seen = len(tab.downloads)
+                await page.mouse.click(x, y)
+                download = await self.next_download(tab, seen, t)
+                return {"download": await self.save_download(download, req, t)}
+            await page.mouse.click(x, y)
+            return {}
+        if kind == "type":
+            # To whatever has focus, as key strokes; a newline presses Enter.
+            await page.keyboard.type(req.get("value") or "")
+            return {}
+        if kind == "scroll":
+            await page.mouse.move(float(req["x"]), float(req["y"]))
+            await page.mouse.wheel(float(req.get("dx") or 0), float(req.get("dy") or 0))
+            # Let the scroll land before the screenshot that follows.
+            await page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+            return {}
         if kind == "click":
             await h.click(timeout=t)
             return {}
@@ -1597,6 +1710,11 @@ class Helper:
         tab = self.tab(req)
         t = int(req.get("timeout_ms", 10000))
         page = tab.page
+        if req.get("ms") is not None:
+            await asyncio.sleep(max(0, min(int(req["ms"]), 30000)) / 1000)
+            info = await self.tab_info(tab)
+            info["navigated"] = False
+            return info
         if req.get("download"):
             download = await self.next_download(tab, tab.consumed, t)
             info = await self.tab_info(tab)
@@ -1751,6 +1869,9 @@ class Helper:
 
     async def op_screenshot(self, req):
         tab = self.tab(req)
+        if tab.dialog is not None:
+            # The page cannot render behind a native dialog.
+            raise self.dialog_error(tab, during=False)
         page = tab.page
         dpr = await page.evaluate("() => window.devicePixelRatio")
         if req.get("ref"):

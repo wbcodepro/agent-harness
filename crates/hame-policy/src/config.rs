@@ -82,11 +82,30 @@ pub struct ComputerConfig {
     /// off is for measuring what batching saves.
     pub batch: bool,
     /// How browser observations reach the model: `semantic` (the
-    /// accessibility tree as text, the default) or `screenshot` (a viewport
+    /// accessibility tree as text, the default), `screenshot` (a viewport
     /// screenshot with only actionable elements listed, and no `extract`),
-    /// for measuring what vision costs. `screenshot` needs the Screen
-    /// capability in a browser grant.
-    pub observation: String,
+    /// for measuring what vision costs, or `pixels` (the screenshot-loop
+    /// baseline: every view is a viewport screenshot with no page text and
+    /// no refs, and the model acts by coordinates with `click_at`, `type`,
+    /// `press` and `scroll`, one action per call, `batch` never offered),
+    /// for measuring what the semantic mode saves. `screenshot` and
+    /// `pixels` need the Screen capability in a browser grant. Any other
+    /// value is an error.
+    pub observation: Observation,
+}
+
+/// How the browser tool shows pages to the model; see
+/// [`ComputerConfig::observation`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Observation {
+    /// The accessibility tree as text, with refs.
+    #[default]
+    Semantic,
+    /// A viewport screenshot plus the actionable elements' lines.
+    Screenshot,
+    /// Screenshots only; actions by pixel coordinates.
+    Pixels,
 }
 
 impl Default for ComputerConfig {
@@ -99,7 +118,7 @@ impl Default for ComputerConfig {
             browser_channel: None,
             grants: Vec::new(),
             batch: true,
-            observation: "semantic".into(),
+            observation: Observation::Semantic,
         }
     }
 }
@@ -687,8 +706,16 @@ mod computer_tests {
         assert!(config.computer.batch, "batching is on unless turned off");
         let off = Config::parse("[computer]\nbatch = false").unwrap();
         assert!(!off.computer.batch);
-        assert_eq!(config.computer.observation, "semantic");
+        assert_eq!(config.computer.observation, Observation::Semantic);
         let visual = Config::parse("[computer]\nobservation = \"screenshot\"").unwrap();
-        assert_eq!(visual.computer.observation, "screenshot");
+        assert_eq!(visual.computer.observation, Observation::Screenshot);
+        let pixels = Config::parse("[computer]\nobservation = \"pixels\"").unwrap();
+        assert_eq!(pixels.computer.observation, Observation::Pixels);
+        for bad in ["vision", "Pixels", ""] {
+            assert!(
+                Config::parse(&format!("[computer]\nobservation = \"{bad}\"")).is_err(),
+                "{bad}"
+            );
+        }
     }
 }

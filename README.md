@@ -171,7 +171,7 @@ desktop = true                  # offer the desktop tool (macOS 14+)
 headless = true                 # browser without a window (default)
 browser_channel = "chrome"      # chrome (installed Google Chrome, default) | msedge | chromium
 # batch = true                  # the tools' batch action (default on; off only to measure it)
-# observation = "semantic"      # semantic (default) | screenshot (needs a "screen" grant; for measuring vision cost)
+# observation = "semantic"      # semantic (default) | screenshot | pixels (both need a "screen" grant; screenshot measures vision cost, pixels is the screenshot-loop baseline: screenshots only, clicks by coordinates)
 # profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
 
 [[computer.grant]]              # read and use pages on local servers, profile "work" only
@@ -415,7 +415,7 @@ headless = true
 browser_channel = "chrome"      # chrome | msedge | chromium
 # profiles_dir = "/path"        # default ~/.hame/browser-profiles
 batch = true                    # batch action in browser and desktop tools
-observation = "semantic"        # semantic | screenshot
+observation = "semantic"        # semantic | screenshot | pixels
 
 [[computer.grant]]
 channel = "browser"             # browser | desktop | visual

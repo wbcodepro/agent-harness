@@ -11,7 +11,8 @@ mod shell;
 pub use config::{
     ApprovalConfig, CheckpointConfig, CompatConfig, ComputerConfig, Config, ConfigError,
     ContextConfig, EditFormat, HookSource, LimitsConfig, ModelConfig, NetworkConfig, NetworkMode,
-    ProjectConfig, Rule, RuleAction, SandboxConfig, SecretsConfig, ToolProfile, VerifyConfig,
+    Observation, ProjectConfig, Rule, RuleAction, SandboxConfig, SecretsConfig, ToolProfile,
+    VerifyConfig,
 };
 pub use gitguard::{GIT_GUARD_PREFIX, GitGuard};
 pub use layers::{ApprovalLayer, DENIED_BY_USER, Prompter, RedactLayer, glob_match};

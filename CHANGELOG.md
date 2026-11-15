@@ -23,6 +23,7 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 - A browser tab whose redirect guard could not be attached was used unguarded; it is now refused until the guard attaches.
 - More control names count as commits on the desktop: post, reply, confirm, order, remove, merge.
 - A password typed into a secure field was recorded in the action receipt; it is now left out.
+- A browser `fill` of a password field echoed the field's value in the result and recorded it as receipt evidence (`value=...`); both are now left out.
 - Unknown fields in task files, grants, budgets and predicates, and predicates with empty fields, are errors instead of being ignored or passing vacuously; a required browser profile that is not reported fails the check.
 
 ### Added
@@ -31,6 +32,7 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 
 - Desktop: `select` (table cells by address, text by occurrence), cell addresses and the Numbers and Pages canvases in observations, typing that follows Numbers' formula editor; an Export button in a save panel needs `commit` and `file_write` like Save.
 - `hame run --inbox DIR` and the eval manifest field `interject`: a user message delivered mid-run.
+- `[computer] observation = "pixels"` (opt-in, needs a `screen` grant): the screenshot-loop baseline for measuring what the default semantic observations save. The browser tool then shows every page as a viewport screenshot with a one-line header and no page text or refs, and offers only `open`, `navigate`, `back`, `tabs`, `wait` (time or load state), `dialog`, `close`, `screenshot` and the coordinate actions `click_at` (with optional `upload` or `download`), `type`, `press` and `scroll`, each returning a fresh screenshot; `batch` is never offered. A click by coordinates is authorized like a click by ref: the element under the point is resolved before dispatch and checked again just before the click, a form submission (or Enter in a form field, or a typed newline) needs `commit` and is journalled with an idempotency key, links to ungranted origins are refused, a click into an embedded frame counts as a commit, and text typed into a password field is not recorded. Unknown `observation` values are now a configuration error.
 
 ### Changed
 

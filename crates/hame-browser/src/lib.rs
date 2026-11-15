@@ -22,6 +22,14 @@
 //! - **Batches.** `batch` runs a bounded list of steps without model round
 //!   trips, each one sent through the [`ToolPipeline`] so policy rules on it
 //!   individually.
+//!
+//! [`Observation`] picks how pages reach the model. The default is the
+//! semantic observation (accessibility tree as text, with refs). `pixels`
+//! is the screenshot-loop baseline kept for measurement: screenshots only,
+//! actions by coordinates (`click_at`, `type`, `press`, `scroll`), one per
+//! call. A point is authorized like a ref: the helper describes the element
+//! under it before anything is dispatched, and the same commit, journal and
+//! origin rules apply to it.
 
 mod helper;
 mod schema;
@@ -116,10 +124,25 @@ pub struct BrowserConfig {
     /// Offer the `batch` action. On by default; off for an ablation that
     /// measures one action per model decision.
     pub batch: bool,
+    /// How pages reach the model. [`Observation::Semantic`] by default.
+    pub observation: Observation,
+}
+
+/// How the browser tool shows pages to the model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Observation {
+    /// The accessibility tree as text, with refs to act on.
+    #[default]
+    Semantic,
     /// Screenshot-first observations, for the visual ablation arm: every
     /// observation carries a viewport screenshot and lists only actionable
-    /// elements. Off by default; needs the Screen capability.
-    pub screenshot_observations: bool,
+    /// elements; `extract` is withdrawn. Needs the Screen capability.
+    Screenshot,
+    /// The screenshot-loop baseline: every view is a viewport screenshot
+    /// with a one-line header and no page text, actions go by screenshot
+    /// pixel coordinates (`click_at`, `type`, `press`, `scroll`), one per
+    /// call, and `batch` is never offered. Needs the Screen capability.
+    Pixels,
 }
 
 impl BrowserConfig {
@@ -133,7 +156,7 @@ impl BrowserConfig {
             headless: true,
             default_timeout_ms: 10_000,
             batch: true,
-            screenshot_observations: false,
+            observation: Observation::Semantic,
         }
     }
 
@@ -305,6 +328,41 @@ impl Failure {
         }
     }
 
+    /// The next step in the `pixels` mode, which has no `observe`: the
+    /// page is looked at by taking a screenshot.
+    fn pixel_next_step(&self) -> &'static str {
+        match self.code.as_str() {
+            "stale_point" => "take a screenshot and pick the point again from it.",
+            "not_actionable" => {
+                "take a screenshot; click_at the field you mean first, or choose another point."
+            }
+            "dialog_open" => "handle it with action=dialog (accept true or false).",
+            "duplicate_commit" => {
+                "take a screenshot and check whether the earlier commit took effect. Only if it \
+                 did not, repeat with reconciled=<its op_id>."
+            }
+            "helper_crashed" => {
+                "the browser restarted and its tabs are gone. Open the page again; check any \
+                 outcome_unknown action on a screenshot before repeating it."
+            }
+            "outcome_unknown" => {
+                "take a screenshot and check whether it took effect before anything that would \
+                 repeat it."
+            }
+            "unauthorized" | "helper_unavailable" | "exists" => self.next_step(),
+            _ => "take a screenshot to see where the page is, then decide.",
+        }
+    }
+
+    fn render_pixels(&self) -> String {
+        format!(
+            "[{}] {}\nNext step: {}",
+            self.code,
+            self.message,
+            self.pixel_next_step()
+        )
+    }
+
     fn render(&self) -> String {
         let mut text = format!("[{}] {}", self.code, self.message);
         if let Some(cands) = self.extra["candidates"].as_array() {
@@ -377,6 +435,141 @@ struct State {
     /// Receipts, when the context has no journal.
     memory_journal: Vec<ActionReceipt>,
     allow_sent: Option<Vec<(String, String)>>,
+    /// The latest viewport screenshot of each tab, whose pixels the
+    /// `pixels` mode's coordinates are in.
+    shots: HashMap<String, Shot>,
+}
+
+/// The geometry of a viewport screenshot: its size in image pixels and
+/// how many image pixels make one CSS pixel, so a point given in it maps
+/// back to the viewport the browser clicks in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Shot {
+    width: f64,
+    height: f64,
+    scale_x: f64,
+    scale_y: f64,
+    generation: u64,
+}
+
+impl Shot {
+    /// A screenshot of `width` x `height` image pixels showing a viewport
+    /// of `css_width` x `css_height` CSS pixels.
+    fn new(width: f64, height: f64, css_width: f64, css_height: f64, generation: u64) -> Self {
+        let ratio = |px: f64, css: f64| if css > 0.0 && px > 0.0 { px / css } else { 1.0 };
+        Self {
+            width,
+            height,
+            scale_x: ratio(width, css_width),
+            scale_y: ratio(height, css_height),
+            generation,
+        }
+    }
+
+    /// A point in screenshot pixels, in CSS viewport pixels.
+    fn to_css(self, x: f64, y: f64) -> Result<(f64, f64), Failure> {
+        if !(x.is_finite() && y.is_finite())
+            || x < 0.0
+            || y < 0.0
+            || x >= self.width
+            || y >= self.height
+        {
+            return Err(Failure::new(
+                "invalid_input",
+                format!(
+                    "({x}, {y}) is outside the latest screenshot, which is {}x{} px; coordinates \
+                     are pixels of that image, from (0, 0) at its top-left corner",
+                    self.width, self.height
+                ),
+            ));
+        }
+        Ok((x / self.scale_x, y / self.scale_y))
+    }
+
+    /// A distance in screenshot pixels, in CSS pixels.
+    fn delta_to_css(self, dx: f64, dy: f64) -> (f64, f64) {
+        (dx / self.scale_x, dy / self.scale_y)
+    }
+}
+
+/// Whether a key combination ends in Enter (`Enter`, `Control+Enter`).
+fn is_enter(keys: &str) -> bool {
+    keys.rsplit('+')
+        .next()
+        .is_some_and(|k| k.eq_ignore_ascii_case("enter") || k.eq_ignore_ascii_case("return"))
+}
+
+/// A key or combination as Playwright names it, accepting the usual
+/// spellings: `ctrl+a` -> `Control+a`, `cmd+shift+z` -> `Meta+Shift+z`,
+/// `return` -> `Enter`, `esc` -> `Escape`, `pgdn` -> `PageDown`.
+fn normalize_keys(keys: &str) -> String {
+    let keys = keys.trim();
+    if keys == "+" {
+        return keys.to_string();
+    }
+    keys.split('+')
+        .map(|part| {
+            let named = match part.trim().to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => "Control",
+                "cmd" | "command" | "meta" | "super" | "win" => "Meta",
+                "alt" | "option" | "opt" => "Alt",
+                "shift" => "Shift",
+                "enter" | "return" => "Enter",
+                "esc" | "escape" => "Escape",
+                "tab" => "Tab",
+                "space" => "Space",
+                "backspace" => "Backspace",
+                "delete" | "del" => "Delete",
+                "up" | "arrowup" => "ArrowUp",
+                "down" | "arrowdown" => "ArrowDown",
+                "left" | "arrowleft" => "ArrowLeft",
+                "right" | "arrowright" => "ArrowRight",
+                "home" => "Home",
+                "end" => "End",
+                "pageup" | "pgup" => "PageUp",
+                "pagedown" | "pgdn" => "PageDown",
+                _ => "",
+            };
+            if named.is_empty() {
+                part.trim().to_string()
+            } else {
+                named.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// Whether an action on an element is a commit, and the capability it
+/// needs, from what the helper found out about the element (`facts`). The
+/// same rule for an element named by ref and for one under a point:
+/// clicking a control that submits a form with an unsafe method (or
+/// pressing Enter in a field of one) is a commit, as is anything the call
+/// marks `commit`. `kind` is the action as it reaches the element: `click`
+/// (also `click_at`), `press` (also a typed newline), `fill` (typing),
+/// `download` (a click that saves a file), `upload`, `select`, `check`.
+/// `frame` says the target is an embedded frame whose content cannot be
+/// inspected: a click into it, or Enter pressed in it, is then treated as
+/// a commit.
+fn classify(
+    kind: &str,
+    facts: &Value,
+    flagged: bool,
+    frame: bool,
+    enter: bool,
+) -> (bool, Capability) {
+    let submits = facts["submits"].as_bool().unwrap_or(false);
+    let method = facts["method"].as_str().unwrap_or("");
+    let unsafe_method = !matches!(method, "get" | "dialog");
+    let commit = flagged
+        || (submits && unsafe_method && matches!(kind, "click" | "press" | "download"))
+        || (frame && (matches!(kind, "click" | "download") || (kind == "press" && enter)));
+    let capability = match kind {
+        "download" => Capability::FileWrite,
+        _ if commit => Capability::Commit,
+        _ => Capability::Interact,
+    };
+    (commit, capability)
 }
 
 /// The `browser` tool.
@@ -432,8 +625,21 @@ struct Args {
     url_contains: Option<String>,
     selector: Option<String>,
     load: Option<String>,
-    download: bool,
+    /// `wait`: true for a download started earlier; `click_at` (pixels
+    /// mode): where to save the download the click starts.
+    download: Option<DownloadArg>,
     overwrite: bool,
+    /// Pixels mode: a point and a scroll distance, in screenshot pixels.
+    x: Option<f64>,
+    y: Option<f64>,
+    dx: Option<f64>,
+    dy: Option<f64>,
+    /// Pixels mode: `press`'s key or combination.
+    keys: Option<String>,
+    /// Pixels mode: files for the chooser a `click_at` opens.
+    upload: Vec<String>,
+    /// Pixels mode: `wait`'s fixed delay.
+    ms: Option<u64>,
     next: Option<String>,
     max_pages: Option<u64>,
     accept: Option<bool>,
@@ -442,6 +648,69 @@ struct Args {
     steps: Vec<Value>,
     expect: Option<Expect>,
     navigates: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum DownloadArg {
+    Flag(bool),
+    Path(String),
+}
+
+impl Args {
+    /// `wait` with `download: true`.
+    fn waits_for_download(&self) -> bool {
+        matches!(self.download, Some(DownloadArg::Flag(true)))
+    }
+
+    /// `click_at` with `download: "<path>"`.
+    fn download_path(&self) -> Option<&str> {
+        match &self.download {
+            Some(DownloadArg::Path(path)) => Some(path),
+            _ => None,
+        }
+    }
+
+    /// What a `pixels`-mode call may carry, and nothing that targets an
+    /// element by ref or text: `type`'s text travels as `value`, `press`'s
+    /// keys as `key`, so no field the call gives is read as a locator.
+    fn for_pixels(self) -> Args {
+        let value = match self.action.as_str() {
+            "type" => self.text.clone(),
+            _ => None,
+        };
+        let key = match self.action.as_str() {
+            "press" => self
+                .keys
+                .as_deref()
+                .or(self.key.as_deref())
+                .map(normalize_keys),
+            _ => None,
+        };
+        Args {
+            action: self.action,
+            profile: self.profile,
+            tab: self.tab,
+            url: self.url,
+            value,
+            key,
+            commit: self.commit,
+            reconciled: self.reconciled,
+            timeout_ms: self.timeout_ms,
+            load: self.load,
+            download: self.download.filter(|d| matches!(d, DownloadArg::Path(_))),
+            overwrite: self.overwrite,
+            accept: self.accept,
+            prompt_text: self.prompt_text,
+            x: self.x,
+            y: self.y,
+            dx: self.dx,
+            dy: self.dy,
+            upload: self.upload,
+            ms: self.ms,
+            ..Args::default()
+        }
+    }
 }
 
 fn now_ms() -> u64 {
@@ -735,6 +1004,10 @@ impl BrowserTool {
         &self.config
     }
 
+    fn pixels(&self) -> bool {
+        self.config.observation == Observation::Pixels
+    }
+
     /// The grants in force.
     pub fn authorization(&self) -> Authorization {
         self.authorization
@@ -805,6 +1078,7 @@ impl BrowserTool {
         st.helper = None;
         st.tabs.clear();
         st.refs.clear();
+        st.shots.clear();
         st.current.clear();
         self.pid.store(0, Ordering::Relaxed);
     }
@@ -907,6 +1181,7 @@ impl BrowserTool {
         lost.sort();
         st.tabs.clear();
         st.refs.clear();
+        st.shots.clear();
         st.current.clear();
         st.notice = Some(format!(
             "The browser helper crashed and will restart on the next call; all refs from before \
@@ -1369,6 +1644,12 @@ impl BrowserTool {
             },
         );
         st.current.insert(ctx.session_id.clone(), tab.clone());
+        if self.pixels() {
+            // The caller adds the screenshot; no page text.
+            return Ok(ToolOutput::ok(format!(
+                "Opened tab {tab} in profile {profile}."
+            )));
+        }
         let obs = self
             .observe_text(
                 st,
@@ -1416,6 +1697,16 @@ impl BrowserTool {
         if back && v["moved"] == json!(false) {
             text.push_str("There was no earlier page in this tab's history.\n");
         }
+        if self.pixels() {
+            if text.is_empty() {
+                text = if back {
+                    "Went back.".into()
+                } else {
+                    "Navigated.".into()
+                };
+            }
+            return Ok(ToolOutput::ok(text.trim_end().to_string()));
+        }
         let obs = self
             .observe_text(
                 st,
@@ -1460,52 +1751,121 @@ impl BrowserTool {
         in_batch: bool,
     ) -> Result<ToolOutput, Failure> {
         let kind = args.action.as_str();
+        // In the pixels mode every action is aimed at a point or at the
+        // focused element, never at a ref.
+        let pixel = self.pixels();
         let need = |field: &str| Failure::new("invalid_input", format!("{kind} needs {field}"));
         match kind {
             "fill" | "select" if args.value.is_none() => return Err(need("value")),
-            "press" if args.key.is_none() => return Err(need("key")),
+            "type" if args.value.is_none() => return Err(need("text")),
+            "press" if args.key.is_none() => {
+                return Err(need(if pixel { "keys" } else { "key" }));
+            }
             "upload" | "download" if args.path.is_none() => return Err(need("path")),
+            "click_at" if args.x.is_none() || args.y.is_none() => return Err(need("x and y")),
+            "scroll" if args.dx.is_none() && args.dy.is_none() => {
+                return Err(need("dx or dy"));
+            }
             _ => {}
         }
-        if args.r#ref.is_none() && args.text.is_none() && kind != "press" {
+        let pointer = matches!(kind, "click_at" | "type" | "scroll");
+        if !pointer && args.r#ref.is_none() && args.text.is_none() && kind != "press" {
             return Err(Failure::new(
                 "invalid_input",
                 format!("{kind} needs ref (from observe) or text"),
             ));
         }
-        let upload = match kind {
-            "upload" => Some(workspace_file(ctx, args.path.as_deref().unwrap_or(""))?),
+        let upload_paths: Vec<&str> = match kind {
+            "upload" => vec![args.path.as_deref().unwrap_or("")],
+            "click_at" => args.upload.iter().map(String::as_str).collect(),
+            _ => Vec::new(),
+        };
+        let save_to = match kind {
+            "download" => args.path.as_deref(),
+            "click_at" => args.download_path(),
             _ => None,
         };
-        let upload_at = match &upload {
-            Some(file) => {
-                let root = canonical(&ctx.cwd);
-                let parts = parts_below(&root, file).ok_or_else(|| {
+        if !upload_paths.is_empty() && save_to.is_some() {
+            return Err(Failure::new(
+                "invalid_input",
+                "one click_at either uploads or downloads, not both",
+            ));
+        }
+        let mut upload = Vec::new();
+        for path in &upload_paths {
+            upload.push(workspace_file(ctx, path)?);
+        }
+        let root = canonical(&ctx.cwd);
+        let upload_parts = upload
+            .iter()
+            .map(|file| {
+                parts_below(&root, file).ok_or_else(|| {
                     Failure::new("unauthorized", "the file is outside the workspace")
-                })?;
-                Some((root, parts))
-            }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let dest = match save_to {
+            Some(path) => Some(workspace_dest(ctx, path, args.overwrite)?),
             None => None,
-        };
-        let dest = match kind {
-            "download" => Some(workspace_dest(
-                ctx,
-                args.path.as_deref().unwrap_or(""),
-                args.overwrite,
-            )?),
-            _ => None,
         };
         let tab = self.pick_tab(st, ctx, args)?;
         report.tab = Some(tab.clone());
         st.current.insert(ctx.session_id.clone(), tab.clone());
         let timeout = self.timeout(args);
 
+        // A point is given in the latest screenshot's pixels; the browser
+        // clicks in CSS pixels of the viewport.
+        let shot = match kind {
+            "click_at" | "scroll" => Some(*st.shots.get(&tab).ok_or_else(|| {
+                Failure::new(
+                    "invalid_input",
+                    format!(
+                        "there is no screenshot of tab {tab} to take coordinates from; take a \
+                         screenshot first"
+                    ),
+                )
+            })?),
+            _ => None,
+        };
+        let point = match (kind, shot) {
+            ("click_at", Some(shot)) => {
+                Some(shot.to_css(args.x.unwrap_or(0.0), args.y.unwrap_or(0.0))?)
+            }
+            ("scroll", Some(shot)) => Some(shot.to_css(
+                args.x.unwrap_or(shot.width / 2.0),
+                args.y.unwrap_or(shot.height / 2.0),
+            )?),
+            _ => None,
+        };
+        let delta = shot.map(|s| s.delta_to_css(args.dx.unwrap_or(0.0), args.dy.unwrap_or(0.0)));
+        // Text typed with a newline presses Enter.
+        let newline = kind == "type"
+            && args
+                .value
+                .as_deref()
+                .is_some_and(|t| t.contains(['\n', '\r']));
+        let enter = newline || (kind == "press" && args.key.as_deref().is_some_and(is_enter));
+
         // Look first: what the element is decides the capability.
-        let mut inspect = json!({
-            "op": "inspect", "tab": tab, "kind": kind, "ref": args.r#ref, "text": args.text,
-            "role": args.role, "key": args.key, "preflight_ms": timeout.min(3000),
-        });
-        if args.r#ref.is_none() && args.text.is_none() {
+        let mut inspect = match (kind, point) {
+            ("click_at", Some((x, y))) => {
+                json!({"op": "inspect_point", "tab": tab, "x": x, "y": y})
+            }
+            ("scroll", _) => json!({"op": "inspect", "tab": tab, "kind": "scroll"}),
+            ("type", _) => json!({
+                "op": "inspect", "tab": tab, "kind": "type", "focused": true,
+                "key": if newline { Some("Enter") } else { None },
+            }),
+            _ => json!({
+                "op": "inspect", "tab": tab, "kind": kind, "ref": args.r#ref, "text": args.text,
+                "role": args.role,
+                // In the pixels mode a modified Enter (Control+Enter) is
+                // read as Enter: it submits a form just the same.
+                "key": if pixel && enter { Some("Enter") } else { args.key.as_deref() },
+                "preflight_ms": timeout.min(3000),
+            }),
+        };
+        if kind == "press" && args.r#ref.is_none() && args.text.is_none() {
             inspect["focused"] = json!(true);
         }
         let info = match self.send(st, inspect, timeout).await {
@@ -1546,23 +1906,74 @@ impl BrowserTool {
         let facts = &info["facts"];
         let origin = info["origin"].as_str().map(String::from);
         let url = info["url"].as_str().unwrap_or("").to_string();
+        if kind == "click_at"
+            && let Some(shot) = shot
+            && info["generation"].as_u64() != Some(shot.generation)
+        {
+            return Err(Failure::new(
+                "stale_point",
+                format!(
+                    "tab {tab} loaded another page after the screenshot these coordinates come \
+                     from"
+                ),
+            ));
+        }
+        if kind == "type" && facts.is_null() {
+            return Err(Failure::new(
+                "not_actionable",
+                "nothing has keyboard focus, so there is nowhere to type",
+            ));
+        }
         let submits = facts["submits"].as_bool().unwrap_or(false);
         let method = facts["method"].as_str().unwrap_or("");
         let unsafe_method = !matches!(method, "get" | "dialog");
-        let commit = args.commit
-            || (submits && unsafe_method && matches!(kind, "click" | "press" | "download"));
-        let capability = match kind {
-            "download" => Capability::FileWrite,
-            _ if commit => Capability::Commit,
-            _ => Capability::Interact,
+        // An embedded frame's content cannot be inspected from the page.
+        let frame = pixel && facts["frame"] == json!(true);
+        // The action as it reaches the element.
+        let class_kind = match kind {
+            "click_at" if dest.is_some() => "download",
+            "click_at" => "click",
+            "type" if newline => "press",
+            "type" => "fill",
+            other => other,
+        };
+        let (commit, capability) = classify(class_kind, facts, args.commit, frame, enter);
+        // What the point or focus landed on, for refusals and the receipt.
+        let element = if pixel && !facts.is_null() {
+            format!(
+                "{} {}\"{}\"{}{}",
+                facts["tag"].as_str().unwrap_or("element"),
+                facts["role"]
+                    .as_str()
+                    .filter(|r| !r.is_empty())
+                    .map(|r| format!("({r}) "))
+                    .unwrap_or_default(),
+                facts["name"].as_str().unwrap_or(""),
+                if submits { " that submits a form" } else { "" },
+                if frame {
+                    ", an embedded frame whose content cannot be inspected, so the action is \
+                     treated as a commit"
+                } else {
+                    ""
+                },
+            )
+        } else {
+            String::new()
+        };
+        let explain = |mut f: Failure| {
+            if !element.is_empty() {
+                f.message = format!("{kind} reaches {element}: {}", f.message);
+            }
+            f
         };
 
         let mut target = self.target(st, ctx, &tab)?;
         target.origin = origin.clone();
         target.document = Some(url.clone());
-        self.authorize(&target, capability)?;
-        if kind == "download" && commit {
-            self.authorize(&target, Capability::Commit)?;
+        self.authorize(&target, capability).map_err(explain)?;
+        if class_kind == "download" && commit {
+            self.authorize(&target, Capability::Commit)
+                .map_err(explain)?;
         }
         // Where the action leads must be granted too: a form posting to
         // another origin, or a link out.
@@ -1577,10 +1988,13 @@ impl BrowserTool {
                 },
             ));
         }
-        if kind == "click"
+        if class_kind == "click"
             && let Some(href) = facts["href"].as_str()
         {
             destinations.push((href.to_string(), Capability::Observe));
+        }
+        if frame && let Some(src) = facts["src"].as_str() {
+            destinations.push((src.to_string(), Capability::Commit));
         }
         for (dest_url, cap) in destinations {
             if let Some(dest_origin) = origin_of(&dest_url)
@@ -1590,15 +2004,24 @@ impl BrowserTool {
                 dest.origin = Some(dest_origin);
                 dest.document = Some(dest_url.clone());
                 if let Some(why) = self.authorization().refusal(&dest, cap) {
-                    return Err(Failure::new(
+                    return Err(explain(Failure::new(
                         "unauthorized",
                         format!("this {kind} leads to {dest_url}. {why}"),
-                    ));
+                    )));
                 }
             }
         }
 
-        let key = commit.then(|| idempotency_key(origin.as_deref().unwrap_or(""), &url, facts));
+        // A click into a frame is told apart by where it lands.
+        let mut key_facts = facts.clone();
+        if frame && let (Some(x), Some(y)) = (args.x, args.y) {
+            key_facts["control"] = json!(format!(
+                "{}@{x},{y}",
+                facts["control"].as_str().unwrap_or("")
+            ));
+        }
+        let key =
+            commit.then(|| idempotency_key(origin.as_deref().unwrap_or(""), &url, &key_facts));
         if let Some(key) = &key
             && let Some(prior) = ActionJournal::prior_effect(&self.receipts(st, ctx), key)
         {
@@ -1611,10 +2034,17 @@ impl BrowserTool {
                 Some(op) if op == &prior.op_id => {
                     return Err(Failure::new(
                         "duplicate_commit",
-                        format!(
-                            "reconciled={op} needs an observation of this page taken after that \
-                             operation settled; observe first"
-                        ),
+                        if pixel {
+                            format!(
+                                "reconciled={op} needs a screenshot of this page taken after \
+                                 that operation settled; take one first"
+                            )
+                        } else {
+                            format!(
+                                "reconciled={op} needs an observation of this page taken after \
+                                 that operation settled; observe first"
+                            )
+                        },
                     ));
                 }
                 _ => {
@@ -1631,22 +2061,43 @@ impl BrowserTool {
             }
         }
 
+        // A password, or text typed into a frame that may hold one, never
+        // reaches the journal.
+        let secret = facts["password"] == json!(true) || frame;
+        let file_names = || {
+            upload
+                .iter()
+                .filter_map(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
         let emitted = match kind {
-            "fill" if facts["password"] == json!(true) => vec!["<redacted>".to_string()],
-            "fill" | "select" => vec![args.value.clone().unwrap_or_default()],
+            "fill" | "type" if secret => vec!["<redacted>".to_string()],
+            "fill" | "select" | "type" => vec![args.value.clone().unwrap_or_default()],
             "check" => vec![format!("checked={}", args.checked.unwrap_or(true))],
             "press" => vec![args.key.clone().unwrap_or_default()],
-            "upload" => vec![
-                upload
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            ],
+            "upload" => file_names(),
+            "click_at" => {
+                let mut out = vec![format!(
+                    "click_at {},{}",
+                    args.x.unwrap_or(0.0),
+                    args.y.unwrap_or(0.0)
+                )];
+                out.extend(file_names());
+                out
+            }
+            "scroll" => vec![format!(
+                "scroll {},{}",
+                args.dx.unwrap_or(0.0),
+                args.dy.unwrap_or(0.0)
+            )],
             _ => vec![kind.to_string()],
         };
         let mut receipt = self.begin(st, ctx, kind, &target, capability, key, emitted)?;
         receipt.observation_id = info["obs"].as_str().map(String::from);
+        if !element.is_empty() {
+            receipt.evidence.push(format!("target: {element}"));
+        }
         report.capability = Some(capability);
 
         let mut act = json!({
@@ -1654,9 +2105,35 @@ impl BrowserTool {
             "value": args.value, "checked": args.checked.unwrap_or(true), "key": args.key,
             "timeout_ms": timeout,
         });
-        if let Some((root, parts)) = &upload_at {
-            act["upload_root"] = json!(root);
-            act["upload_parts"] = json!(parts);
+        match kind {
+            "upload" => {
+                act["upload_root"] = json!(root);
+                act["upload_parts"] = json!(upload_parts.first());
+            }
+            "click_at" if !upload_parts.is_empty() => {
+                act["upload_root"] = json!(root);
+                act["upload_list"] = json!(upload_parts);
+            }
+            _ => {}
+        }
+        if let Some((x, y)) = point {
+            act["x"] = json!(x);
+            act["y"] = json!(y);
+        }
+        if let Some((dx, dy)) = delta {
+            act["dx"] = json!(dx);
+            act["dy"] = json!(dy);
+        }
+        if kind == "click_at" {
+            // The helper checks the element under the point is still the
+            // one authorized here before it clicks.
+            act["expect_fp"] = facts["fp"].clone();
+        }
+        if pointer {
+            // Raw input does not wait for the navigation it starts; one
+            // that submits a form or follows a link gives it longer.
+            act["expect_navigation"] =
+                json!(submits || (class_kind == "click" && facts["href"].is_string()));
         }
         if let Some(dest) = &dest {
             dest.fill(&mut act, args.overwrite);
@@ -1681,8 +2158,13 @@ impl BrowserTool {
                     let _ = write!(
                         f.message,
                         ". [outcome_unknown] The action was sent and may have taken effect: \
-                         observe and check before repeating it; a repeat of a commit needs \
+                         {} and check before repeating it; a repeat of a commit needs \
                          reconciled={}",
+                        if pixel {
+                            "take a screenshot"
+                        } else {
+                            "observe"
+                        },
                         receipt.op_id
                     );
                 }
@@ -1699,16 +2181,38 @@ impl BrowserTool {
             ));
         }
         let mut parts = Vec::new();
-        let mut text = format!(
-            "{kind} {} ({} \"{}\")",
-            ref_id.as_deref().unwrap_or("(focused element)"),
-            info["role"].as_str().unwrap_or(""),
-            info["name"].as_str().unwrap_or("")
-        );
+        // In the pixels mode the result says what was done, not what the
+        // page holds: the screenshot that follows shows that.
+        let mut text = match kind {
+            "click_at" => format!(
+                "click_at ({}, {})",
+                args.x.unwrap_or(0.0),
+                args.y.unwrap_or(0.0)
+            ),
+            "type" => format!(
+                "typed {} characters",
+                args.value.as_deref().unwrap_or("").chars().count()
+            ),
+            "scroll" => format!(
+                "scrolled by ({}, {})",
+                args.dx.unwrap_or(0.0),
+                args.dy.unwrap_or(0.0)
+            ),
+            "press" if pixel => format!("pressed {}", args.key.as_deref().unwrap_or("")),
+            _ => format!(
+                "{kind} {} ({} \"{}\")",
+                ref_id.as_deref().unwrap_or("(focused element)"),
+                info["role"].as_str().unwrap_or(""),
+                info["name"].as_str().unwrap_or("")
+            ),
+        };
         if commit {
             text.push_str(" as a commit");
         }
-        if let Some(value) = v["value"].as_str() {
+        if let Some(files) = v["files"].as_array().filter(|_| kind == "click_at") {
+            let _ = write!(text, "; gave the file chooser {} file(s)", files.len());
+        }
+        if let Some(value) = v["value"].as_str().filter(|_| !pixel && !secret) {
             if Some(value) != args.value.as_deref() && kind == "fill" {
                 let _ = write!(
                     text,
@@ -1770,18 +2274,25 @@ impl BrowserTool {
         if navigated {
             let _ = write!(
                 text,
-                "\nThe page navigated to {} (HTTP {}); refs from before are stale.",
+                "\nThe page navigated to {} (HTTP {}); {}.",
                 fence(v["url"].as_str().unwrap_or("")),
-                v["status"]
+                v["status"],
+                if pixel {
+                    "coordinates from before refer to the old page"
+                } else {
+                    "refs from before are stale"
+                }
             );
         }
         if let Some(modal) = v["modal"].as_str() {
             report.dialog = true;
-            let _ = write!(
-                text,
-                "\nThe action opened an in-page modal dialog \"{}\" (untrusted page text).",
-                fence(modal)
-            );
+            if !pixel {
+                let _ = write!(
+                    text,
+                    "\nThe action opened an in-page modal dialog \"{}\" (untrusted page text).",
+                    fence(modal)
+                );
+            }
         }
         if let Some(tabs) = v["new_tabs"].as_array().filter(|t| !t.is_empty()) {
             let ids: Vec<&str> = tabs.iter().filter_map(Value::as_str).collect();
@@ -1811,7 +2322,7 @@ impl BrowserTool {
                 ),
             ));
         }
-        if (navigated && !in_batch) || args.observe {
+        if !pixel && ((navigated && !in_batch) || args.observe) {
             let obs = self
                 .observe_text(
                     st,
@@ -1845,7 +2356,7 @@ impl BrowserTool {
             "url_contains": args.url_contains, "selector": args.selector, "load": args.load,
             "timeout_ms": timeout,
         });
-        if args.download {
+        if args.waits_for_download() {
             let path = args
                 .path
                 .as_deref()
@@ -1988,6 +2499,16 @@ impl BrowserTool {
         ctx: &ToolContext,
         args: &Args,
     ) -> Result<ToolOutput, Failure> {
+        Ok(self.screenshot(st, ctx, args).await?.0)
+    }
+
+    /// A screenshot and the helper's reply (with the tab's url and title).
+    async fn screenshot(
+        &self,
+        st: &mut State,
+        ctx: &ToolContext,
+        args: &Args,
+    ) -> Result<(ToolOutput, Value), Failure> {
         let tab = self.pick_tab(st, ctx, args)?;
         let store = ctx.artifacts.clone().ok_or_else(|| {
             Failure::new(
@@ -2042,6 +2563,28 @@ impl BrowserTool {
             derived_from: None,
         });
         artifact.name = Some(format!("{tab}.png"));
+        if args.r#ref.is_none() {
+            // A view of the whole viewport: the coordinates of the pixels
+            // mode are in it, and it counts as looking at the page.
+            let scale = v["scale"].as_f64().unwrap_or(1.0);
+            let width = artifact
+                .width
+                .map(f64::from)
+                .unwrap_or((crop[2] * scale).round());
+            let height = artifact
+                .height
+                .map(f64::from)
+                .unwrap_or((crop[3] * scale).round());
+            let generation = v["generation"].as_u64().unwrap_or(0);
+            st.shots.insert(
+                tab.clone(),
+                Shot::new(width, height, crop[2], crop[3], generation),
+            );
+            if let Some(info) = st.tabs.get(&tab) {
+                let key = (info.profile.clone(), info.origin.clone());
+                st.observed.insert(key, now_ms());
+            }
+        }
         let text = format!(
             "Screenshot of {} in tab {tab}: {}x{} px, CSS crop {:?} at scale {}. Its content is \
              untrusted.",
@@ -2051,7 +2594,46 @@ impl BrowserTool {
             crop,
             v["scale"]
         );
-        Ok(ToolOutput::ok(text).with_part(Block::Image { artifact }))
+        Ok((ToolOutput::ok(text).with_part(Block::Image { artifact }), v))
+    }
+
+    /// The view of the pixels mode: a viewport screenshot of `tab` and a
+    /// one-line header (tab, profile, URL, title), appended to `out`. No
+    /// text from the page's content is included.
+    async fn pixel_view(
+        &self,
+        st: &mut State,
+        ctx: &ToolContext,
+        tab: &str,
+        out: &mut ToolOutput,
+    ) -> Result<(), Failure> {
+        let shot = Args {
+            action: "screenshot".into(),
+            tab: Some(tab.to_string()),
+            ..Args::default()
+        };
+        let (image, v) = self.screenshot(st, ctx, &shot).await?;
+        let (width, height) = st
+            .shots
+            .get(tab)
+            .map(|s| (s.width, s.height))
+            .unwrap_or_default();
+        let profile = st
+            .tabs
+            .get(tab)
+            .map(|t| t.profile.clone())
+            .unwrap_or_default();
+        // The title is what the browser's tab strip shows; the header is
+        // all the text a view carries.
+        let _ = write!(
+            out.text,
+            "\n[tab {tab} profile={profile}] url: {} title: \"{}\" | screenshot {width}x{height} \
+             px attached (untrusted content); x and y for click_at and scroll are pixels of it.",
+            fence(v["url"].as_str().unwrap_or("")),
+            fence(v["title"].as_str().unwrap_or(""))
+        );
+        out.parts.extend(image.parts);
+        Ok(())
     }
 
     async fn op_tabs(
@@ -2213,6 +2795,7 @@ impl BrowserTool {
         }
         st.tabs.remove(&tab);
         st.refs.retain(|_, r| r.tab != tab);
+        st.shots.remove(&tab);
         st.current.retain(|_, t| t != &tab);
         Ok(ToolOutput::ok(format!("Closed tab {tab}.")))
     }
@@ -2308,7 +2891,7 @@ impl BrowserTool {
         let mut result = self
             .dispatch(&mut st, ctx, &args, &mut report, slot.is_some())
             .await;
-        if self.config.screenshot_observations
+        if self.config.observation == Observation::Screenshot
             && let Ok(out) = &mut result
             && out.text.contains("<page-content")
         {
@@ -2371,6 +2954,125 @@ impl BrowserTool {
                 );
             }
         }
+    }
+
+    /// One call in the pixels mode: only its actions, no refs or page
+    /// text, and a fresh viewport screenshot after every action that
+    /// changes or shows the page, so each model decision sees the screen
+    /// once.
+    async fn call_pixels(&self, input: &Value, ctx: &ToolContext) -> ToolOutput {
+        let action = input["action"].as_str().unwrap_or("");
+        if !schema::PIXEL_ACTIONS.contains(&action) {
+            return ToolOutput::error(
+                Failure::new(
+                    "invalid_input",
+                    format!(
+                        "action {action:?} is not offered: this browser works from screenshots \
+                         (observation = \"pixels\") and takes one of: {}",
+                        schema::PIXEL_ACTIONS.join(", ")
+                    ),
+                )
+                .render_pixels(),
+            );
+        }
+        let args = match Args::deserialize(input) {
+            Ok(args) => args.for_pixels(),
+            Err(e) => {
+                return ToolOutput::error(
+                    Failure::new("invalid_input", format!("unreadable input: {e}")).render_pixels(),
+                );
+            }
+        };
+        let mut report = StepReport::default();
+        let mut st = self.state.lock().await;
+        let earlier = st.notice.take();
+        let result = match action {
+            "open" => self.op_open(&mut st, ctx, &args).await,
+            "navigate" => self.op_navigate(&mut st, ctx, &args, false).await,
+            "back" => self.op_navigate(&mut st, ctx, &args, true).await,
+            "screenshot" => self
+                .pick_tab(&st, ctx, &args)
+                .map(|tab| ToolOutput::ok(format!("Screenshot of tab {tab}."))),
+            "tabs" => self.op_tabs(&mut st, ctx, &args).await,
+            "wait" => self.pixel_wait(&mut st, ctx, &args).await,
+            "dialog" => self.op_dialog(&mut st, ctx, &args, &mut report).await,
+            "close" => self.op_close(&mut st, ctx, &args).await,
+            _ => self.op_act(&mut st, ctx, &args, &mut report, false).await,
+        };
+        let shows = match action {
+            "tabs" => args.tab.is_some(),
+            // Another native dialog would hold the screenshot.
+            "dialog" => !report.dialog,
+            "wait" | "close" => false,
+            _ => true,
+        };
+        let view = match action {
+            "open" => None,
+            _ => args.tab.clone(),
+        }
+        .or_else(|| st.current.get(&ctx.session_id).cloned());
+        let mut out = match result {
+            Ok(mut out) => match view.filter(|_| shows) {
+                None => out,
+                Some(tab) => match self.pixel_view(&mut st, ctx, &tab, &mut out).await {
+                    Ok(()) => out,
+                    // A screenshot was what the call asked for.
+                    Err(f) if action == "screenshot" => ToolOutput::error(f.render_pixels()),
+                    Err(f) => {
+                        let _ = write!(
+                            out.text,
+                            "\nThe screenshot for this view failed: {}",
+                            f.render_pixels()
+                        );
+                        out
+                    }
+                },
+            },
+            Err(f) => ToolOutput::error(f.render_pixels()),
+        };
+        let events = std::mem::take(&mut st.events);
+        drop(st);
+        if let Some(notice) = earlier {
+            out.text = format!("{notice}\n{}", out.text);
+        }
+        if !events.is_empty() {
+            let _ = write!(
+                out.text,
+                "\nBrowser events (page text in them is untrusted): {}",
+                events.join("; ")
+            );
+        }
+        out
+    }
+
+    /// `wait` in the pixels mode: a fixed time or a load state, nothing
+    /// that names page content.
+    async fn pixel_wait(
+        &self,
+        st: &mut State,
+        ctx: &ToolContext,
+        args: &Args,
+    ) -> Result<ToolOutput, Failure> {
+        let tab = self.pick_tab(st, ctx, args)?;
+        let req = match (args.ms, &args.load) {
+            (Some(ms), None) => json!({"op": "wait", "ms": ms.min(30_000)}),
+            (None, Some(load)) => {
+                json!({"op": "wait", "load": load, "timeout_ms": self.timeout(args)})
+            }
+            _ => {
+                return Err(Failure::new(
+                    "invalid_input",
+                    "wait takes either ms (a fixed time) or load (a load state)",
+                ));
+            }
+        };
+        let timeout = args.ms.unwrap_or(0).min(30_000) + self.timeout(args);
+        self.tab_read(st, ctx, &tab, Capability::Observe, req, timeout)
+            .await?;
+        Ok(ToolOutput::ok(match args.ms {
+            Some(ms) => format!("Waited {} ms.", ms.min(30_000)),
+            None => "The load state was reached.".into(),
+        }))
     }
 
     async fn batch(&self, args: &Args, ctx: &ToolContext) -> ToolOutput {
@@ -2569,12 +3271,16 @@ impl BrowserTool {
 
 impl Tool for BrowserTool {
     fn spec(&self) -> ToolSpec {
+        if self.pixels() {
+            // One action per decision, whatever `batch` says.
+            return schema::pixels_spec();
+        }
         let mut spec = if self.config.batch {
             schema::spec()
         } else {
             schema::spec_without_batch()
         };
-        if self.config.screenshot_observations {
+        if self.config.observation == Observation::Screenshot {
             schema::without_extract(&mut spec);
         }
         spec
@@ -2594,7 +3300,12 @@ impl Tool for BrowserTool {
 
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
-            if input["action"] == json!("extract") && self.config.screenshot_observations {
+            if self.pixels() {
+                return self.call_pixels(input, ctx).await;
+            }
+            if input["action"] == json!("extract")
+                && self.config.observation == Observation::Screenshot
+            {
                 return ToolOutput::error(
                     Failure::new(
                         "invalid_input",
@@ -2798,6 +3509,236 @@ mod tests {
             out.is_error && out.text.contains("turned off"),
             "{}",
             out.text
+        );
+    }
+
+    #[test]
+    fn the_pixels_schema_offers_exactly_the_coordinate_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        for batch in [true, false] {
+            let mut config = BrowserConfig::new(dir.path(), Authorization::default());
+            config.observation = Observation::Pixels;
+            config.batch = batch;
+            let spec = BrowserTool::new(config).spec();
+            let actions: Vec<&str> = spec.input_schema["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                actions,
+                [
+                    "open",
+                    "navigate",
+                    "back",
+                    "tabs",
+                    "wait",
+                    "dialog",
+                    "close",
+                    "screenshot",
+                    "click_at",
+                    "type",
+                    "press",
+                    "scroll"
+                ]
+            );
+            let properties = spec.input_schema["properties"].as_object().unwrap();
+            for gone in [
+                "ref",
+                "role",
+                "value",
+                "checked",
+                "key",
+                "path",
+                "scope",
+                "max_nodes",
+                "selector",
+                "text_gone",
+                "url_contains",
+                "next",
+                "max_pages",
+                "observe",
+                "steps",
+            ] {
+                assert!(!properties.contains_key(gone), "{gone}");
+            }
+            for needed in [
+                "x", "y", "dx", "dy", "text", "keys", "upload", "download", "ms",
+            ] {
+                assert!(properties.contains_key(needed), "{needed}");
+            }
+            assert!(
+                spec.description
+                    .contains("pixels of the most recent screenshot")
+            );
+            assert!(!spec.description.contains("batch"));
+        }
+        // The other modes keep their declarations.
+        let mut config = BrowserConfig::new(dir.path(), Authorization::default());
+        assert_eq!(BrowserTool::new(config.clone()).spec(), schema::spec());
+        config.observation = Observation::Screenshot;
+        let visual = BrowserTool::new(config).spec();
+        assert!(visual.input_schema["properties"].get("ref").is_some());
+        assert!(!visual.input_schema.to_string().contains("click_at"));
+    }
+
+    #[tokio::test]
+    async fn the_pixels_mode_refuses_ref_and_text_actions_before_starting_a_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrowserConfig::new(dir.path(), Authorization::default());
+        config.observation = Observation::Pixels;
+        let tool = BrowserTool::new(config);
+        let ctx = ToolContext::new(dir.path());
+        for input in [
+            json!({"action": "click", "ref": "e1"}),
+            json!({"action": "fill", "text": "Name", "value": "x"}),
+            json!({"action": "observe"}),
+            json!({"action": "extract"}),
+            json!({"action": "batch", "steps": [{"action": "screenshot"}]}),
+        ] {
+            let out = tool.call(&input, &ctx).await;
+            assert!(
+                out.is_error && out.text.contains("[invalid_input]"),
+                "{input}: {}",
+                out.text
+            );
+        }
+        assert!(tool.helper_pid().is_none());
+        // Only what the pixels actions use survives: `type`'s text is
+        // never read as a locator.
+        let args: Args = serde_json::from_value(
+            json!({"action": "type", "text": "hello", "ref": "e3", "selector": "#x", "role": "button"}),
+        )
+        .unwrap();
+        let args = args.for_pixels();
+        assert_eq!(args.value.as_deref(), Some("hello"));
+        assert!(args.text.is_none() && args.r#ref.is_none() && args.selector.is_none());
+        let args: Args =
+            serde_json::from_value(json!({"action": "press", "keys": "cmd+shift+z"})).unwrap();
+        assert_eq!(args.for_pixels().key.as_deref(), Some("Meta+Shift+z"));
+        let args: Args = serde_json::from_value(
+            json!({"action": "click_at", "x": 1, "y": 2, "download": "out/a.csv"}),
+        )
+        .unwrap();
+        assert_eq!(args.for_pixels().download_path(), Some("out/a.csv"));
+        let args: Args =
+            serde_json::from_value(json!({"action": "wait", "download": true, "path": "x"}))
+                .unwrap();
+        assert!(args.waits_for_download());
+    }
+
+    #[test]
+    fn screenshot_pixels_map_back_to_css_pixels() {
+        // A device-pixel-ratio-2 screenshot of a 1280x900 viewport.
+        let shot = Shot::new(2560.0, 1800.0, 1280.0, 900.0, 7);
+        assert_eq!(shot.to_css(1280.0, 900.0).unwrap(), (640.0, 450.0));
+        assert_eq!(shot.to_css(0.0, 0.0).unwrap(), (0.0, 0.0));
+        assert_eq!(shot.delta_to_css(0.0, 600.0), (0.0, 300.0));
+        // One image pixel per CSS pixel: unchanged.
+        let plain = Shot::new(1280.0, 900.0, 1280.0, 900.0, 1);
+        assert_eq!(plain.to_css(100.5, 899.0).unwrap(), (100.5, 899.0));
+        // A downsized screenshot is scaled up again.
+        let small = Shot::new(640.0, 450.0, 1280.0, 900.0, 1);
+        assert_eq!(small.to_css(320.0, 225.0).unwrap(), (640.0, 450.0));
+        for (x, y) in [
+            (-1.0, 10.0),
+            (10.0, -0.5),
+            (2560.0, 10.0),
+            (10.0, 1800.0),
+            (f64::NAN, 1.0),
+            (f64::INFINITY, 1.0),
+        ] {
+            assert_eq!(
+                shot.to_css(x, y).unwrap_err().code,
+                "invalid_input",
+                "{x},{y}"
+            );
+        }
+    }
+
+    #[test]
+    fn keys_are_named_as_playwright_names_them() {
+        assert_eq!(normalize_keys("ctrl+a"), "Control+a");
+        assert_eq!(normalize_keys("Return"), "Enter");
+        assert_eq!(normalize_keys("esc"), "Escape");
+        assert_eq!(normalize_keys("PageDown"), "PageDown");
+        assert_eq!(normalize_keys("alt+shift+Tab"), "Alt+Shift+Tab");
+        assert_eq!(normalize_keys("+"), "+");
+        assert!(is_enter("Enter") && is_enter("Control+Enter") && is_enter("return"));
+        assert!(!is_enter("Tab") && !is_enter("Enter+a"));
+    }
+
+    #[test]
+    fn what_a_point_lands_on_decides_whether_it_is_a_commit() {
+        // Descriptions as the helper gives them for the element under a
+        // point (the same facts as for an element named by ref).
+        let post_submit = json!({"tag": "button", "type": "submit", "submits": true,
+            "method": "post", "action": "http://h/submit", "role": "button", "name": "Place order"});
+        let get_submit = json!({"tag": "button", "submits": true, "method": "get",
+            "action": "http://h/search"});
+        let plain_button = json!({"tag": "button", "type": "button", "submits": false,
+            "method": "", "role": "button", "name": "Say hello"});
+        let link = json!({"tag": "a", "submits": false, "method": "", "href": "http://h/x"});
+        let iframe = json!({"tag": "iframe", "submits": false, "method": "", "frame": true});
+        // A text field in a POST form, described with key Enter.
+        let field_enter =
+            json!({"tag": "input", "type": "text", "submits": true, "method": "post"});
+
+        assert_eq!(
+            classify("click", &post_submit, false, false, false),
+            (true, Capability::Commit)
+        );
+        assert_eq!(
+            classify("click", &get_submit, false, false, false),
+            (false, Capability::Interact)
+        );
+        assert_eq!(
+            classify("click", &plain_button, false, false, false),
+            (false, Capability::Interact)
+        );
+        assert_eq!(
+            classify("click", &link, false, false, false),
+            (false, Capability::Interact)
+        );
+        // The call can always mark a commit.
+        assert_eq!(
+            classify("click", &plain_button, true, false, false),
+            (true, Capability::Commit)
+        );
+        // A frame's content is unknown: a click into it is a commit, and
+        // so is Enter pressed in it, but not other keys.
+        assert_eq!(
+            classify("click", &iframe, false, true, false),
+            (true, Capability::Commit)
+        );
+        assert_eq!(
+            classify("press", &iframe, false, true, true),
+            (true, Capability::Commit)
+        );
+        assert_eq!(
+            classify("press", &iframe, false, true, false),
+            (false, Capability::Interact)
+        );
+        // Enter (or a typed newline) in a POST form's field submits it.
+        assert_eq!(
+            classify("press", &field_enter, false, false, true),
+            (true, Capability::Commit)
+        );
+        // Typing without a newline is not.
+        assert_eq!(
+            classify("fill", &field_enter, false, false, false),
+            (false, Capability::Interact)
+        );
+        // A click that downloads needs FileWrite, and is still a commit
+        // when it submits.
+        assert_eq!(
+            classify("download", &post_submit, false, false, false),
+            (true, Capability::FileWrite)
+        );
+        assert_eq!(
+            classify("download", &link, false, false, false),
+            (false, Capability::FileWrite)
         );
     }
 

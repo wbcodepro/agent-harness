@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use hame_agent::{ToolPipeline, ToolRequest};
-use hame_browser::{BrowserConfig, BrowserTool, requirements};
+use hame_browser::{BrowserConfig, BrowserTool, Observation, requirements};
 use hame_kernel::{BoxFuture, Layer, Next};
 use hame_session::artifact::sha256_hex;
 use hame_session::contract::{
@@ -141,9 +141,23 @@ impl Env {
         Self::with(authorization, None)
     }
 
+    /// A tool in the `pixels` observation mode.
+    fn pixels(authorization: Authorization) -> Option<Self> {
+        Self::configured(authorization, None, |c| c.observation = Observation::Pixels)
+    }
+
     fn with(authorization: Authorization, pipeline: Option<Arc<ToolPipeline>>) -> Option<Self> {
+        Self::configured(authorization, pipeline, |_| {})
+    }
+
+    fn configured(
+        authorization: Authorization,
+        pipeline: Option<Arc<ToolPipeline>>,
+        configure: impl FnOnce(&mut BrowserConfig),
+    ) -> Option<Self> {
         let dir = tempfile::tempdir().unwrap();
-        let config = BrowserConfig::new(dir.path().join("profiles"), authorization);
+        let mut config = BrowserConfig::new(dir.path().join("profiles"), authorization);
+        configure(&mut config);
         if let Err(why) = requirements(&config) {
             eprintln!("SKIPPED (browser tests need Python Playwright and Chrome): {why}");
             return None;
@@ -1311,5 +1325,329 @@ async fn each_batch_step_goes_through_the_policy_pipeline() {
     );
     assert!(batch.text.contains("expected 'Ana'"), "{}", batch.text);
     assert!(batch.text.contains("value=\"Bo\""), "{}", batch.text);
+    env.finish().await;
+}
+
+// -- the pixels observation mode ------------------------------------------
+
+/// The viewport the helper opens, in CSS pixels.
+const VIEWPORT_WIDTH: f64 = 1280.0;
+
+/// The screenshot a pixels-mode view carries.
+fn screenshot_of(out: &ToolOutput) -> &hame_session::artifact::ArtifactRef {
+    out.parts
+        .iter()
+        .find_map(|p| match p {
+            Block::Image { artifact } => Some(artifact),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no screenshot in:\n{}", out.text))
+}
+
+/// The centre of the fixture box `left top width height` (CSS pixels), in
+/// the pixels of `view`'s screenshot.
+fn centre(view: &ToolOutput, left: f64, top: f64, width: f64, height: f64) -> (f64, f64) {
+    let scale = f64::from(screenshot_of(view).width.unwrap()) / VIEWPORT_WIDTH;
+    ((left + width / 2.0) * scale, (top + height / 2.0) * scale)
+}
+
+fn click_at((x, y): (f64, f64)) -> Value {
+    json!({"action": "click_at", "x": x, "y": y})
+}
+
+impl Env {
+    /// Waits for the fixture to have recorded `hit` from the page.
+    async fn wait_hit(&self, hit: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let hits = self.fixture.state()["hits"].clone();
+            if hits.as_array().unwrap().iter().any(|h| h == hit) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "no hit {hit:?}: {hits}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn page_text(&self) -> String {
+        self.tool
+            .page_state(Some("session-1"), None)
+            .await
+            .unwrap()
+            .text
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pixels_mode_shows_only_screenshots_and_acts_by_coordinates() {
+    let Some(env) = Env::pixels(everything()) else {
+        return;
+    };
+    let actions: Vec<String> = env.tool.spec().input_schema["properties"]["action"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "open",
+            "navigate",
+            "back",
+            "tabs",
+            "wait",
+            "dialog",
+            "close",
+            "screenshot",
+            "click_at",
+            "type",
+            "press",
+            "scroll"
+        ]
+    );
+    let view = env
+        .ok(json!({"action": "open", "url": env.fixture.url("/pixels")}))
+        .await;
+    screenshot_of(&view);
+    assert!(
+        view.text.contains("url: http://127.0.0.1") && view.text.contains("title: \"Pixels\""),
+        "{}",
+        view.text
+    );
+    for page_text in ["Say hello", "Place order", "echo", "<page-content", "[e"] {
+        assert!(!view.text.contains(page_text), "{page_text}: {}", view.text);
+    }
+
+    // A click by coordinates reaches the button there, and the result
+    // comes with a fresh screenshot.
+    let clicked = env
+        .ok(click_at(centre(&view, 40.0, 40.0, 200.0, 40.0)))
+        .await;
+    screenshot_of(&clicked);
+    assert!(!clicked.text.contains("Say hello"), "{}", clicked.text);
+    env.wait_hit("hello").await;
+
+    // A native dialog does not show in a screenshot: it is reported as
+    // text, and answering it brings the screenshot back.
+    let asked = env
+        .err(
+            click_at(centre(&view, 260.0, 40.0, 200.0, 40.0)),
+            "dialog_open",
+        )
+        .await;
+    assert!(asked.text.contains("Really go on?"), "{}", asked.text);
+    let answered = env.ok(json!({"action": "dialog", "accept": true})).await;
+    screenshot_of(&answered);
+    env.wait_hit("confirmed").await;
+
+    // Typing goes to the focused field.
+    env.ok(click_at(centre(&view, 40.0, 120.0, 300.0, 36.0)))
+        .await;
+    let typed = env.ok(json!({"action": "type", "text": "abc"})).await;
+    screenshot_of(&typed);
+    assert!(env.page_text().await.contains("echo: abc"));
+
+    // A password never reaches the journal.
+    env.ok(click_at(centre(&view, 40.0, 280.0, 300.0, 36.0)))
+        .await;
+    env.ok(json!({"action": "type", "text": "hunter2-secret"}))
+        .await;
+    let journal = std::fs::read_to_string(env.dir.path().join(ACTION_JOURNAL_FILE)).unwrap();
+    assert!(!journal.contains("hunter2"), "{journal}");
+    assert!(
+        env.receipts()
+            .iter()
+            .any(|r| r.action == "browser.type" && r.emitted == ["<redacted>"])
+    );
+
+    // Coordinates outside the screenshot, and anything aimed at a ref or
+    // at page text, are refused.
+    env.err(
+        json!({"action": "click_at", "x": 99999, "y": 10}),
+        "invalid_input",
+    )
+    .await;
+    env.err(
+        json!({"action": "click_at", "x": -1, "y": 10}),
+        "invalid_input",
+    )
+    .await;
+    for refused in [
+        json!({"action": "click", "ref": "e1"}),
+        json!({"action": "observe"}),
+        json!({"action": "extract"}),
+        json!({"action": "batch", "steps": [{"action": "screenshot"}]}),
+    ] {
+        env.err(refused, "invalid_input").await;
+    }
+
+    // The wheel scrolls the page under the point.
+    let scrolled = env.ok(json!({"action": "scroll", "dy": 300})).await;
+    screenshot_of(&scrolled);
+    let text = env.page_text().await;
+    assert!(
+        text.contains("scrollY=") && !text.contains("scrollY=0"),
+        "{text}"
+    );
+
+    // Like the screenshot mode, it needs Screen.
+    env.tool
+        .set_authorization(grant(&[Capability::Observe, Capability::Interact]));
+    env.err(json!({"action": "screenshot"}), "unauthorized")
+        .await;
+    env.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pixels_mode_clicks_and_keys_that_submit_are_commits() {
+    let Some(env) = Env::pixels(grant(&[
+        Capability::Observe,
+        Capability::Interact,
+        Capability::Screen,
+    ])) else {
+        return;
+    };
+    let view = env
+        .ok(json!({"action": "open", "url": env.fixture.url("/pixels")}))
+        .await;
+    let name = centre(&view, 40.0, 200.0, 300.0, 36.0);
+    let submit = centre(&view, 360.0, 200.0, 160.0, 36.0);
+    env.ok(click_at(name)).await;
+    env.ok(json!({"action": "type", "text": "Ana"})).await;
+
+    // Without a Commit grant: no submit by click, by Enter, or by a typed
+    // newline, and no click into a frame whose content is unknown.
+    let refused = env.err(click_at(submit), "unauthorized").await;
+    assert!(refused.text.contains("submits a form"), "{}", refused.text);
+    let frame = env
+        .err(
+            click_at(centre(&view, 600.0, 40.0, 300.0, 200.0)),
+            "unauthorized",
+        )
+        .await;
+    assert!(frame.text.contains("embedded frame"), "{}", frame.text);
+    env.err(json!({"action": "press", "keys": "Enter"}), "unauthorized")
+        .await;
+    env.err(
+        json!({"action": "press", "keys": "ctrl+enter"}),
+        "unauthorized",
+    )
+    .await;
+    env.err(json!({"action": "type", "text": "x\n"}), "unauthorized")
+        .await;
+    assert!(
+        env.fixture.state()["submissions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // With it, the click is a journalled commit.
+    env.tool.set_authorization(everything());
+    let sent = env.ok(click_at(submit)).await;
+    assert!(sent.text.contains("as a commit"), "{}", sent.text);
+    assert!(sent.text.contains("navigated"), "{}", sent.text);
+    screenshot_of(&sent);
+    assert_eq!(
+        env.fixture.state()["submissions"],
+        json!([{"ship_name": "Ana"}])
+    );
+    let receipts = env.receipts();
+    let commit: Vec<&ActionReceipt> = receipts
+        .iter()
+        .filter(|r| r.capability == Capability::Commit)
+        .collect();
+    assert_eq!(
+        commit.iter().map(|r| r.status).collect::<Vec<_>>(),
+        [
+            ActionStatus::NotStarted,
+            ActionStatus::Dispatched,
+            ActionStatus::Completed
+        ]
+    );
+    assert_eq!(commit[0].action, "browser.click_at");
+    assert!(
+        commit[0]
+            .idempotency_key
+            .as_deref()
+            .unwrap()
+            .starts_with("browser:")
+    );
+
+    // The same order again is a duplicate commit, as by ref.
+    let view = env
+        .ok(json!({"action": "navigate", "url": env.fixture.url("/pixels")}))
+        .await;
+    env.ok(click_at(centre(&view, 40.0, 200.0, 300.0, 36.0)))
+        .await;
+    env.ok(json!({"action": "type", "text": "Ana"})).await;
+    env.err(
+        click_at(centre(&view, 360.0, 200.0, 160.0, 36.0)),
+        "duplicate_commit",
+    )
+    .await;
+
+    // Enter in a form field submits it: a commit.
+    let view = env
+        .ok(json!({"action": "navigate", "url": env.fixture.url("/pixels")}))
+        .await;
+    env.ok(click_at(centre(&view, 40.0, 200.0, 300.0, 36.0)))
+        .await;
+    env.ok(json!({"action": "type", "text": "Bo"})).await;
+    let pressed = env.ok(json!({"action": "press", "keys": "Enter"})).await;
+    assert!(pressed.text.contains("as a commit"), "{}", pressed.text);
+    assert_eq!(
+        env.fixture.state()["submissions"],
+        json!([{"ship_name": "Ana"}, {"ship_name": "Bo"}])
+    );
+    assert!(env.receipts().iter().any(|r| r.action == "browser.press"
+        && r.capability == Capability::Commit
+        && r.status == ActionStatus::Completed));
+    env.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pixels_mode_uploads_and_downloads_through_a_click() {
+    let Some(env) = Env::pixels(everything()) else {
+        return;
+    };
+    std::fs::create_dir_all(env.workspace().join("docs")).unwrap();
+    std::fs::write(env.workspace().join("docs/a.txt"), "hello upload").unwrap();
+    std::fs::write(env.dir.path().join("secret.txt"), "outside").unwrap();
+    let view = env
+        .ok(json!({"action": "open", "url": env.fixture.url("/pixels")}))
+        .await;
+    let (x, y) = centre(&view, 40.0, 360.0, 300.0, 36.0);
+
+    // Only workspace files, checked before the click.
+    env.err(
+        json!({"action": "click_at", "x": x, "y": y, "upload": ["../secret.txt"]}),
+        "unauthorized",
+    )
+    .await;
+    let up = env
+        .ok(json!({"action": "click_at", "x": x, "y": y, "upload": ["docs/a.txt"]}))
+        .await;
+    assert!(up.text.contains("1 file(s)"), "{}", up.text);
+    env.wait_hit("file:a.txt:12").await;
+
+    let (x, y) = centre(&view, 40.0, 440.0, 200.0, 30.0);
+    let down = env
+        .ok(json!({"action": "click_at", "x": x, "y": y, "download": "out/report.txt"}))
+        .await;
+    assert!(down.text.contains("downloaded"), "{}", down.text);
+    assert_eq!(
+        std::fs::read_to_string(env.workspace().join("out/report.txt")).unwrap(),
+        "content of report.txt\n"
+    );
+    // An existing file is not replaced unless asked.
+    env.err(
+        json!({"action": "click_at", "x": x, "y": y, "download": "out/report.txt"}),
+        "exists",
+    )
+    .await;
+    env.ok(json!({"action": "click_at", "x": x, "y": y, "download": "out/report.txt", "overwrite": true}))
+        .await;
     env.finish().await;
 }
