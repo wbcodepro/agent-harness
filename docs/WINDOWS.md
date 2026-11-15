@@ -153,6 +153,30 @@ các test trình duyệt tự bỏ qua, riêng tests/helper.rs vẫn chạy), r�
 4. Upload một file qua junction ra ngoài: phải bị từ chối.
 ```
 
+## Lượt sáu: bản 0.1.0-rc.1 trên nhánh unified-harness (2026-11-15)
+
+Nhánh `unified-harness` gom toàn bộ phần mới: tác vụ có kiểm chứng kết quả (`hame task`), tool browser và desktop, grant, nhật ký hành động, ảnh, workflow, trace và `hame eval`. Tool desktop chỉ có trên macOS; trên Windows nó phải báo rõ là không hỗ trợ chứ không được hỏng. Làm cả lượt năm ở trên trong lượt này.
+
+```text
+Hãy git fetch rồi git checkout unified-harness (git pull nếu đã có), đọc README.md,
+docs/release/RELEASE-NOTES.md và docs/release/SUPPORT-MATRIX.md, rồi kiểm và ghi kết quả vào
+mục "Lượt sáu" trong docs/WINDOWS-RESULTS.md (ghi cả commit đã kiểm, phiên bản Windows, rustc):
+1. cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings,
+   cargo test --workspace --no-fail-fast. Ghi số passed/failed/ignored; với mỗi test hỏng,
+   tìm nguyên nhân, sửa nếu là lỗi Windows thật, chạy lại.
+2. cargo install --path crates/hame-cli, rồi hame --version (phải là 0.1.0-rc.1) và hame doctor
+   (phần desktop phải báo không hỗ trợ trên Windows, không lỗi).
+3. Một tác vụ thật rẻ: viết task.toml yêu cầu tạo file out.txt chứa "ok", với điều kiện
+   file_contains và một điều kiện command (ví dụ `type out.txt`), chạy
+   hame task task.toml --json với model rẻ (provider và key có sẵn trên máy). Phải exit 0 và
+   verdict verified. Thử thêm một điều kiện command ghi ra ngoài workspace
+   (echo x > C:\Users\Public\hame-probe.txt): file đó không được xuất hiện.
+4. Task file có trường lạ (ví dụ `foo = 1` trong [budget]) phải bị từ chối với lỗi rõ ràng.
+5. Lượt năm (tải file và upload không đi qua junction/symlink).
+Không in API key ra log hay kết quả. Commit các bản sửa và file kết quả lên nhánh unified-harness
+rồi push.
+```
+
 ## Đã kiểm trên GitHub Actions (Windows Server)
 
 Lần chạy gần nhất: commit `3fea852` (2026-11-14), cả ba job Linux, macOS và Windows đều đạt. Lần đó gồm cả các phần thêm sau lượt kiểm trên máy thật (lệnh và loại subagent từ file, cài plugin, MCP không trạng thái, đăng nhập OAuth, tool `script`, thay secret tại proxy), nhưng chỉ ở mức biên dịch và test tự động: chúng chưa được dùng thử bằng tay trên Windows.
