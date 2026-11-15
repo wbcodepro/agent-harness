@@ -286,7 +286,7 @@ fn report((installed, findings): Outcome) -> Result<ExitCode, String> {
         }
     }
     if !list_notices {
-        kinds.sort_by(|a, b| b.1.cmp(&a.1));
+        kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
         eprintln!("{notices} notices, by kind:");
         for (kind, n) in kinds {
             eprintln!("  {n:>6}  {kind}");
