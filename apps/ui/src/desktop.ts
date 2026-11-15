@@ -38,10 +38,19 @@ function invoke(command: string, args?: Record<string, unknown>): Promise<unknow
   return internals.invoke(command, args);
 }
 
-/** Marks the page for the shell's styles (title bar inset) and says it loaded. */
+/** Marks the page for the shell's styles (title bar inset). */
 export function startDesktop(): void {
   if (!desktop) return;
   document.documentElement.dataset.desktop = desktop.platform;
+}
+
+/**
+ * Tells the shell the page listens for its events. Until then the shell
+ * keeps them (a link that launched the app, a notification clicked while
+ * the page loaded); call it once the `hame:desktop` listener is attached.
+ */
+export function desktopReady(): void {
+  if (!desktop) return;
   invoke("desktop_ready").catch(() => {
     // An older shell without the command: nothing depends on it.
   });
