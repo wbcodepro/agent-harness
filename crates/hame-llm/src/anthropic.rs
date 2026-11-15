@@ -353,12 +353,27 @@ fn wire_blocks(message: &Message, with_thinking: bool, inliner: &mut Inliner) ->
                 content,
                 is_error,
             } => {
+                let content = result_content(content, inliner);
+                // The API refuses an error result whose content is not all
+                // text. A failed action that still shows the screen (a
+                // screenshot after a refused click) keeps its image; its
+                // text already says it failed.
+                let all_text = content
+                    .as_array()
+                    .is_none_or(|blocks| blocks.iter().all(|b| b["type"] == "text"));
+                let mut content = content;
+                if *is_error
+                    && !all_text
+                    && let Some(blocks) = content.as_array_mut()
+                {
+                    blocks.insert(0, json!({"type": "text", "text": "[tool error]"}));
+                }
                 let mut result = json!({
                     "type": "tool_result",
                     "tool_use_id": call_id,
-                    "content": result_content(content, inliner),
+                    "content": content,
                 });
-                if *is_error {
+                if *is_error && all_text {
                     result["is_error"] = json!(true);
                 }
                 out.push(result);
@@ -1022,6 +1037,47 @@ mod tests {
         let (_, result) = collect(&adapter(&base_url), &request()).await;
         assert!(matches!(result, Err(LlmError::Http { status: 401, .. })));
         assert_eq!(bodies.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_error_result_with_an_image_is_sent_without_the_error_flag() {
+        use crate::media::tests::{png, store};
+        let (_dir, store) = store();
+        let shot = store
+            .put(&png(8, 8, [0, 0, 0], [9, 9, 9]), "image/png")
+            .unwrap();
+        let request = Request {
+            messages: vec![Message {
+                role: Role::Tool,
+                content: vec![
+                    Block::ToolResult {
+                        call_id: "t1".into(),
+                        content: vec![
+                            Block::text("not_authorized: refused"),
+                            Block::Image { artifact: shot },
+                        ],
+                        is_error: true,
+                    },
+                    Block::ToolResult {
+                        call_id: "t2".into(),
+                        content: vec![Block::text("invalid")],
+                        is_error: true,
+                    },
+                ],
+            }],
+            artifacts: Some(hame_session::ArtifactSource(std::sync::Arc::new(
+                store.clone(),
+            ))),
+            ..Request::default()
+        };
+        let profile = ModelProfile::resolve(Provider::Anthropic, "claude-haiku-5-5");
+        let (body, images, _) = build_body("m", profile, None, false, &request, true, false, true);
+        assert_eq!(images, 1);
+        let results = body["messages"][0]["content"].as_array().unwrap();
+        assert!(results[0].get("is_error").is_none(), "{}", results[0]);
+        assert_eq!(results[0]["content"][0]["text"], "[tool error]");
+        assert_eq!(results[0]["content"][2]["type"], "image");
+        assert_eq!(results[1]["is_error"], true);
     }
 
     #[tokio::test]
