@@ -91,6 +91,21 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 - [x] Clean install: macOS (340 pass), Linux arm64 Docker (339 pass). 432 crates; MPL-2.0 im-rc/bitmaps/sized-chunks (unmodified), WTFPL terminfo.
 - Unverified: Linux x86_64, macOS x86_64, Windows, MSRV 1.89, ACP image display in editors, OpenAI/PDF live paths.
 
+### Independent review — resolved
+- [x] BLOCKER desktop key/type/click_at bypassed commit/file_write → S1 (focus/hit-test classification at dispatch, helper protocol 2, idempotency keys).
+- [x] BLOCKER browser downloads through symlinks / over existing files → S2 (O_EXCL|O_NOFOLLOW, `overwrite`, WHATWG redirects).
+- [x] MAJOR `command` predicates unconfined → run under the agent's sandbox policy, network blocked, no inherited env; parameters shell-quoted.
+- [x] MAJOR custom HAME_HOME / profiles_dir readable → hidden.
+- [x] MAJOR malformed predicates passed vacuously → `deny_unknown_fields`, `Predicate::validate`.
+- [x] MINOR Control fallback ignored Deny default; task budgets vs subagents; SBOM; raw reports shipped; README platform claim.
+- Not done: helper binary hash verification; requests failing without usage are uncounted (documented).
+
+### G3 — merged
+- [x] D02, D05, O01–O05, X02–X05 defined with hidden checkers; Numbers/Pages canvases, cell addresses, `select`, formula editor following, `--inbox`/`interject`.
+- [x] Haiku × 3 at e6f2fea: 29/33; failures D05 (format bar stale), O04 (missing grant, fixed), O05 (export sheet never appeared, cause unknown), X02 (focus lost, fixed).
+- [x] Shell Apple Events bypass found → Seatbelt denies `appleevent-send` (test).
+- Open: desktop `file_write` per app, not per folder (documented in README/SECURITY/RELEASE-NOTES); Excel has no accessible grid; Word/Keynote untried.
+
 ## Test log
 
 | Date | Command | Result |
@@ -109,6 +124,10 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 | 2026-11-15 | `cargo test --workspace` after merging F + cost budget (7bafd62) | 340 passed, 0 failed, 16 ignored |
 | 2026-11-15 | `hame eval evals/pilot --runs 3 --provider anthropic --model claude-haiku-5-5` (G2, at 74ba6e4) | 56/57 pass; details in EVIDENCE.md |
 | 2026-11-15 | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` after merging G2 | clean; 349 passed, 0 failed, 17 ignored |
+| 2026-11-15 | `cargo test --workspace` after review fixes and merging S1, S2 (c3f5d3b) | 375 passed, 0 failed, 18 ignored |
+| 2026-11-15 | `hame eval evals/pilot` second pass, 11 tasks × 3, claude-haiku-5-5 (G3, at e6f2fea) | 29/33 pass, 1 false success (O04, grant/phrase fixed in ccd27c0); post-fix O04 3/3, X02 2/3; $1.45 |
+| 2026-11-15 | fmt, clippy `-D warnings`, `cargo test --workspace` after merging G3 + Apple Events denial | clean; 380 passed, 0 failed, 19 ignored |
+| 2026-11-15 | `cargo test -p hame-desktop --test gui -- --ignored --test-threads=1` after merging G3 | 14/14 pass, 59 s (one test's typed text changed to avoid macOS auto-capitalisation) |
 
 ### A — merged (c844fef, e3024b3, 2932957)
 - [x] Per-session ToolContext (artifacts, journal, session id) derived from `SessionWriter` each turn; `request.artifacts` set.

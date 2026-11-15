@@ -20,13 +20,14 @@ Only the latest release (currently 0.1.0-rc.1) and the `main` branch receive fix
 
 ## Two kinds of authority
 
-**Shell tools** (`bash`, file tools, MCP stdio servers, `script`) run in a worker process confined by the operating system: Seatbelt on macOS, Landlock and seccomp on Linux, a Low integrity level on Windows (writes only). Their network goes through a local proxy with an allowlist.
+**Shell tools** (`bash`, file tools, MCP stdio servers, `script`) run in a worker process confined by the operating system: Seatbelt on macOS (which also refuses Apple Events, so a command cannot script other applications), Landlock and seccomp on Linux, a Low integrity level on Windows (writes only). Their network goes through a local proxy with an allowlist.
 
 **Computer tools** (`browser`, `desktop`) are host-side. They act with your user's authority, your terminal's macOS privacy permissions (Accessibility, Screen Recording) and your browser profiles' cookies, **outside the shell sandbox and not confined by it**. What bounds them is:
 
 - explicit grants (channel × app / origin / profile × capability) from `~/.hame/config.toml` or a task file you pass to `hame task`; a project's `.hame/config.toml` cannot add grants; each action is checked before it is sent;
 - top-level browser navigation limited to granted origins, including every redirect hop, checked at the URL Chrome resolves (a page's own subresource requests are not filtered);
 - browser downloads written only inside the workspace, never through a symbolic link and never over an existing file unless the call asks (`overwrite`), and uploads read only from regular files inside it;
+- on the desktop, `file_write` is granted per application, not per folder: confirming a save or export panel writes wherever the panel points, and hame does not check that folder (typing a path into the name field is refused, but the panel can be moved with Go To Folder);
 - the action journal: every acting operation is recorded before dispatch, commits carry idempotency keys, and an operation that may already have taken effect is not repeated without a fresh observation; after a crash nothing is replayed;
 - observation-scoped refs that are refused when stale, and physical input that stops on focus changes or unexpected dialogs;
 - permission rules and approval, which see each browser or desktop call (and each step of a batch or workflow) like any other tool call.

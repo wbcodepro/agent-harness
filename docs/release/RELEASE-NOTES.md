@@ -8,7 +8,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 
 **Browser tool.** A persistent Playwright helper drives Google Chrome (or Edge, or Playwright's Chromium) with semantic observations: roles, names, values, refs scoped to one observation and document. Stale or changed elements are refused (`stale_ref`), never re-targeted; duplicate labels are disambiguated or refused as `ambiguous`; fills are read back. Persistent profiles, tabs, waits, extraction with pagination, uploads from and downloads into the workspace, dialogs, screenshots and batches of up to 20 steps.
 
-**Desktop tool (macOS 14+).** A small Swift helper, compiled on first use, operates applications through the accessibility interface: apps, windows, observe, press, set value, focus, menus, typing (Unicode, chunked, stops on focus changes or unexpected dialogs), key combinations, window screenshots with recorded transforms and clicks mapped back from screenshot pixels, clipboard with restore, waits and batches.
+**Desktop tool (macOS 14+).** A small Swift helper, compiled on first use, operates applications through the accessibility interface: apps, windows, observe (including the canvases Numbers and Pages expose only on request, with cell addresses), press, set value, select (table cells and text), focus, menus, typing (Unicode, chunked, stops on focus changes or unexpected dialogs), key combinations, window screenshots with recorded transforms and clicks mapped back from screenshot pixels, clipboard with restore, waits and batches.
 
 **Grants.** `[computer]` in `config.toml` and `[[authorization.grants]]` in task files authorize channel (browser, desktop, visual) × app / origin / profile × capability (observe, interact, commit, file_write, clipboard, global_input, screen). Every action is checked before dispatch; observed content is labelled untrusted and can never add a grant. On the desktop, keys, typed newlines and pixel clicks that would press a commit control or confirm a save panel need `commit` (and `file_write`) like pressing that control does, classified from the focus or the element under the point at dispatch time.
 
@@ -24,7 +24,17 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 
 **Onboarding.** `hame setup` and `hame doctor`; doctor now also checks that the artifact store is writable, the browser tool's Python, Playwright and browser, and on macOS builds and starts the desktop helper to report the Accessibility and Screen Recording permissions it will run with.
 
-**Security fix.** Inner calls of the `script` tool to tools that are not host-side now go through the sandboxed runner; before, they ran in the harness process.
+**Security fixes.**
+- Inner calls of the `script` tool to tools that are not host-side now go through the sandboxed runner; before, they ran in the harness process.
+- Desktop keys, typed newlines and pixel clicks are authorized like the control they would press (commit, file_write), classified at dispatch time.
+- Browser downloads never write through a symbolic link or over an existing file without `overwrite`; redirects are resolved as Chrome resolves them.
+- `command` acceptance conditions run in the sandbox under the agent's policy with the network blocked and no inherited environment; workflow parameters are shell-quoted into them.
+- A custom `HAME_HOME` and `profiles_dir` are hidden from shell tools.
+- Task files, grants and predicates reject unknown fields and empty conditions.
+- Commands in the macOS sandbox cannot send Apple Events, so they cannot script applications outside the desktop tool's grants.
+- A password typed into a secure field is not written into receipts.
+
+**Mid-run messages.** `hame run --inbox DIR` delivers a user message to a running agent (or as the next turn once it has finished); `hame eval` tasks can schedule one with `interject`.
 
 ## Breaking changes
 
@@ -46,7 +56,8 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 
 ## Known limitations
 
-- Desktop control is macOS only and was tested with TextEdit on macOS 26.6.2; no scroll, drag, hover or text-range selection; US key layout for `key`.
+- Desktop control is macOS only and was tested with TextEdit, Numbers 14.4 and Pages 14.4 on macOS 26.6.2 (Excel exposes no cell grid; Word and Keynote not tried); no scroll, drag or hover; US key layout for `key`.
+- A desktop `file_write` grant is per application, not per folder: a granted app can save or export into any folder the user can write.
 - The browser tool was verified on macOS arm64 with Chrome 157 only; only top-level navigation is limited to granted origins; commit detection is heuristic.
 - Browser and desktop tools act outside the shell sandbox with the user's permissions; grant narrowly.
 - Prices exist only for Anthropic models; a `max_cost_usd` budget stops a task on other providers because its spending cannot be measured.
@@ -56,6 +67,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 
 ## Verification for this release candidate
 
-- `cargo test --workspace` on macOS 26.6.2 arm64 (Apple M5, rustc 1.99.1, Playwright and Chrome present, so the browser tests ran): 340 passed, 0 failed, 16 ignored (live-provider and desktop GUI tests, which are opt-in). The desktop GUI suite passed 11/11 on the same machine before integration ([EVIDENCE-desktop.md](EVIDENCE-desktop.md)).
+- `cargo test --workspace` on macOS 26.6.2 arm64 (Apple M5, rustc 1.99.1, Playwright and Chrome present, so the browser tests ran): 380 passed, 0 failed, 19 ignored (live-provider and desktop GUI tests, which are opt-in). The desktop GUI suite (`cargo test -p hame-desktop --test gui -- --ignored --test-threads=1`) passed 14/14 on the same machine after the final merge.
+- Live pilot (claude-haiku-5-5, 3 runs per task): 56/57 on the first 19 tasks (commit 74ba6e4) and 29/33 on the other 11 (commit e6f2fea); injection suite 12/12. Both were measured before some of the security fixes above; see [EVIDENCE.md](EVIDENCE.md).
 - Clean build and `cargo test --workspace` in a fresh Linux arm64 container from `git archive`: 339 passed, 0 failed, 5 ignored ([INSTALL.md](INSTALL.md)).
 - `scripts/release-check.sh`: source and macOS arm64 binary archives contain no `.env`, keys, session logs, `target/`, `.claude/` or `.solutions/` ([RELEASE-INSTRUCTIONS.md](RELEASE-INSTRUCTIONS.md)).

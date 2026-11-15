@@ -10,8 +10,22 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 - Browser uploads read the file again below the workspace without following links, refuse a file with other hard links, and give the browser a private copy, so a file swapped for a link after the check is not uploaded.
 - The browser's redirect guard resolved `Location` with Python's `urljoin`, which keeps `/\evil.example/x`, `\\evil.example/x`, `http:\\evil.example/x` and `http:///evil.example/x` on the granted host while Chrome goes to evil.example. Locations are now resolved as WHATWG (and Chrome) do, an unclear one is refused, and each redirected request is checked again at the URL Chrome computed. `open` and `navigate` hand the helper the WHATWG form of the URL.
 
+- Desktop keys, typed newlines and pixel clicks could commit or save under a grant without `commit` or `file_write` (Return in a save panel, cmd+s, a click on Save). They are now classified from the focused element or the element under the point at dispatch time and need what pressing that control needs.
+- `command` acceptance conditions ran unconfined in the harness process. They now run in the sandbox under the agent's policy, with the network blocked and no inherited environment; workflow parameters are shell-quoted into them.
+- A custom `HAME_HOME` (other than its `spill` and `worktrees` folders) and a custom `profiles_dir` were readable by shell tools; they are now hidden.
+- Commands in the macOS sandbox could send Apple Events (`osascript`) and so script applications outside the desktop tool's grants; the Seatbelt profile now refuses them.
+- A password typed into a secure field was recorded in the action receipt; it is now left out.
+- Unknown fields in task files, grants, budgets and predicates, and predicates with empty fields, are errors instead of being ignored or passing vacuously; a required browser profile that is not reported fails the check.
+
+### Added
+
+- Desktop: `select` (table cells by address, text by occurrence), cell addresses and the Numbers and Pages canvases in observations, typing that follows Numbers' formula editor; an Export button in a save panel needs `commit` and `file_write` like Save.
+- `hame run --inbox DIR` and the eval manifest field `interject`: a user message delivered mid-run.
+
 ### Changed
 
+- A task's `max_tokens` caps the token budget it shares with subagents; a task with `max_cost_usd` gets no subagent tool.
+- A Control-effect call falls back to Allow only when the configured default is Ask; a Deny default applies to it.
 - Browser `download` and `wait` (with `download`) take `overwrite`; without it an existing file is refused as `[exists]`. A workflow that downloads to the same path on every run needs `overwrite = true` in that step.
 
 ## 0.1.0-rc.1 — 2026-11-15

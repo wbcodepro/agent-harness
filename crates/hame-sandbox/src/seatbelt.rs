@@ -5,10 +5,16 @@ use crate::policy::{Mode, Network, SandboxPolicy};
 /// Builds the Seatbelt profile for `policy`.
 ///
 /// The profile starts permissive and then takes away: all writes except the
-/// listed roots, reads of credential locations, and the network. In SBPL the
-/// last matching rule wins, so the order below is the precedence.
+/// listed roots, reads of credential locations, Apple Events, and the
+/// network. In SBPL the last matching rule wins, so the order below is the
+/// precedence.
 pub(crate) fn profile(policy: &SandboxPolicy) -> String {
     let mut out = String::from("(version 1)\n(allow default)\n");
+
+    // Apple Events let a command script other apps (`osascript`), which
+    // would bypass the desktop tool's per-app grants, commit gates and
+    // receipts. Apps are driven through the desktop tool only.
+    out.push_str("(deny appleevent-send)\n");
 
     out.push_str("(deny file-write*)\n");
     out.push_str(
@@ -117,6 +123,12 @@ mod tests {
         assert!(!run(&format!("ls {}", vault.display())).0);
         assert!(!run(&format!("cp {}/key stolen", vault.display())).0);
         assert!(!run("cat .env").0);
+
+        // Other apps cannot be scripted from a command.
+        let scripted = run(
+            "/usr/bin/osascript -e 'tell application \"System Events\" to get name of first process'",
+        );
+        assert!(!scripted.0, "{}", scripted.1);
         assert!(!run("echo OVERWRITE > .env").0);
         assert!(!work.join("stolen").exists());
 

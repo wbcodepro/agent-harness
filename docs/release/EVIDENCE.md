@@ -617,7 +617,9 @@ Second pass (office and cross-application tasks):
   `System Events` calls were refused (-10004), but nothing in hame stops a
   shell command from scripting an application outside its desktop grants.
   If consent had been given earlier, that route would bypass the desktop
-  tool's authorization. Not addressed here.
+  tool's authorization. **Fixed after this pass:** the Seatbelt profile now
+  refuses `appleevent-send`, so a sandboxed command cannot script another
+  application (test in `crates/hame-sandbox/src/seatbelt.rs`).
 - **FileWrite is per application, not per folder.** A task that grants
   `file_write` on Numbers lets the agent confirm a save or export panel in
   any folder; in the post-fix X02 round 2 it exported into `~/Documents` on
