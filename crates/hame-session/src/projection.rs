@@ -70,18 +70,30 @@ pub const MASK_NOTE_BYTES: usize = 280;
 /// an old one is usually what it already said about it.
 pub const KEEP_IMAGES: usize = 3;
 
+/// Old images are dropped this many at a time. Dropping exactly the one
+/// that falls out of the window would change an earlier part of the prompt
+/// on every new image, and a provider's prompt cache only covers the
+/// unchanged prefix; dropping in steps keeps the prefix stable between
+/// steps, at the price of showing up to `IMAGE_STEP - 1` extra (cached)
+/// images.
+pub const IMAGE_STEP: usize = 3;
+
 /// Choices in how history is projected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryOptions {
-    /// Images in tool results shown in full, counting back from the
-    /// newest; see [`KEEP_IMAGES`].
+    /// At least this many of the newest images in tool results are shown
+    /// in full; see [`KEEP_IMAGES`].
     pub keep_images: usize,
+    /// Older images are elided this many at a time; 1 elides each as soon
+    /// as it falls out of the window. See [`IMAGE_STEP`].
+    pub image_step: usize,
 }
 
 impl Default for HistoryOptions {
     fn default() -> Self {
         Self {
             keep_images: KEEP_IMAGES,
+            image_step: IMAGE_STEP,
         }
     }
 }
@@ -144,25 +156,43 @@ fn mask(content: &[Block]) -> Vec<Block> {
 
 /// Replaces every image in tool results but the `keep` most recent with a
 /// note.
-fn retain_images(messages: &mut [Message], keep: usize) {
-    let mut seen = 0;
-    for message in messages.iter_mut().rev() {
+fn retain_images(messages: &mut [Message], keep: usize, step: usize) {
+    let is_result_image = |block: &Block| matches!(block, Block::Image { .. });
+    let total: usize = messages
+        .iter()
+        .filter(|message| message.role == Role::Tool)
+        .flat_map(|message| &message.content)
+        .map(|block| match block {
+            Block::ToolResult { content, .. } => {
+                content.iter().filter(|b| is_result_image(b)).count()
+            }
+            _ => 0,
+        })
+        .sum();
+    let step = step.max(1);
+    // The oldest images go, a whole number of steps at a time.
+    let mut drop = total.saturating_sub(keep) / step * step;
+    if drop == 0 {
+        return;
+    }
+    for message in messages.iter_mut() {
         if message.role != Role::Tool {
             continue;
         }
-        for block in message.content.iter_mut().rev() {
+        for block in message.content.iter_mut() {
             let Block::ToolResult { content, .. } = block else {
                 continue;
             };
-            for inner in content.iter_mut().rev() {
+            for inner in content.iter_mut() {
+                if drop == 0 {
+                    return;
+                }
                 if let Block::Image { artifact } = inner {
-                    seen += 1;
-                    if seen > keep {
-                        *inner = image_note(
-                            artifact,
-                            &format!("only the {keep} most recent images are kept in context"),
-                        );
-                    }
+                    *inner = image_note(
+                        artifact,
+                        &format!("only the {keep} or so most recent images are kept in context"),
+                    );
+                    drop -= 1;
                 }
             }
         }
@@ -307,6 +337,10 @@ pub fn derive_history_with(records: &[Record], options: HistoryOptions) -> Histo
             _ => {}
         }
     }
-    retain_images(&mut history.messages, options.keep_images);
+    retain_images(
+        &mut history.messages,
+        options.keep_images,
+        options.image_step,
+    );
     history
 }

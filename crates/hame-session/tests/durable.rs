@@ -478,7 +478,11 @@ fn only_recent_images_are_shown_and_masking_clears_images_too() {
     drop(writer);
     let records = store.read(&id("s1")).unwrap();
 
-    let results: Vec<Vec<Block>> = derive_history(&records)
+    let exact = hame_session::HistoryOptions {
+        keep_images: 3,
+        image_step: 1,
+    };
+    let results: Vec<Vec<Block>> = hame_session::derive_history_with(&records, exact)
         .messages
         .into_iter()
         .filter(|m| m.role == Role::Tool)
@@ -506,7 +510,10 @@ fn only_recent_images_are_shown_and_masking_clears_images_too() {
     // Fewer to keep, fewer shown.
     let one = hame_session::derive_history_with(
         &records,
-        hame_session::HistoryOptions { keep_images: 1 },
+        hame_session::HistoryOptions {
+            keep_images: 1,
+            image_step: 1,
+        },
     );
     let kept = one
         .messages
@@ -515,6 +522,22 @@ fn only_recent_images_are_shown_and_masking_clears_images_too() {
         .filter(|b| matches!(b, Block::ToolResult { content, .. } if content.iter().any(|c| matches!(c, Block::Image { .. }))))
         .count();
     assert_eq!(kept, 1);
+
+    // By default old images go three at a time, so the start of the prompt
+    // stays the same (and cached) while images 4 and 5 arrive: all five
+    // are still shown, and the oldest three go together with the sixth.
+    let shown_by_default = |records: &[hame_session::Record]| -> Vec<bool> {
+        derive_history(records)
+            .messages
+            .into_iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| match &m.content[0] {
+                Block::ToolResult { content, .. } => matches!(content[1], Block::Image { .. }),
+                _ => unreachable!(),
+            })
+            .collect()
+    };
+    assert_eq!(shown_by_default(&records), [true; 5]);
 
     // Masking clears images up to its mark, short results included, and
     // leaves short text alone.
