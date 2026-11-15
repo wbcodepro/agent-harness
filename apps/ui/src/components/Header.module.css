@@ -251,3 +251,9 @@
     display: none;
   }
 }
+
+/* The desktop app on macOS, narrow window: the window's buttons sit left of
+   the menu button. */
+:global(:root[data-desktop="macos"]) .withMenu {
+  padding-left: 92px;
+}

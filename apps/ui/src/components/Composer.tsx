@@ -3,6 +3,7 @@ import { ArrowUp, Folder, Paperclip, Shield, Sparkles, Square, X } from "lucide-
 import type { ModeName, ServerInfo } from "../model/types";
 import type { Upload } from "../state/api";
 import { folderName, storage } from "../state/util";
+import { desktop, pickFolder } from "../desktop";
 import styles from "./Composer.module.css";
 
 export interface Attachment {
@@ -205,6 +206,13 @@ export function Composer(props: ComposerProps) {
                 value={props.cwd ?? info.cwd}
                 onChange={(event) => {
                   if (event.target.value === "__other") {
+                    if (desktop) {
+                      pickFolder(props.cwd ?? info.cwd).then(
+                        (folder) => folder && props.onFolder(folder),
+                        () => undefined,
+                      );
+                      return;
+                    }
                     const folder = window.prompt("Folder on this computer (absolute path):", props.cwd ?? info.cwd);
                     if (folder) props.onFolder(folder.trim());
                   } else {

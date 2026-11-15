@@ -354,3 +354,15 @@
     margin-right: 28px;
   }
 }
+
+/* The desktop app on macOS: the window's buttons sit over the top left
+   corner (a hidden, inset title bar), so the top row and the rail leave
+   room for them. */
+:global(:root[data-desktop="macos"]) .top {
+  padding-left: 92px;
+  min-height: 56px;
+}
+
+:global(:root[data-desktop="macos"]) .rail {
+  padding-top: 48px;
+}

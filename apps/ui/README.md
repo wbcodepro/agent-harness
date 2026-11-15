@@ -51,6 +51,7 @@ python3 apps/ui/e2e/test_chat.py           # also refreshes docs/design/screens/
 | `src/components/` | sidebar, header, transcript, composer, approval card, side panel, Markdown |
 | `src/lib/` | output clipping, streamed-Markdown blocks, approval keys, blob URLs (unit-tested) |
 | `src/styles/global.css` | the design tokens of UI.md, light and dark |
+| `src/desktop.ts` | the desktop app's shell when present (`window.__HAME_DESKTOP__`): token, native folder picker, `hame:desktop` events; inert in a browser |
 
 ## Dependencies
 

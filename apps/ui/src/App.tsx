@@ -5,6 +5,7 @@ import { Api, ApiError } from "./state/api";
 import { SessionStore, useSession } from "./state/session";
 import { ServicesContext, blobUrls, folderName, isMod, storage, type Services } from "./state/util";
 import type { Transport } from "./transport";
+import { onDesktopEvent } from "./desktop";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Composer, type Attachment } from "./components/Composer";
 import { Header } from "./components/Header";
@@ -223,6 +224,17 @@ export function App({ transport }: { transport: Transport }) {
     setDraft((current) => ({ ...current, cwd: null }));
     setTimeout(() => inputRef.current?.focus(), 0);
   }, []);
+
+  // The desktop shell: a clicked notification or hame:// link opens its
+  // session; New Session in its menu or tray starts one.
+  useEffect(
+    () =>
+      onDesktopEvent((event) => {
+        if (event.action === "open") openSession(event.session);
+        else newSession();
+      }),
+    [openSession, newSession],
+  );
 
   // Keyboard shortcuts.
   useEffect(() => {

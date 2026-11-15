@@ -230,7 +230,7 @@ export function Sidebar(props: SidebarProps) {
 
   if (props.collapsed && !props.drawer) {
     return (
-      <nav className={`${styles.sidebar} ${styles.rail}`} aria-label="Sessions">
+      <nav className={`${styles.sidebar} ${styles.rail}`} aria-label="Sessions" data-tauri-drag-region="">
         <button type="button" className={styles.railButton} onClick={props.onCollapse} aria-label="Show the session list">
           <PanelLeftOpen size={18} aria-hidden />
         </button>
@@ -256,7 +256,7 @@ export function Sidebar(props: SidebarProps) {
   const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
   return (
     <nav className={styles.sidebar} aria-label="Sessions">
-      <div className={styles.top}>
+      <div className={styles.top} data-tauri-drag-region="">
         <span className={styles.brand}>
           <span className={styles.mark} aria-hidden>
             h

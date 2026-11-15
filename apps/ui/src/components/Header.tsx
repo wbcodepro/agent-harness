@@ -189,7 +189,7 @@ export function Header(props: HeaderProps) {
   const [draft, setDraft] = useState(props.title);
   const status = STATUS[props.status];
   return (
-    <header className={styles.header}>
+    <header className={props.showMenu ? `${styles.header} ${styles.withMenu}` : styles.header} data-tauri-drag-region="">
       {props.showMenu && (
         <button type="button" className={styles.iconButton} onClick={props.onMenu} aria-label="Open the session list">
           <Menu size={18} aria-hidden />

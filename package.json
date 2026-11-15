@@ -3,7 +3,7 @@
   "private": true,
   "license": "MIT",
   "workspaces": [
-    "apps/*",
+    "apps/ui",
     "packages/*"
   ],
   "scripts": {
