@@ -18,7 +18,7 @@ Browser and desktop backends run as long-lived child processes speaking line-del
 
 ## ADR-4 Browser backend: direct Playwright helper (decided after comparison in workstream C)
 
-Candidates: vercel-labs agent-browser and a direct Playwright adapter. Recorded result and evidence: see `docs/release/EVIDENCE.md` § browser backend comparison.
+Candidates: vercel-labs agent-browser and a direct Playwright adapter. Decided: the direct Playwright helper (`crates/hame-browser`). On identical fixture steps agent-browser 0.41.0 was faster per click and fill (fewer checks) but reported a date fill that did not take, and re-targeted old refs to re-rendered or relabelled elements without saying so. Evidence, method and raw numbers: [EVIDENCE-browser.md](EVIDENCE-browser.md).
 
 ## ADR-5 Desktop backend: native macOS accessibility helper (decided after comparison in workstream D)
 

@@ -1,0 +1,27 @@
+[package]
+name = "hame-browser"
+description = "Browser execution: the `browser` tool over a persistent Playwright helper."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+hame-agent.workspace = true
+hame-kernel.workspace = true
+hame-session.workspace = true
+hame-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
