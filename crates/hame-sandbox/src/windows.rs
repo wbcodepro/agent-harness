@@ -264,3 +264,136 @@ pub fn keep_stdio_private() {
         }
     }
 }
+
+/// Hides `paths` from confined tools: each gets a mandatory label of
+/// Medium with "no read up", so a Low-integrity process can neither read
+/// nor write it while the user's own programs still can. On a directory the
+/// label is inherited by what is created in it later. Setting a label at
+/// or below one's own level needs no administrator rights.
+///
+/// Paths that do not exist are skipped, and one already labelled so is left
+/// alone (relabelling a directory walks everything in it).
+pub fn hide_from_tools(paths: &[PathBuf]) -> Result<(), SandboxError> {
+    for path in paths.iter().filter(|path| path.exists()) {
+        if hidden_label(path).unwrap_or(false) {
+            continue;
+        }
+        let sddl = if path.is_dir() {
+            "S:(ML;OICI;NWNR;;;ME)"
+        } else {
+            "S:(ML;;NWNR;;;ME)"
+        };
+        set_label(path, sddl).map_err(|e| {
+            SandboxError::Unavailable(format!("cannot hide {} from tools: {e}", path.display()))
+        })?;
+    }
+    Ok(())
+}
+
+fn wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+/// Whether `path` already carries a no-read-up label.
+#[allow(unsafe_code)]
+fn hidden_label(path: &Path) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
+        SDDL_REVISION_1, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+    let name = wide(path);
+    // SAFETY: `name` is a NUL-terminated wide string that outlives the call;
+    // the out-pointers point at locals; the descriptor and string the
+    // system allocates are freed once, after their last use.
+    unsafe {
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        let status = GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
+        );
+        if status != 0 {
+            return Err(std::io::Error::from_raw_os_error(status as i32));
+        }
+        let mut text: *mut u16 = std::ptr::null_mut();
+        let converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor,
+            SDDL_REVISION_1,
+            LABEL_SECURITY_INFORMATION,
+            &mut text,
+            std::ptr::null_mut(),
+        );
+        let error = std::io::Error::last_os_error();
+        LocalFree(descriptor.cast());
+        if converted == 0 {
+            return Err(error);
+        }
+        let mut length = 0;
+        while *text.add(length) != 0 {
+            length += 1;
+        }
+        let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(text, length));
+        LocalFree(text.cast());
+        Ok(sddl.contains("NR"))
+    }
+}
+
+#[allow(unsafe_code)]
+fn set_label(path: &Path, sddl: &str) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
+        SetNamedSecurityInfoW,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, GetSecurityDescriptorSacl, LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    };
+
+    let sddl: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
+    let name = wide(path);
+    // SAFETY: both wide strings are NUL-terminated and outlive the calls;
+    // the out-pointers point at locals; the SACL points into the descriptor,
+    // which is freed once, after the last call that uses it.
+    unsafe {
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let (mut present, mut defaulted) = (0, 0);
+        let mut sacl: *mut ACL = std::ptr::null_mut();
+        if GetSecurityDescriptorSacl(descriptor, &mut present, &mut sacl, &mut defaulted) == 0 {
+            let error = std::io::Error::last_os_error();
+            LocalFree(descriptor.cast());
+            return Err(error);
+        }
+        let status = SetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            sacl,
+        );
+        LocalFree(descriptor.cast());
+        if status != 0 {
+            return Err(std::io::Error::from_raw_os_error(status as i32));
+        }
+    }
+    Ok(())
+}

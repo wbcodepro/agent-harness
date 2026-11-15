@@ -272,8 +272,9 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             options.sandbox.unwrap_or(config.sandbox.mode) != Mode::DangerFullAccess;
         if top_level && chose_confinement && !config.sandbox.allow_partial {
             return Err(
-                "on Windows hame can confine where tools write, but cannot hide credential \
-                 files from them or limit their network access. To accept that, set \
+                "on Windows hame can confine where tools write and keep them out of its own \
+                 data, but cannot hide your other files from them or limit their network \
+                 access. To accept that, set \
                  `allow_partial = true` under [sandbox] in config.toml; or run with \
                  --sandbox danger-full-access, where every change needs your approval"
                     .into(),
@@ -284,10 +285,34 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         if top_level {
             SAID.call_once(|| {
                 notice(
-                    "tools are confined for writes only; they can read any file you can and \
-                     reach the network",
+                    "tools are confined for writes only; they can read any file you can \
+                     (except hame's own keys, settings and sessions) and reach the network",
                 );
             });
+        }
+        // hame's own data is the one thing hidden on Windows too: a label
+        // keeps Low-integrity tools out of it. The spill directory, skills
+        // and plugins stay readable, since tools are pointed at them.
+        #[cfg(windows)]
+        {
+            let home = hame_kernel::real_path(home).unwrap_or_else(|_| home.to_path_buf());
+            for dir in ["sessions", "checkpoints", "mcp-auth"] {
+                let _ = std::fs::create_dir_all(home.join(dir));
+            }
+            let private: Vec<PathBuf> = [
+                ".env",
+                "config.toml",
+                "sessions",
+                "checkpoints",
+                "mcp-auth",
+                "approvals.jsonl",
+            ]
+            .iter()
+            .map(|name| home.join(name))
+            .collect();
+            if let Err(e) = hame_sandbox::hide_from_tools(&private) {
+                notice(format!("{e}; tools can read it"));
+            }
         }
         policy.unreadable.clear();
         policy.hide_env_files = false;

@@ -384,10 +384,12 @@ pub async fn setup(home: &Path, args: SetupArgs) -> Result<ExitCode, String> {
     std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
     if !key.is_empty() {
         save_env(&env_file, &key_name, &key)?;
-        println!(
-            "Saved {key_name} in {} (readable by you only).",
-            env_file.display()
-        );
+        let kept = if cfg!(windows) {
+            "hidden from the tools hame runs"
+        } else {
+            "readable by you only"
+        };
+        println!("Saved {key_name} in {} ({kept}).", env_file.display());
     } else if !existing {
         return Err(format!(
             "no key given; nothing saved. Run `hame setup` again when you have one for {provider}"
@@ -563,6 +565,11 @@ fn save_env(path: &Path, name: &str, value: &str) -> Result<(), String> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| e.to_string())?;
     }
+    // Windows has no owner-only mode bits, and confined tools read whatever
+    // the user can; a label keeps them out of this file. The file was just
+    // replaced, so it carries no label from before.
+    #[cfg(windows)]
+    hame_sandbox::hide_from_tools(&[path.to_path_buf()]).map_err(|e| e.to_string())?;
     Ok(())
 }
 

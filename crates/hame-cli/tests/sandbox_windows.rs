@@ -410,3 +410,52 @@ fn a_job_past_its_limit_ends_with_hame_and_a_background_process_is_let_go() {
     assert!(!fx.work.join("survived.txt").exists());
     assert!(fx.work.join("late.txt").exists());
 }
+
+/// hame's own keys, settings and sessions are labelled so that confined
+/// tools cannot read them; everything else they may read, as before.
+#[test]
+fn confined_tools_cannot_read_hames_own_data() {
+    let fx = Fixture::new();
+    let home = fx.home("home", "[sandbox]\nallow_partial = true\n");
+    fs::write(home.join(".env"), "DEMO_KEY=topsecret123\n").unwrap();
+    fs::create_dir_all(home.join("skills/s")).unwrap();
+    fs::write(home.join("skills/s/SKILL.md"), "readable").unwrap();
+    let posix = |path: &Path| path.display().to_string().replace('\\', "/");
+    let (env, sessions, skill) = (
+        home.join(".env"),
+        home.join("sessions"),
+        home.join("skills/s/SKILL.md"),
+    );
+
+    let (output, results) = fx.run(
+        &home,
+        vec![
+            ("read", json!({"path": env.display().to_string()})),
+            ("bash", json!({"command": format!("cat '{}'", posix(&env))})),
+            (
+                "bash",
+                json!({"command": format!("cat '{}' | head -c 200", posix(&home.join("config.toml")))}),
+            ),
+            (
+                "bash",
+                json!({"command": format!("cat '{}'/*/*.jsonl | head -c 200", posix(&sessions))}),
+            ),
+            ("read", json!({"path": skill.display().to_string()})),
+        ],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(results.len(), 5, "{results:#?}\n{stderr}");
+    for (text, is_error) in &results[..4] {
+        assert!(*is_error, "a private file was readable: {results:#?}");
+        assert!(!text.contains("topsecret123") && !text.contains("allow_partial"));
+    }
+    assert_eq!(
+        results[4],
+        ("1\treadable\n".to_string(), false),
+        "{results:#?}"
+    );
+    // The user's own programs still read them.
+    assert!(fs::read_to_string(&env).unwrap().contains("topsecret123"));
+}
