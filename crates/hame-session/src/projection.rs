@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::ArtifactRef;
 use crate::model::{Block, Event, Record, ToolSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,7 +64,49 @@ pub const MASK_MIN_BYTES: usize = 1000;
 /// About how long the note standing in for a masked result is.
 pub const MASK_NOTE_BYTES: usize = 280;
 
-/// What the model sees in place of an old, long tool result.
+/// How many of the most recent images in tool results the model is shown
+/// in full. Older ones are replaced by a note naming their artifact: a
+/// screenshot is costly on every later request, and what a model needs from
+/// an old one is usually what it already said about it.
+pub const KEEP_IMAGES: usize = 3;
+
+/// Choices in how history is projected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryOptions {
+    /// Images in tool results shown in full, counting back from the
+    /// newest; see [`KEEP_IMAGES`].
+    pub keep_images: usize,
+}
+
+impl Default for HistoryOptions {
+    fn default() -> Self {
+        Self {
+            keep_images: KEEP_IMAGES,
+        }
+    }
+}
+
+/// The text standing in for an image the model is no longer shown. It
+/// names the artifact in full so the model can ask for it again.
+pub fn image_note(artifact: &ArtifactRef, why: &str) -> Block {
+    let size = match (artifact.width, artifact.height) {
+        (Some(w), Some(h)) => format!(" {w}x{h}"),
+        _ => String::new(),
+    };
+    let target = artifact
+        .capture
+        .as_ref()
+        .map(|capture| format!(", captured from {}", capture.target))
+        .unwrap_or_default();
+    Block::text(format!(
+        "[Image not shown: {why}. It was {}{size}{target}, artifact {}. Capture it again or ask \
+         for that artifact if you need to see it.]",
+        artifact.mime, artifact.sha256
+    ))
+}
+
+/// What the model sees in place of an old tool result. Long text is
+/// cleared; images always are, since each costs as much as a long text.
 fn mask(content: &[Block]) -> Vec<Block> {
     let bytes: usize = content
         .iter()
@@ -72,14 +115,80 @@ fn mask(content: &[Block]) -> Vec<Block> {
             _ => 0,
         })
         .sum();
-    if bytes < MASK_MIN_BYTES {
-        return content.to_vec();
+    let mut masked = Vec::with_capacity(content.len());
+    let mut text_cleared = false;
+    for block in content {
+        match block {
+            Block::Image { artifact } => {
+                masked.push(image_note(
+                    artifact,
+                    "older outputs were cleared to save context",
+                ));
+            }
+            Block::Text { .. } if bytes >= MASK_MIN_BYTES => {
+                if !text_cleared {
+                    text_cleared = true;
+                    masked.push(Block::text(format!(
+                        "[This output ({bytes} bytes) was cleared to save context. Older outputs \
+                         are cleared as the conversation grows, so when you read something you \
+                         will need later, write the important facts in your reply at once. Run \
+                         the tool again if you need this output.]"
+                    )));
+                }
+            }
+            other => masked.push(other.clone()),
+        }
     }
-    vec![Block::text(format!(
-        "[This output ({bytes} bytes) was cleared to save context. Older outputs are cleared \
-         as the conversation grows, so when you read something you will need later, write the \
-         important facts in your reply at once. Run the tool again if you need this output.]"
-    ))]
+    masked
+}
+
+/// Replaces every image in tool results but the `keep` most recent with a
+/// note.
+fn retain_images(messages: &mut [Message], keep: usize) {
+    let mut seen = 0;
+    for message in messages.iter_mut().rev() {
+        if message.role != Role::Tool {
+            continue;
+        }
+        for block in message.content.iter_mut().rev() {
+            let Block::ToolResult { content, .. } = block else {
+                continue;
+            };
+            for inner in content.iter_mut().rev() {
+                if let Block::Image { artifact } = inner {
+                    seen += 1;
+                    if seen > keep {
+                        *inner = image_note(
+                            artifact,
+                            &format!("only the {keep} most recent images are kept in context"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Every artifact the log refers to, once each, in order of first
+/// reference.
+pub fn session_artifacts(records: &[Record]) -> Vec<ArtifactRef> {
+    let mut seen = std::collections::HashSet::new();
+    let mut found = Vec::new();
+    for record in records {
+        let content = match &record.event {
+            Event::UserMessage { content }
+            | Event::AssistantMessage { content, .. }
+            | Event::AssistantAttempt { content, .. }
+            | Event::ToolResult { content, .. } => content,
+            _ => continue,
+        };
+        for artifact in content.iter().flat_map(Block::artifacts) {
+            if seen.insert(artifact.sha256.clone()) {
+                found.push(artifact.clone());
+            }
+        }
+    }
+    found
 }
 
 /// Projects the model-visible history out of a session log.
@@ -87,8 +196,17 @@ fn mask(content: &[Block]) -> Vec<Block> {
 /// The log is never rewritten: the latest `compaction` event hides the
 /// messages it covers and stands in for them with its summary, and the
 /// latest `system/message` and `tools/declared` win. A `context/masked`
-/// event replaces long tool results up to its mark with a short note.
+/// event replaces long tool results up to its mark with a short note, and
+/// only the most recent images in tool results are shown in full.
+///
+/// Never reads artifact bytes: a missing artifact does not stop history
+/// from being derived; the provider adapter says it is missing.
 pub fn derive_history(records: &[Record]) -> History {
+    derive_history_with(records, HistoryOptions::default())
+}
+
+/// [`derive_history`] with explicit options.
+pub fn derive_history_with(records: &[Record], options: HistoryOptions) -> History {
     let compaction = records.iter().rev().find_map(|record| match &record.event {
         Event::Compaction {
             summary, up_to_seq, ..
@@ -189,5 +307,6 @@ pub fn derive_history(records: &[Record]) -> History {
             _ => {}
         }
     }
+    retain_images(&mut history.messages, options.keep_images);
     history
 }

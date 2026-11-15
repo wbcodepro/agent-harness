@@ -290,6 +290,11 @@ impl ArtifactStore {
             if let Ok(dir) = fs::File::open(dir) {
                 let _ = dir.sync_all();
             }
+        } else if let Ok(file) = fs::File::options().append(true).open(&path) {
+            // Stored before, perhaps by a crashed write nothing refers to:
+            // it is about to be referenced again, so it counts as new for
+            // garbage collection, which spares recent files.
+            let _ = file.set_modified(std::time::SystemTime::now());
         }
         let (width, height) = match image_dimensions(bytes) {
             Some((w, h)) if mime.starts_with("image/") => (Some(w), Some(h)),

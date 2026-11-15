@@ -17,9 +17,15 @@ pub use model::{
     AttemptReason, Block, Delta, Event, FORMAT_VERSION, Header, ParentRef, Record, SessionId,
     StopReason, ToolSpec, TurnEndReason, Usage, assemble, blocks_text,
 };
-pub use projection::{History, MASK_MIN_BYTES, MASK_NOTE_BYTES, Message, Role, derive_history};
-pub use recover::{INTERRUPTED_NOT_STARTED, INTERRUPTED_RUNNING, plan_close, plan_recovery};
-pub use store::{Clock, CreateOptions, SessionStore, SessionWriter, SystemClock};
+pub use projection::{
+    History, HistoryOptions, KEEP_IMAGES, MASK_MIN_BYTES, MASK_NOTE_BYTES, Message, Role,
+    derive_history, derive_history_with, image_note, session_artifacts,
+};
+pub use recover::{
+    INTERRUPTED_ACTIONS, INTERRUPTED_NOT_STARTED, INTERRUPTED_RUNNING, describe_uncertain_actions,
+    plan_close, plan_recovery,
+};
+pub use store::{Clock, CreateOptions, GcReport, SessionStore, SessionWriter, SystemClock};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
