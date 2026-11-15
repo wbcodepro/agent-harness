@@ -16,6 +16,8 @@ pub struct Page {
     pub base: String,
     pub token: String,
     pub dir: std::path::PathBuf,
+    /// The same routes, for in-process calls as the relay connector makes.
+    pub router: axum::Router,
 }
 
 impl Page {
@@ -47,6 +49,31 @@ impl Page {
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
         let text = response.text().await.unwrap();
+        (
+            status,
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
+    }
+
+    /// A call from a remote device, made in process like the relay
+    /// connector makes it: no token, marked with a `RemoteCaller`.
+    pub async fn remote(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
+        use tower::ServiceExt;
+        let mut request = axum::http::Request::builder()
+            .method(method)
+            .uri(format!("/api{path}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                body.map(|body| body.to_string()).unwrap_or_default(),
+            ))
+            .unwrap();
+        hame_web::RemoteCaller::new("phone-1", "Ana's phone").attach(&mut request);
+        let response = self.router.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
         (
             status,
             serde_json::from_str(&text).unwrap_or(Value::String(text)),
@@ -165,6 +192,7 @@ pub async fn start_with(
         base: format!("http://{}", server.addr),
         token: server.token.clone(),
         dir: dir.to_path_buf(),
+        router: server.router(),
     }
 }
 

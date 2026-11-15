@@ -326,13 +326,13 @@ fn corruption_before_the_tail_is_reported_not_repaired() {
         Err(SessionError::Corrupt { line: 4, .. })
     ));
 
-    let newer = original.replacen("\"version\":2", "\"version\":3", 1);
+    let newer = original.replacen("\"version\":3", "\"version\":4", 1);
     fs::write(&path, newer).unwrap();
     assert!(matches!(
         store.read(&id("s1")),
         Err(SessionError::UnsupportedVersion {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
     ));
     assert!(store.list().unwrap().is_empty());

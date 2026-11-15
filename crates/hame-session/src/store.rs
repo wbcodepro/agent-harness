@@ -78,7 +78,8 @@ impl SessionStore {
             .join(crate::contract::ACTION_JOURNAL_FILE)
     }
 
-    fn log_path(&self, id: &SessionId) -> PathBuf {
+    /// Where the log of session `id` is (whether or not it exists).
+    pub fn log_path(&self, id: &SessionId) -> PathBuf {
         self.root.join(id.as_str()).join(LOG_FILE)
     }
 

@@ -4,10 +4,16 @@
 //!
 //! Kept in one JSON file in hame's data directory (`web/sessions.json`),
 //! which the agent's tools cannot read or write like everything else there.
+//! Every change holds a file lock (`web/sessions.lock`), so two hame
+//! processes do not lose each other's changes, and replaces the file
+//! through a uniquely named temporary file. A file that cannot be read is
+//! kept as a backup and reported, never silently replaced.
 
 use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +28,8 @@ pub enum Mode {
     ReadOnly,
     /// Every call that is not read-only asks first.
     Ask,
-    /// File edits run without asking; commands and the rest ask.
+    /// File edits inside the session's folder run without asking; the rest
+    /// asks.
     AcceptEdits,
     /// No sandbox and no questions.
     FullAccess,
@@ -61,8 +68,13 @@ impl Mode {
         match self {
             Mode::Default => "hame's configured rules: tools run in the sandbox without asking",
             Mode::ReadOnly => "reads and searches only; every change is refused",
-            Mode::Ask => "asks before every change and every command",
-            Mode::AcceptEdits => "file edits run; commands and other actions ask",
+            Mode::Ask => {
+                "asks before every change and command, except what an allow rule in config.toml \
+                 lets through"
+            }
+            Mode::AcceptEdits => {
+                "file edits inside the session's folder run; commands and everything else ask"
+            }
             Mode::FullAccess => "no sandbox and no questions; use with care",
         }
     }
@@ -90,10 +102,21 @@ fn is_default_mode(mode: &Mode) -> bool {
     *mode == Mode::Default
 }
 
+type All = BTreeMap<String, SessionMeta>;
+
 /// The metadata file, read and written whole under a lock.
 pub struct MetaStore {
     path: PathBuf,
     lock: Mutex<()>,
+    /// What went wrong reading the file, for `/api/info`.
+    warning: Mutex<Option<String>>,
+}
+
+fn stamp() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 impl MetaStore {
@@ -101,23 +124,75 @@ impl MetaStore {
         Self {
             path: home.join("web").join("sessions.json"),
             lock: Mutex::new(()),
+            warning: Mutex::new(None),
         }
     }
 
-    fn load(&self) -> BTreeMap<String, SessionMeta> {
-        std::fs::read(&self.path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+    /// A problem reading the file, if there was one.
+    pub fn warning(&self) -> Option<String> {
+        self.warning.lock().expect("meta warning").clone()
+    }
+
+    /// Takes the lock other hame processes take too.
+    fn file_lock(&self) -> Result<File, String> {
+        let dir = self.path.parent().expect("sessions.json has a folder");
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join("sessions.lock"))
+            .map_err(|e| e.to_string())?;
+        file.lock().map_err(|e| e.to_string())?;
+        Ok(file)
+    }
+
+    /// Reads the file. One that exists but cannot be read is moved aside
+    /// to a backup (once) and reported; the sessions then start from
+    /// defaults instead of the server refusing to work.
+    fn load(&self) -> All {
+        let bytes = match std::fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return All::new(),
+            Err(e) => {
+                self.report(format!("cannot read {}: {e}", self.path.display()));
+                return All::new();
+            }
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(all) => all,
+            Err(e) => {
+                let backup = self
+                    .path
+                    .with_extension(format!("json.unreadable-{}", stamp()));
+                let kept = std::fs::rename(&self.path, &backup).is_ok();
+                self.report(format!(
+                    "{} could not be read ({e}); titles, pins, modes and models of web sessions \
+                     start from defaults.{}",
+                    self.path.display(),
+                    if kept {
+                        format!(" The old file is kept as {}.", backup.display())
+                    } else {
+                        String::new()
+                    }
+                ));
+                All::new()
+            }
+        }
+    }
+
+    fn report(&self, warning: String) {
+        eprintln!("hame web: {warning}");
+        *self.warning.lock().expect("meta warning") = Some(warning);
     }
 
     pub fn get(&self, id: &str) -> SessionMeta {
-        let _guard = self.lock.lock().expect("meta lock");
-        self.load().remove(id).unwrap_or_default()
+        self.all().remove(id).unwrap_or_default()
     }
 
-    pub fn all(&self) -> BTreeMap<String, SessionMeta> {
+    pub fn all(&self) -> All {
         let _guard = self.lock.lock().expect("meta lock");
+        let _file = self.file_lock();
         self.load()
     }
 
@@ -128,6 +203,7 @@ impl MetaStore {
         change: impl FnOnce(SessionMeta) -> Option<SessionMeta>,
     ) -> Result<SessionMeta, String> {
         let _guard = self.lock.lock().expect("meta lock");
+        let _file = self.file_lock()?;
         let mut all = self.load();
         let current = all.remove(id).unwrap_or_default();
         let next = change(current);
@@ -136,13 +212,15 @@ impl MetaStore {
         {
             all.insert(id.to_string(), next.clone());
         }
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
         let bytes = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
-        let temp = self.path.with_extension("json.tmp");
+        let temp = self
+            .path
+            .with_extension(format!("json.{}-{}.tmp", std::process::id(), stamp()));
         std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&temp, &self.path).map_err(|e| e.to_string())?;
+        std::fs::rename(&temp, &self.path).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            e.to_string()
+        })?;
         Ok(next.unwrap_or_default())
     }
 }
@@ -169,6 +247,43 @@ mod tests {
         assert_eq!(again.all().len(), 1, "an all-default entry is not kept");
         again.update("a", |_| None).unwrap();
         assert!(again.all().is_empty());
+        assert_eq!(again.warning(), None);
+        // No temporary file is left behind.
+        let left: Vec<_> = std::fs::read_dir(dir.path().join("web"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    #[test]
+    fn an_unreadable_file_is_kept_as_a_backup_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("web")).unwrap();
+        std::fs::write(dir.path().join("web/sessions.json"), b"{not json").unwrap();
+        let store = MetaStore::new(dir.path());
+        assert_eq!(store.get("a"), SessionMeta::default());
+        let warning = store.warning().expect("the problem is reported");
+        assert!(warning.contains("could not be read"), "{warning}");
+        let backups: Vec<_> = std::fs::read_dir(dir.path().join("web"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains("unreadable"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read(dir.path().join("web").join(&backups[0])).unwrap(),
+            b"{not json"
+        );
+        // Changes still work from defaults.
+        store
+            .update("a", |mut meta| {
+                meta.pinned = true;
+                Some(meta)
+            })
+            .unwrap();
+        assert!(store.get("a").pinned);
     }
 
     #[test]

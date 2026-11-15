@@ -116,7 +116,8 @@ pub fn plan_close(records: &[Record], reason: TurnEndReason) -> Vec<Event> {
             | Event::ModelSwitched { .. }
             | Event::Checkpoint { .. }
             | Event::TaskStart { .. }
-            | Event::TaskVerified { .. } => {}
+            | Event::TaskVerified { .. }
+            | Event::ModeChanged { .. } => {}
         }
     }
 

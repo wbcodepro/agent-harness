@@ -13,12 +13,14 @@ hame-agent.workspace = true
 hame-app.workspace = true
 hame-context.workspace = true
 hame-kernel.workspace = true
+hame-policy.workspace = true
 hame-session.workspace = true
 hame-tools.workspace = true
 hame-verify.workspace = true
 include_dir = "0.7.4"
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 
@@ -26,6 +28,7 @@ uuid.workspace = true
 hame-eval.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

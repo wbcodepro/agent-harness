@@ -98,9 +98,70 @@ pub fn overview(records: &[Record]) -> Overview {
     }
 }
 
+/// Overviews of session logs, read again only when a log changes (its
+/// length or modification time), so listing many sessions stays cheap.
+/// A log's length and modification time, and what was read from it.
+type Cached = (u64, Option<std::time::SystemTime>, Overview);
+
+#[derive(Default)]
+pub struct OverviewCache {
+    entries: std::sync::Mutex<std::collections::HashMap<String, Cached>>,
+}
+
+impl OverviewCache {
+    /// The overview of the log at `path`, from `read` when it changed.
+    pub fn get(
+        &self,
+        id: &str,
+        path: &std::path::Path,
+        read: impl FnOnce() -> Vec<Record>,
+    ) -> Overview {
+        let stamp = std::fs::metadata(path)
+            .map(|meta| (meta.len(), meta.modified().ok()))
+            .unwrap_or((0, None));
+        if let Some((len, modified, seen)) = self.entries.lock().expect("overviews").get(id)
+            && (*len, *modified) == stamp
+        {
+            return seen.clone();
+        }
+        let seen = overview(&read());
+        self.entries
+            .lock()
+            .expect("overviews")
+            .insert(id.to_string(), (stamp.0, stamp.1, seen.clone()));
+        seen
+    }
+
+    pub fn forget(&self, id: &str) {
+        self.entries.lock().expect("overviews").remove(id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_log_is_read_again_only_when_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log");
+        std::fs::write(&path, "one\n").unwrap();
+        let cache = OverviewCache::default();
+        let reads = std::cell::Cell::new(0);
+        let read = || {
+            reads.set(reads.get() + 1);
+            Vec::new()
+        };
+        cache.get("a", &path, read);
+        cache.get("a", &path, read);
+        assert_eq!(reads.get(), 1, "unchanged: served from the cache");
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        cache.get("a", &path, read);
+        assert_eq!(reads.get(), 2, "a longer log is read again");
+        cache.forget("a");
+        cache.get("a", &path, read);
+        assert_eq!(reads.get(), 3);
+    }
 
     #[test]
     fn titles_come_from_the_first_line_and_are_shortened_at_a_word() {

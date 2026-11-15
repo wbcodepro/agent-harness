@@ -422,6 +422,14 @@ observation = "semantic"        # semantic | screenshot | pixels
 channel = "browser"             # browser | desktop | visual
 origin = "http://127.0.0.1:*"   # also: app = "com.apple.TextEdit", profile = "work"
 capabilities = ["observe", "interact"]
+
+[web]                           # hame web
+idle_seconds = 600              # a session's agent is shut down (and its lock released) after this long without a turn
+
+[remote]                        # devices reaching this computer through the relay (on top of all of the above)
+allow_full_access = false       # true: a remote device may choose Full access or allow a tool for a whole session
+roots = ["~/code"]              # folders a remote device may start sessions in; default: only folders that already
+                                # have a session, and the folder hame web started in
 ```
 
 When a tool call repeats exactly and returns the same result three times in a row, or the same call fails four times without ever succeeding, its result carries a note telling the model it is stuck (the note also counts toward escalation). From the fifth identical call in a row, the call is no longer run (polling commands repeated verbatim included). Three requests before a turn runs out of steps, the model is told so it can wrap up. Every model switch (escalation, and the return at the next turn) is logged.

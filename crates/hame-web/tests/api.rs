@@ -57,7 +57,8 @@ async fn a_page_runs_a_turn_answers_an_approval_and_can_reload() {
         409
     );
 
-    let answer = json!({"id": question["id"], "allow": true});
+    let answer =
+        json!({"id": question["id"], "allow": true, "tool_call_id": question["tool_call_id"]});
     assert_eq!(
         page.post(&format!("/sessions/{session}/approval"), answer.clone())
             .await

@@ -13,6 +13,18 @@ fn turn_ended(event: &Value) -> bool {
     event["kind"] == "turn" && event["state"] == "ended"
 }
 
+/// Reads until a turn has started and ended (a new subscription first
+/// reports the current state, which may be "ended" from before).
+async fn through_turn(events: &mut common::Events) -> Vec<Value> {
+    let mut seen = events
+        .until("the turn to start", |event| {
+            event["kind"] == "turn" && event["state"] == "started"
+        })
+        .await;
+    seen.extend(events.until("the end of the turn", turn_ended).await);
+    seen
+}
+
 fn slow_text(words: usize) -> ScriptedResponse {
     ScriptedResponse {
         deltas: (0..words)
@@ -75,7 +87,7 @@ async fn sessions_are_listed_with_titles_and_can_be_renamed_pinned_and_deleted()
         json!({"text": "Fix the login bug\nIt fails on empty passwords."}),
     )
     .await;
-    events.until("the end of the turn", turn_ended).await;
+    through_turn(&mut events).await;
 
     let (_, list) = page.get("/sessions").await;
     assert_eq!(list[0]["id"], first.as_str(), "latest activity first");
@@ -178,7 +190,7 @@ async fn the_event_stream_resumes_after_the_last_record_seen() {
         json!({"text": "hi"}),
     )
     .await;
-    let seen = events.until("the end of the turn", turn_ended).await;
+    let seen = through_turn(&mut events).await;
     // Records carry their seq as the event id; other events carry none.
     for (event, id) in seen.iter().zip(&events.ids) {
         assert_eq!(event["record"]["seq"].as_u64(), *id, "{event}");
@@ -232,7 +244,7 @@ async fn a_question_reaches_a_page_that_connects_later_and_always_allows_the_too
         .await;
     let question = asked.last().unwrap().clone();
     assert_eq!(question["tool"], "write");
-    assert_eq!(question["call_id"], "c1");
+    assert_eq!(question["tool_call_id"], "c1");
     assert_eq!(question["input"]["path"], "a.txt");
     assert_eq!(question["effect"], "write");
     assert!(question["scope"].as_str().unwrap().starts_with("write"));
@@ -241,9 +253,11 @@ async fn a_question_reaches_a_page_that_connects_later_and_always_allows_the_too
     // someone.
     let mut later = page.events(&session).await;
     let replayed = later
-        .until("the question again", |event| event["kind"] == "approval")
+        .until("the waiting questions", |event| {
+            event["kind"] == "approvals"
+        })
         .await;
-    assert_eq!(replayed.last().unwrap()["id"], question["id"]);
+    assert_eq!(replayed.last().unwrap()["pending"][0]["id"], question["id"]);
     let (_, list) = page.get("/sessions").await;
     assert_eq!(find(&list, &session)["status"], "needs_you");
     let (_, detail) = page.get(&format!("/sessions/{session}")).await;
@@ -252,7 +266,8 @@ async fn a_question_reaches_a_page_that_connects_later_and_always_allows_the_too
     let (status, _) = page
         .post(
             &format!("/sessions/{session}/approval"),
-            json!({"id": question["id"], "allow": true, "always": true}),
+            json!({"id": question["id"], "allow": true, "always": true,
+                   "tool_call_id": question["tool_call_id"]}),
         )
         .await;
     assert_eq!(status, 200);
@@ -398,21 +413,22 @@ async fn the_permission_mode_changes_between_turns_and_is_remembered() {
         json!({"text": "write"}),
     )
     .await;
-    let seen = events.until("the end of the turn", turn_ended).await;
+    let seen = through_turn(&mut events).await;
     assert!(
         !seen.iter().any(|event| event["kind"] == "approval"),
         "accept-edits lets file edits through"
     );
     assert!(dir.path().join("work/a.txt").exists());
 
-    let (_, changed) = settings(json!({"mode": "read-only"})).await;
+    let (status, changed) = settings(json!({"mode": "read-only"})).await;
+    assert_eq!(status, 200, "{changed}");
     assert_eq!(changed["mode"], "read-only");
     page.post(
         &format!("/sessions/{session}/prompt"),
         json!({"text": "write again"}),
     )
     .await;
-    let seen = events.until("the end of the second turn", turn_ended).await;
+    let seen = through_turn(&mut events).await;
     assert!(
         !dir.path().join("work/b.txt").exists(),
         "read-only refuses changes"
@@ -516,7 +532,7 @@ async fn uploads_reach_the_model_as_images_and_files() {
     }))
     .await;
     assert_eq!(status, 200, "{body}");
-    let seen = events.until("the end of the turn", turn_ended).await;
+    let seen = through_turn(&mut events).await;
     let message = seen
         .iter()
         .find(|event| event["record"]["type"] == "user/message")
@@ -586,6 +602,22 @@ async fn the_interface_is_served_with_a_strict_policy() {
             .unwrap()
             .contains("immutable")
     );
+    // The notices of the npm packages in the page ship with it.
+    let notices = page
+        .http
+        .get(format!("{}/licenses.txt", page.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(notices.status(), 200);
+    assert_eq!(
+        notices.headers()["content-type"],
+        "text/plain; charset=utf-8"
+    );
+    let notices = notices.text().await.unwrap();
+    for package in ["react 19", "micromark", "highlight.js", "lucide-react"] {
+        assert!(notices.contains(package), "{package} is listed");
+    }
     let missing = page
         .http
         .get(format!("{}/assets/nope.js", page.base))

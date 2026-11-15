@@ -1892,6 +1892,7 @@ dependencies = [
  "hame-context",
  "hame-eval",
  "hame-kernel",
+ "hame-policy",
  "hame-session",
  "hame-tools",
  "hame-verify",
@@ -1899,8 +1900,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "tower",
  "uuid",
 ]
 

@@ -9,10 +9,11 @@ use crate::contract::{ActionReceipt, TaskContract, VerificationReport};
 
 /// Version of the on-disk log format this build writes. Version 2 added
 /// image, artifact, data and unsupported content blocks and the task,
-/// receipt and verification events. Logs of version 1 are read unchanged;
-/// a build that only knows version 1 refuses a version 2 log with
-/// `UnsupportedVersion` instead of misreading it.
-pub const FORMAT_VERSION: u32 = 2;
+/// receipt and verification events. Version 3 added the `mode/changed`
+/// event. Older logs are read unchanged; a build that only knows an older
+/// version refuses a newer log with `UnsupportedVersion` instead of
+/// misreading it.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Identifies a session. Restricted to `[A-Za-z0-9_-]{1,64}` because it is
 /// used as a directory name.
@@ -166,6 +167,21 @@ pub enum Event {
     /// The outcome of checking the task's acceptance conditions.
     #[serde(rename = "task/verified")]
     TaskVerified { report: Box<VerificationReport> },
+    /// The permission mode an interface offers (such as the web
+    /// interface's "Ask" or "Full access") changed, and who changed it.
+    /// For the record only: what the mode allows is enforced where the
+    /// agent is built.
+    #[serde(rename = "mode/changed")]
+    ModeChanged {
+        mode: String,
+        previous: String,
+        /// `local` for this computer, otherwise the id of the remote
+        /// device that asked.
+        by: String,
+        /// A remote device's label, as its owner named it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
 }
 
 impl Event {
@@ -520,6 +536,27 @@ mod tests {
                     "is_error": false
                 }
             })
+        );
+        assert_eq!(serde_json::from_value::<Record>(wire).unwrap(), record);
+    }
+
+    #[test]
+    fn mode_changes_use_a_stable_wire_name() {
+        let record = Record {
+            seq: 4,
+            ts: 9,
+            event: Event::ModeChanged {
+                mode: "ask".into(),
+                previous: "default".into(),
+                by: "local".into(),
+                label: None,
+            },
+        };
+        let wire = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            wire,
+            json!({"seq": 4, "ts": 9, "type": "mode/changed",
+                   "data": {"mode": "ask", "previous": "default", "by": "local"}})
         );
         assert_eq!(serde_json::from_value::<Record>(wire).unwrap(), record);
     }
