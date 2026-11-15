@@ -70,13 +70,18 @@ interface Subscription {
 /** Where a device's envelope counters come from. */
 export interface SequenceSource {
   next(): Promise<number>;
+  /** Continue above `counter` (the host's last seen, after pairing again). */
+  advanceTo(counter: number): Promise<void>;
 }
 
 /** Counts in memory from 1. */
 export class MemorySequence implements SequenceSource {
-  private readonly counter = new Counter();
+  private counter = new Counter();
   async next(): Promise<number> {
     return this.counter.next();
+  }
+  async advanceTo(counter: number): Promise<void> {
+    if (this.counter.value < counter) this.counter = new Counter(counter);
   }
 }
 
@@ -94,12 +99,23 @@ export class PersistentSequence implements SequenceSource {
   ) {}
 
   next(): Promise<number> {
-    const step = async () => {
+    return this.locked(async () => {
       const stored = Number((await this.storage.get(this.key)) ?? 0);
       const next = (Number.isSafeInteger(stored) ? stored : 0) + 1;
       await this.storage.set(this.key, next);
       return next;
-    };
+    });
+  }
+
+  async advanceTo(counter: number): Promise<void> {
+    await this.locked(async () => {
+      const stored = Number((await this.storage.get(this.key)) ?? 0);
+      if (!(stored >= counter)) await this.storage.set(this.key, counter);
+      return counter;
+    });
+  }
+
+  private locked(step: () => Promise<number>): Promise<number> {
     const locks = (globalThis as { navigator?: { locks?: { request(name: string, cb: () => Promise<number>): Promise<number> } } })
       .navigator?.locks;
     const run = this.chain.then(() => (locks ? locks.request(`hame-sync:${this.key}`, step) : step()));
@@ -137,8 +153,11 @@ export class RemoteHost {
   private readonly sequence: SequenceSource;
   private hostWindow: ReplayWindow | undefined;
   private loaded = false;
-  // Request ids start from the clock, so a restarted client never reuses
-  // an id an old answer could be replayed for.
+  // Request and stream ids are random (randomId), so a restarted client
+  // never reuses an id an old answer could be replayed for. The host's
+  // counters are checked against a window rebuilt from the last accepted
+  // counter only (CounterStore keeps `last`, not the bitmap): the host
+  // sends in order, so nothing below `last` is legitimately still due.
 
   private readonly pending = new Map<number, Pending>();
   private readonly subscriptions = new Map<number, Subscription>();
@@ -291,13 +310,16 @@ export class RemoteHost {
       this.challengeWaiter = resolve;
     });
     await this.send({ t: "pair", ed: b64url(me.ed), x: b64url(me.x), label, mac: b64url(pairingProof(offer.secret, me)) });
-    const grant = answer.then((frame) => {
+    const grant = answer.then(async (frame) => {
       if (frame.t === "pair_refused") throw new SyncError("pairing", frame.reason);
       if (frame.t !== "paired") throw new SyncError("pairing", "unexpected answer");
       const verified = verifyGrant({ grant: frame.grant, sig: frame.sig }, offer.hostKeys.ed);
       if (verified.device !== this.options.deviceId || verified.host !== this.options.hostId || verified.ed !== b64url(me.ed)) {
         throw new SyncError("pairing", "the grant names someone else");
       }
+      // Continue above what the host has seen from this key (a device that
+      // lost its sequence and paired again).
+      await this.sequence.advanceTo(frame.last_counter ?? 0);
       return verified;
     });
     // A refusal before the challenge settles the digits with the same error.

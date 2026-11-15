@@ -139,13 +139,14 @@ Keys (generated on the device, never sent):
 
 Envelope (every request, response, event and blob chunk):
 - header: `{v:1, from, to, stream, counter}` (device ids, a stream id per
-  session subscription or request, a per-sender monotonic counter);
+  session subscription or request, a per-sender persisted sequence);
 - body: ephemeral X25519 to the recipient → HKDF-SHA256 → XChaCha20-
   Poly1305, header as associated data;
 - signature: the sender's Ed25519 over header ‖ ciphertext.
 - The host accepts an envelope only if `from` is on its local allowlist,
-  the signature verifies with the pinned key, and the counter is higher
-  than the last one seen from that device. Metadata such as session
+  the signature verifies with the pinned key, and the counter has not
+  been seen from that device (a 64-counter replay window above the
+  highest seen; see crates/hame-sync/README.md). Metadata such as session
   titles, paths and host names is inside the ciphertext, never in the
   header.
 - Libraries: Rust `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`,
@@ -160,10 +161,15 @@ Pairing (the host decides who may control it):
 2. The client scans it and sends, through the relay, its public keys
    plus `HMAC-SHA256(secret, client_ed ‖ client_x)`, encrypted to the
    host.
-3. Both screens show a short authentication string: 6 digits from
-   `SHA256("hame-sas" ‖ secret ‖ host_ed ‖ client_ed)`. The user confirms
-   **on the host**; only then is the device added to the host's
-   allowlist (with a label), and the host returns a signed grant.
+3. The host answers a valid request with a fresh random nonce
+   (`pair_challenge`), chosen after the client committed to its keys.
+   Both screens show a short authentication string: 8 digits from
+   `SHA256("hame-sas-v2" ‖ secret ‖ host_ed ‖ client_ed ‖ host_nonce)`.
+   The user confirms **on the host**; only then is the device added to
+   the host's allowlist (with a label), and the host returns a signed
+   grant with the highest counter it accepted from that key (a device
+   that lost its counter and pairs again continues above it; the host
+   never lowers a known key's replay window).
 4. Later devices: approved the same way from the host, or from an
    enrolled device that relays the request to the host, which still asks
    for confirmation on the host or shows the request to the enrolled

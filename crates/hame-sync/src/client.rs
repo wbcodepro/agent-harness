@@ -142,7 +142,11 @@ impl RemoteClient {
             }
         };
         match frame {
-            Frame::Paired { grant, sig } => {
+            Frame::Paired {
+                grant,
+                sig,
+                last_counter,
+            } => {
                 let host = self.host()?;
                 let grant = SignedGrant { grant, sig }.verify(&host.ed)?;
                 if grant.device != self.inner.device_id
@@ -150,6 +154,11 @@ impl RemoteClient {
                     || grant.ed != b64(&self.public().ed)
                 {
                     return Err(SyncError::Pairing("the grant names someone else".into()));
+                }
+                // Continue above what the host has seen from this key.
+                let mut counter = self.inner.counter.lock().await;
+                if counter.last() < last_counter {
+                    *counter = Counter::starting_after(last_counter);
                 }
                 Ok(grant)
             }

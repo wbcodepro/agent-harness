@@ -86,17 +86,21 @@ impl Allowlist {
         self.revoked.iter().any(|r| r.ed == ed)
     }
 
-    /// Adds a device whose pairing envelope carried `counter`. A known
-    /// device with a different key is refused, never silently replaced; so
-    /// is a revoked key. A known device pairing again with its own key (it
-    /// lost its state) starts a fresh replay window.
+    /// Adds a device whose pairing envelope carried `counter`, and returns
+    /// the highest counter accepted from it, which the device must continue
+    /// above. A known device with a different key is refused, never
+    /// silently replaced; so is a revoked key. A known device pairing again
+    /// with its own key (it lost or rolled back its sequence) keeps its
+    /// replay window: lowering it would let a relay replay every envelope
+    /// the device sent before. The `paired` answer tells the device where
+    /// to continue.
     pub fn add(
         &mut self,
         device: &str,
         label: &str,
         keys: &PublicIdentity,
         counter: u64,
-    ) -> Result<(), SyncError> {
+    ) -> Result<u64, SyncError> {
         if self.is_revoked(keys) {
             return Err(SyncError::Pairing("this key was revoked".into()));
         }
@@ -104,9 +108,11 @@ impl Allowlist {
             if known.keys()? != *keys {
                 return Err(SyncError::KeyChanged(device.into()));
             }
-            known.window = ReplayWindow::starting_at(counter);
+            if counter > known.window.last {
+                known.window.record(counter);
+            }
             known.label = label.into();
-            return Ok(());
+            return Ok(known.window.last);
         }
         self.devices.push(AllowedDevice {
             device: device.into(),
@@ -116,7 +122,7 @@ impl Allowlist {
             added: crate::pairing::now_unix(),
             window: ReplayWindow::starting_at(counter),
         });
-        Ok(())
+        Ok(counter)
     }
 
     /// Removes a device and remembers its key as revoked. False when the
@@ -444,7 +450,11 @@ mod tests {
         let mut list = Allowlist::default();
         let phone = Identity::generate().public();
         list.add("phone", "Phone", &phone, 5).unwrap();
-        list.add("phone", "Phone", &phone, 5).unwrap();
+        list.get_mut("phone").unwrap().window.record(40);
+        // Pairing again with a lower counter keeps the window.
+        assert_eq!(list.add("phone", "Phone", &phone, 3).unwrap(), 40);
+        let window = list.get("phone").unwrap().window;
+        assert!(window.check(40).is_err() && window.check(5).is_err());
         assert_eq!(list.devices.len(), 1);
         let swapped = Identity::generate().public();
         assert!(matches!(

@@ -78,8 +78,10 @@ export function checkPairingProof(secret: Uint8Array, client: PublicKeys, proof:
 }
 
 /**
- * Six digits from SHA256("hame-sas" ‖ secret ‖ host_ed ‖ client_ed): the
- * first four bytes big-endian, modulo one million, zero-padded.
+ * Eight digits from SHA256("hame-sas-v2" ‖ secret ‖ host_ed ‖ client_ed ‖
+ * host_nonce): the first eight bytes big-endian, modulo 10^8, zero-padded.
+ * The host's nonce arrives in `pair_challenge`, after the device committed
+ * to its keys.
  */
 export function sas(secret: Uint8Array, hostEd: Uint8Array, clientEd: Uint8Array, hostNonce: Uint8Array): string {
   const digest = sha256(concat(utf8("hame-sas-v2"), secret, hostEd, clientEd, hostNonce));

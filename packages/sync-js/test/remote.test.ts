@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   MemoryKeyStorage,
+  PersistentSequence,
   RawIdentity,
   RelayClient,
   checkRelayUrl,
@@ -25,6 +26,17 @@ async function until(what: string, check: () => boolean, ms = 5000): Promise<voi
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+describe("sequences", () => {
+  it("continue above the host's last counter after pairing again, never below", async () => {
+    const sequence = new PersistentSequence(new MemoryKeyStorage(), "c");
+    expect(await sequence.next()).toBe(1);
+    await sequence.advanceTo(40);
+    expect(await sequence.next()).toBe(41);
+    await sequence.advanceTo(10);
+    expect(await sequence.next()).toBe(42);
+  });
+});
 
 describe("relay client helpers", () => {
   it("builds WebSocket URLs and bounded jittered backoff", () => {

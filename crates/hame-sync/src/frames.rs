@@ -109,7 +109,15 @@ pub enum Frame {
         mac: String,
     },
     /// The host accepted the device: its signed grant.
-    Paired { grant: String, sig: String },
+    /// `last_counter` is the highest counter the host accepted from this
+    /// device: a device pairing again after losing its sequence continues
+    /// above it.
+    Paired {
+        grant: String,
+        sig: String,
+        #[serde(default)]
+        last_counter: u64,
+    },
     /// The host refused the pairing.
     PairRefused { reason: String },
     /// The host's answer to a valid pairing request: a fresh random nonce

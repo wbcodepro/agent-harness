@@ -22,7 +22,7 @@ export type Frame =
   | { t: "cancel"; id: number }
   | { t: "blob"; id: number; sha256: string; chunk: number; of: number; data: string }
   | { t: "pair"; ed: string; x: string; label: string; mac: string }
-  | { t: "paired"; grant: string; sig: string }
+  | { t: "paired"; grant: string; sig: string; last_counter?: number }
   | { t: "pair_refused"; reason: string }
   | { t: "pair_challenge"; nonce: string }
   | { t: "revoke"; id: number; device: string }

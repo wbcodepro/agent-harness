@@ -65,7 +65,10 @@ message):
   identity do not collide). The receiver keeps a 64-counter replay window
   (highest seen plus a bitmap), so envelopes reordered between tabs or
   resent after a reconnection are accepted once. A device that lost its
-  sequence pairs again, which resets its window.
+  sequence pairs again: the host keeps the key's window (lowering it would
+  let a relay replay everything the device sent before) and returns the
+  highest counter it accepted in `paired` (`last_counter`); the device
+  continues above it.
 
 **Pairing**:
 

@@ -613,7 +613,7 @@ impl Inner {
                 Err(SyncError::Pairing("not confirmed on the host".into()))
             };
             match outcome {
-                Ok(()) => {
+                Ok(last_counter) => {
                     let grant =
                         Grant::new(&this.device_id, &from, &keys, &label).sign(&this.identity);
                     let _ = this
@@ -623,6 +623,7 @@ impl Inner {
                             Frame::Paired {
                                 grant: grant.grant,
                                 sig: grant.sig,
+                                last_counter,
                             },
                         )
                         .await;
