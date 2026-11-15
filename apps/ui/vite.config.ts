@@ -12,19 +12,46 @@ import react from "@vitejs/plugin-react";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const outDir = join(root, "crates/hame-web/ui-dist");
 
+/** The package an id of a bundled module comes from: its folder, name and package.json. */
+function packageOf(id: string): { dir: string; name: string } | undefined {
+  const path = id.replace(/^\0/, "").split("?")[0].replace(/\\/g, "/");
+  const at = path.lastIndexOf("/node_modules/");
+  if (at < 0) return undefined;
+  const rest = path.slice(at + "/node_modules/".length).split("/");
+  const name = rest[0].startsWith("@") ? `${rest[0]}/${rest[1]}` : rest[0];
+  return { dir: `${path.slice(0, at)}/node_modules/${name}`, name };
+}
+
 /**
  * Writes `licenses.txt` next to the page: the license text of every npm
- * package built into it (the non-dev packages of package-lock.json), in
- * name order, so the notices ship with the code they cover.
+ * package with code in the bundle, in name order, so the notices ship with
+ * the code they cover. The packages come from Rollup's output (the modules
+ * of each chunk, and the stylesheets and assets they pulled in), not from
+ * the lockfile, so a package appears exactly when it is built in. Also
+ * writes `licenses.json` (name, version, license) for
+ * scripts/license-report.py.
  */
 function licenses(): Plugin {
   return {
     name: "hame-licenses",
     apply: "build",
-    generateBundle() {
-      const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")) as {
-        packages: Record<string, { version?: string; license?: string; dev?: boolean; link?: boolean }>;
-      };
+    generateBundle(_options, bundle) {
+      const ids = new Set<string>();
+      for (const file of Object.values(bundle)) {
+        if (file.type === "chunk") {
+          for (const [id, module] of Object.entries(file.modules)) if (module.renderedLength > 0) ids.add(id);
+        }
+      }
+      // Stylesheets (and what they reference) leave no rendered code in a
+      // chunk; the module graph still knows they were built in.
+      for (const id of this.getModuleIds()) {
+        if (/\.(css|woff2?|ttf|svg|png)(\?|$)/.test(id) && this.getModuleInfo(id)?.isIncluded !== false) ids.add(id);
+      }
+      const packages = new Map<string, { dir: string; name: string }>();
+      for (const id of ids) {
+        const pkg = packageOf(id);
+        if (pkg && !packages.has(pkg.dir)) packages.set(pkg.dir, pkg);
+      }
       const parts = [
         "Open-source software in hame's web interface",
         "",
@@ -32,18 +59,19 @@ function licenses(): Plugin {
         "text is copied from the package as published.",
         "",
       ];
-      const names = Object.keys(lock.packages)
-        .filter((key) => key.startsWith("node_modules/") && !lock.packages[key].dev && !lock.packages[key].link)
-        .sort();
-      for (const key of names) {
-        const pkg = lock.packages[key];
-        const name = key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length);
-        const dir = join(root, key);
+      const listed: { name: string; version: string; license: string }[] = [];
+      for (const { dir, name } of [...packages.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+        const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string; license?: string };
+        const version = manifest.version ?? "";
+        const license = manifest.license ?? "unknown";
+        if (listed.some((entry) => entry.name === name && entry.version === version)) continue;
+        listed.push({ name, version, license });
         const file = existsSync(dir) ? readdirSync(dir).sort().find((entry) => /^(licen[cs]e|copying)(\.|$)/i.test(entry)) : undefined;
-        const text = file ? readFileSync(join(dir, file), "utf8").trim() : `License: ${pkg.license ?? "unknown"} (no license file in the package)`;
-        parts.push("=".repeat(72), `${name} ${pkg.version ?? ""} (${pkg.license ?? "unknown"})`, "=".repeat(72), "", text, "");
+        const text = file ? readFileSync(join(dir, file), "utf8").trim() : `License: ${license} (no license file in the package)`;
+        parts.push("=".repeat(72), `${name} ${version} (${license})`, "=".repeat(72), "", text, "");
       }
       this.emitFile({ type: "asset", fileName: "licenses.txt", source: parts.join("\n") });
+      this.emitFile({ type: "asset", fileName: "licenses.json", source: `${JSON.stringify(listed, null, 2)}\n` });
     },
   };
 }

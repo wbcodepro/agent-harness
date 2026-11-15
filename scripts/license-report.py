@@ -11,9 +11,10 @@ are not shipped), and writes:
 - docs/release/sbom.cdx.json: a CycloneDX 1.5 JSON SBOM of the same graph.
 
 Both also list the npm packages of the web interface (`apps/ui`) that are
-built into the page `hame web` embeds: the non-dev packages of
-`package-lock.json`. Their license texts ship with the page as
-`licenses.txt` (written by the build, see apps/ui/vite.config.ts).
+built into the page `hame web` embeds, as the build found them in its
+bundle (`crates/hame-web/ui-dist/licenses.json`, written with
+`licenses.txt` by apps/ui/vite.config.ts). Their license texts ship with
+the page as `licenses.txt`.
 
 Usage (from anywhere in the repository):
     python3 -I scripts/license-report.py [--check]
@@ -203,18 +204,16 @@ PLATFORM_LABELS = [label for _, label in PLATFORMS]
 
 
 def npm_packages(root):
-    """The npm packages built into the embedded web interface."""
-    path = os.path.join(root, "package-lock.json")
+    """The npm packages built into the embedded web interface: what the
+    build found in its bundle."""
+    path = os.path.join(root, "crates", "hame-web", "ui-dist", "licenses.json")
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as f:
-        lock = json.load(f)
+        listed = json.load(f)
     found = []
-    for key, pkg in lock.get("packages", {}).items():
-        if not key.startswith("node_modules/") or pkg.get("dev") or pkg.get("link"):
-            continue
-        name = key.rsplit("node_modules/", 1)[1]
-        rec = {"name": name, "version": pkg.get("version", ""), "license": pkg.get("license") or ""}
+    for pkg in listed:
+        rec = {"name": pkg["name"], "version": pkg.get("version", ""), "license": pkg.get("license") or ""}
         rec["status"], rec["chosen"] = verdict(rec["license"])
         found.append(rec)
     return sorted(found, key=lambda r: (r["name"], r["version"]))

@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:90b125f2-67cf-5dad-8f36-0a9fb148a279",
+  "serialNumber": "urn:uuid:4318e22f-2049-5670-bea4-b2f27c1062cb",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-16T01:09:18+07:00",
+    "timestamp": "2026-11-16T05:47:35+07:00",
     "tools": {
       "components": [
         {
@@ -29,7 +29,7 @@
       "properties": [
         {
           "name": "hame:cargo-lock-sha256",
-          "value": "c4482ba5e7643595da1e7e9821bfcd5bb58342b83b4285e73958394ea2a47ae5"
+          "value": "c09ff85537c027070c0910c649bb9d3b9bd285336ee07e5b097a4a3ad73f1b21"
         }
       ]
     }
@@ -52,6 +52,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/gimli-rs/addr2line"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/aead@0.5.2",
+      "name": "aead",
+      "version": "0.5.2",
+      "purl": "pkg:cargo/aead@0.5.2",
+      "scope": "required",
+      "description": "Traits for Authenticated Encryption with Associated Data (AEAD) algorithms,\nsuch as AES-GCM as ChaCha20Poly1305, which provide a high-level API",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
         }
       ],
       "properties": [
@@ -635,6 +661,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/axum-macros@0.5.1",
+      "name": "axum-macros",
+      "version": "0.5.1",
+      "purl": "pkg:cargo/axum-macros@0.5.1",
+      "scope": "excluded",
+      "description": "Macros for axum",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tokio-rs/axum"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/base64@0.22.1",
       "name": "base64",
       "version": "0.22.1",
@@ -676,6 +728,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/marshallpierce/rust-base64"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/base64ct@1.8.3",
+      "name": "base64ct",
+      "version": "1.8.3",
+      "purl": "pkg:cargo/base64ct@1.8.3",
+      "scope": "required",
+      "description": "Pure Rust implementation of Base64 (RFC 4648) which avoids any usages of\ndata-dependent branches/LUTs and thereby provides portable \"best effort\"\nconstant-time operation and embedded-friendly no_std support",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/formats"
         }
       ],
       "properties": [
@@ -1129,6 +1207,84 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/chacha20@0.9.1",
+      "name": "chacha20",
+      "version": "0.9.1",
+      "purl": "pkg:cargo/chacha20@0.9.1",
+      "scope": "required",
+      "description": "The ChaCha20 stream cipher (RFC 8439) implemented in pure Rust using traits\nfrom the RustCrypto `cipher` crate, with optional architecture-specific\nhardware acceleration (AVX2, SSE2). Additionally provides the ChaCha8, ChaCha12,\nXChaCha20, XChaCha12 and XChaCha8 stream ciphers, and also optional\nrand_core-compatible RNGs based on those ciphers.",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/stream-ciphers"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/chacha20poly1305@0.10.1",
+      "name": "chacha20poly1305",
+      "version": "0.10.1",
+      "purl": "pkg:cargo/chacha20poly1305@0.10.1",
+      "scope": "required",
+      "description": "Pure Rust implementation of the ChaCha20Poly1305 Authenticated Encryption\nwith Additional Data Cipher (RFC 8439) with optional architecture-specific\nhardware acceleration. Also contains implementations of the XChaCha20Poly1305\nextended nonce variant of ChaCha20Poly1305, and the reduced-round\nChaCha8Poly1305 and ChaCha12Poly1305 lightweight variants.",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/AEADs/tree/master/chacha20poly1305"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cipher@0.4.4",
+      "name": "cipher",
+      "version": "0.4.4",
+      "purl": "pkg:cargo/cipher@0.4.4",
+      "scope": "required",
+      "description": "Traits for describing block ciphers and stream ciphers",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/clap@4.6.7",
       "name": "clap",
       "version": "4.6.7",
@@ -1326,6 +1482,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/ParkMyCar/compact_str"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/const-oid@0.9.6",
+      "name": "const-oid",
+      "version": "0.9.6",
+      "purl": "pkg:cargo/const-oid@0.9.6",
+      "scope": "required",
+      "description": "Const-friendly implementation of the ISO/IEC Object Identifier (OID) standard\nas defined in ITU X.660, with support for BER/DER encoding/decoding as well as\nheapless no_std (i.e. embedded) support",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/formats/tree/master/const-oid"
         }
       ],
       "properties": [
@@ -2105,6 +2287,58 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/curve25519-dalek@4.1.3",
+      "name": "curve25519-dalek",
+      "version": "4.1.3",
+      "purl": "pkg:cargo/curve25519-dalek@4.1.3",
+      "scope": "required",
+      "description": "A pure-Rust implementation of group operations on ristretto255 and Curve25519",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/curve25519-dalek-derive@0.1.1",
+      "name": "curve25519-dalek-derive",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/curve25519-dalek-derive@0.1.1",
+      "scope": "excluded",
+      "description": "curve25519-dalek Derives",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dalek-cryptography/curve25519-dalek"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "macOS x86_64, Linux x86_64, Windows x86_64"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/darling@0.24.1",
       "name": "darling",
       "version": "0.24.1",
@@ -2250,6 +2484,32 @@
         {
           "type": "vcs",
           "url": "https://gitlab.com/ryanobeirne/deltae.git"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/der@0.7.10",
+      "name": "der",
+      "version": "0.7.10",
+      "purl": "pkg:cargo/der@0.7.10",
+      "scope": "required",
+      "description": "Pure Rust embedded-friendly implementation of the Distinguished Encoding Rules\n(DER) for Abstract Syntax Notation One (ASN.1) as described in ITU X.690 with\nfull support for heapless no_std targets",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/formats/tree/master/der"
         }
       ],
       "properties": [
@@ -2510,6 +2770,58 @@
         {
           "type": "vcs",
           "url": "https://gitlab.com/kornelski/dunce"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ed25519@2.2.3",
+      "name": "ed25519",
+      "version": "2.2.3",
+      "purl": "pkg:cargo/ed25519@2.2.3",
+      "scope": "required",
+      "description": "Edwards Digital Signature Algorithm (EdDSA) over Curve25519 (as specified in RFC 8032)\nsupport library providing signature type definitions and PKCS#8 private key\ndecoding/encoding support",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/signatures/tree/master/ed25519"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ed25519-dalek@2.2.0",
+      "name": "ed25519-dalek",
+      "version": "2.2.0",
+      "purl": "pkg:cargo/ed25519-dalek@2.2.0",
+      "scope": "required",
+      "description": "Fast and efficient ed25519 EdDSA key generations, signing, and verification in pure Rust.",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek"
         }
       ],
       "properties": [
@@ -3145,6 +3457,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/futures-executor@0.3.34",
+      "name": "futures-executor",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-executor@0.3.34",
+      "scope": "required",
+      "description": "Executors for asynchronous tasks based on the futures-rs library.",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/futures-rs"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/futures-io@0.3.34",
       "name": "futures-io",
       "version": "0.3.34",
@@ -3576,6 +3914,58 @@
         {
           "type": "vcs",
           "url": "https://github.com/KokaKiwi/rust-hex"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/hkdf@0.12.4",
+      "name": "hkdf",
+      "version": "0.12.4",
+      "purl": "pkg:cargo/hkdf@0.12.4",
+      "scope": "required",
+      "description": "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/KDFs/"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/hmac@0.12.1",
+      "name": "hmac",
+      "version": "0.12.1",
+      "purl": "pkg:cargo/hmac@0.12.1",
+      "scope": "required",
+      "description": "Generic implementation of Hash-based Message Authentication Code (HMAC)",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/MACs"
         }
       ],
       "properties": [
@@ -4226,6 +4616,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/dtolnay/indoc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/inout@0.1.4",
+      "name": "inout",
+      "version": "0.1.4",
+      "purl": "pkg:cargo/inout@0.1.4",
+      "scope": "required",
+      "description": "Custom reference types for code generic over in-place and buffer-to-buffer modes of operation.",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
         }
       ],
       "properties": [
@@ -5485,6 +5901,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/opaque-debug@0.3.1",
+      "name": "opaque-debug",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/opaque-debug@0.3.1",
+      "scope": "required",
+      "description": "Macro for opaque Debug trait implementation",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/openssl-probe@0.2.2",
       "name": "openssl-probe",
       "version": "0.2.2",
@@ -6031,6 +6473,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/pkcs8@0.10.2",
+      "name": "pkcs8",
+      "version": "0.10.2",
+      "purl": "pkg:cargo/pkcs8@0.10.2",
+      "scope": "required",
+      "description": "Pure Rust implementation of Public-Key Cryptography Standards (PKCS) #8:\nPrivate-Key Information Syntax Specification (RFC 5208), with additional\nsupport for PKCS#8v2 asymmetric key packages (RFC 5958)",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/formats/tree/master/pkcs8"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/pkg-config@0.3.34",
       "name": "pkg-config",
       "version": "0.3.34",
@@ -6046,6 +6514,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/rust-lang/pkg-config-rs"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/poly1305@0.8.0",
+      "name": "poly1305",
+      "version": "0.8.0",
+      "purl": "pkg:cargo/poly1305@0.8.0",
+      "scope": "required",
+      "description": "The Poly1305 universal hash function and message authentication code",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/universal-hashes"
         }
       ],
       "properties": [
@@ -6161,6 +6655,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/ppv-lite86@0.2.21",
+      "name": "ppv-lite86",
+      "version": "0.2.21",
+      "purl": "pkg:cargo/ppv-lite86@0.2.21",
+      "scope": "required",
+      "description": "Cross-platform cryptography-oriented low-level SIMD library.",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/cryptocorrosion/cryptocorrosion"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/proc-macro2@1.0.107",
       "name": "proc-macro2",
       "version": "1.0.107",
@@ -6254,6 +6774,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/qrcode@0.14.1",
+      "name": "qrcode",
+      "version": "0.14.1",
+      "purl": "pkg:cargo/qrcode@0.14.1",
+      "scope": "required",
+      "description": "QR code encoder in Rust",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/kennytm/qrcode-rust"
         }
       ],
       "properties": [
@@ -6421,6 +6967,84 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/rand@0.9.5",
+      "name": "rand",
+      "version": "0.9.5",
+      "purl": "pkg:cargo/rand@0.9.5",
+      "scope": "required",
+      "description": "Random number generators and other randomness functionality.",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-random/rand"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rand_chacha@0.3.1",
+      "name": "rand_chacha",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/rand_chacha@0.3.1",
+      "scope": "required",
+      "description": "ChaCha random number generator",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-random/rand"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rand_chacha@0.9.0",
+      "name": "rand_chacha",
+      "version": "0.9.0",
+      "purl": "pkg:cargo/rand_chacha@0.9.0",
+      "scope": "required",
+      "description": "ChaCha random number generator",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-random/rand"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/rand_core@0.10.1",
       "name": "rand_core",
       "version": "0.10.1",
@@ -6451,6 +7075,32 @@
       "name": "rand_core",
       "version": "0.6.4",
       "purl": "pkg:cargo/rand_core@0.6.4",
+      "scope": "required",
+      "description": "Core random number generator traits and tools for implementation.",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-random/rand"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rand_core@0.9.5",
+      "name": "rand_core",
+      "version": "0.9.5",
+      "purl": "pkg:cargo/rand_core@0.9.5",
       "scope": "required",
       "description": "Core random number generator traits and tools for implementation.",
       "licenses": [
@@ -7617,6 +8267,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/sha1@0.10.7",
+      "name": "sha1",
+      "version": "0.10.7",
+      "purl": "pkg:cargo/sha1@0.10.7",
+      "scope": "required",
+      "description": "SHA-1 hash function",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/hashes"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/sha2@0.10.9",
       "name": "sha2",
       "version": "0.10.9",
@@ -7742,6 +8418,32 @@
         {
           "name": "hame:platforms",
           "value": "macOS arm64, macOS x86_64, Linux x86_64, Linux arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/signature@2.2.0",
+      "name": "signature",
+      "version": "2.2.0",
+      "purl": "pkg:cargo/signature@2.2.0",
+      "scope": "required",
+      "description": "Traits for cryptographic signature algorithms (e.g. ECDSA, Ed25519)",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits/tree/master/signature"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
         }
       ]
     },
@@ -7892,6 +8594,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/rust-lang/socket2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/spki@0.7.3",
+      "name": "spki",
+      "version": "0.7.3",
+      "purl": "pkg:cargo/spki@0.7.3",
+      "scope": "required",
+      "description": "X.509 Subject Public Key Info (RFC5280) describing public keys as well as their\nassociated AlgorithmIdentifiers (i.e. OIDs)",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/formats/tree/master/spki"
         }
       ],
       "properties": [
@@ -8813,6 +9541,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/tokio-tungstenite@0.29.0",
+      "name": "tokio-tungstenite",
+      "version": "0.29.0",
+      "purl": "pkg:cargo/tokio-tungstenite@0.29.0",
+      "scope": "required",
+      "description": "Tokio binding for Tungstenite, the Lightweight stream-based WebSocket implementation",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/snapview/tokio-tungstenite"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/tokio-util@0.7.20",
       "name": "tokio-util",
       "version": "0.7.20",
@@ -9385,6 +10139,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/tungstenite@0.29.0",
+      "name": "tungstenite",
+      "version": "0.29.0",
+      "purl": "pkg:cargo/tungstenite@0.29.0",
+      "scope": "required",
+      "description": "Lightweight stream-based WebSocket implementation",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/snapview/tungstenite-rs"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/typenum@1.20.1",
       "name": "typenum",
       "version": "1.20.1",
@@ -9556,6 +10336,32 @@
         {
           "type": "vcs",
           "url": "https://github.com/unicode-rs/unicode-xid"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/universal-hash@0.5.1",
+      "name": "universal-hash",
+      "version": "0.5.1",
+      "purl": "pkg:cargo/universal-hash@0.5.1",
+      "scope": "required",
+      "description": "Traits which describe the functionality of universal hash functions (UHFs)",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
         }
       ],
       "properties": [
@@ -10945,6 +11751,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/x25519-dalek@2.0.1",
+      "name": "x25519-dalek",
+      "version": "2.0.1",
+      "purl": "pkg:cargo/x25519-dalek@2.0.1",
+      "scope": "required",
+      "description": "X25519 elliptic curve Diffie-Hellman key exchange in pure-Rust, using curve25519-dalek.",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/x25519-dalek"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/x509-parser@0.18.1",
       "name": "x509-parser",
       "version": "0.18.1",
@@ -11049,6 +11881,58 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/zerocopy@0.8.63",
+      "name": "zerocopy",
+      "version": "0.8.63",
+      "purl": "pkg:cargo/zerocopy@0.8.63",
+      "scope": "required",
+      "description": "Zerocopy makes zero-cost memory manipulation effortless. We write \"unsafe\" so you don't have to.",
+      "licenses": [
+        {
+          "expression": "BSD-2-Clause OR Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/google/zerocopy"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/zerocopy-derive@0.8.63",
+      "name": "zerocopy-derive",
+      "version": "0.8.63",
+      "purl": "pkg:cargo/zerocopy-derive@0.8.63",
+      "scope": "excluded",
+      "description": "Custom derive for traits from the zerocopy crate",
+      "licenses": [
+        {
+          "expression": "BSD-2-Clause OR Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/google/zerocopy"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/zerofrom@0.1.8",
       "name": "zerofrom",
       "version": "0.1.8",
@@ -11107,6 +11991,32 @@
       "purl": "pkg:cargo/zeroize@1.9.1",
       "scope": "required",
       "description": "Securely clear secrets from memory with a simple trait built on\nstable Rust primitives which guarantee memory is zeroed using an\noperation will not be 'optimized away' by the compiler.\nUses a portable pure Rust implementation that works everywhere,\neven WASM!",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/zeroize_derive@1.5.0",
+      "name": "zeroize_derive",
+      "version": "1.5.0",
+      "purl": "pkg:cargo/zeroize_derive@1.5.0",
+      "scope": "excluded",
+      "description": "Custom derive support for zeroize",
       "licenses": [
         {
           "expression": "Apache-2.0 OR MIT"
@@ -11347,162 +12257,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40types/debug@4.1.13",
-      "name": "@types/debug",
-      "version": "4.1.13",
-      "purl": "pkg:npm/%40types/debug@4.1.13",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40types/ms@2.1.0",
-      "name": "@types/ms",
-      "version": "2.1.0",
-      "purl": "pkg:npm/%40types/ms@2.1.0",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40types/react@19.3.0",
-      "name": "@types/react",
-      "version": "19.3.0",
-      "purl": "pkg:npm/%40types/react@19.3.0",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/character-entities@2.0.2",
-      "name": "character-entities",
-      "version": "2.0.2",
-      "purl": "pkg:npm/character-entities@2.0.2",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/csstype@3.2.3",
-      "name": "csstype",
-      "version": "3.2.3",
-      "purl": "pkg:npm/csstype@3.2.3",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/debug@4.4.3",
-      "name": "debug",
-      "version": "4.4.3",
-      "purl": "pkg:npm/debug@4.4.3",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/decode-named-character-reference@1.3.0",
       "name": "decode-named-character-reference",
       "version": "1.3.0",
       "purl": "pkg:npm/decode-named-character-reference@1.3.0",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/dequal@2.0.3",
-      "name": "dequal",
-      "version": "2.0.3",
-      "purl": "pkg:npm/dequal@2.0.3",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/devlop@1.1.0",
-      "name": "devlop",
-      "version": "1.1.0",
-      "purl": "pkg:npm/devlop@1.1.0",
       "scope": "required",
       "licenses": [
         {
@@ -12050,63 +12808,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-util-symbol@2.0.1",
-      "name": "micromark-util-symbol",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-util-symbol@2.0.1",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/micromark-util-types@2.0.3",
-      "name": "micromark-util-types",
-      "version": "2.0.3",
-      "purl": "pkg:npm/micromark-util-types@2.0.3",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/ms@2.1.3",
-      "name": "ms",
-      "version": "2.1.3",
-      "purl": "pkg:npm/ms@2.1.3",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hame:part",
-          "value": "web interface"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/react@19.3.1",
       "name": "react",
       "version": "19.3.1",
@@ -12167,30 +12868,46 @@
     {
       "ref": "pkg:cargo/hame-cli@0.1.0-rc.1",
       "dependsOn": [
+        "pkg:cargo/async-trait@0.1.92",
+        "pkg:cargo/aws-lc-rs@1.19.0",
         "pkg:cargo/axum@0.8.9",
         "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/chacha20poly1305@0.10.1",
         "pkg:cargo/clap@4.6.7",
         "pkg:cargo/crossterm@0.29.0",
+        "pkg:cargo/curve25519-dalek@4.1.3",
+        "pkg:cargo/ed25519-dalek@2.2.0",
         "pkg:cargo/futures-util@0.3.34",
         "pkg:cargo/globset@0.4.21",
+        "pkg:cargo/hkdf@0.12.4",
+        "pkg:cargo/hmac@0.12.1",
         "pkg:cargo/ignore@0.4.34",
         "pkg:cargo/include_dir@0.7.4",
         "pkg:cargo/landlock@0.4.7",
         "pkg:cargo/libc@0.2.191",
+        "pkg:cargo/nix@0.31.3",
+        "pkg:cargo/qrcode@0.14.1",
+        "pkg:cargo/rand@0.8.8",
+        "pkg:cargo/rand@0.9.5",
         "pkg:cargo/ratatui@0.30.2",
         "pkg:cargo/rcgen@0.14.10",
         "pkg:cargo/regex@1.13.1",
         "pkg:cargo/reqwest@0.13.5",
         "pkg:cargo/rustls-native-certs@0.8.5",
         "pkg:cargo/rustls@0.23.46",
+        "pkg:cargo/ryu@1.0.23",
         "pkg:cargo/serde@1.0.229",
         "pkg:cargo/serde_json@1.0.154",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.21",
         "pkg:cargo/tokio-rustls@0.26.6",
+        "pkg:cargo/tokio-tungstenite@0.29.0",
         "pkg:cargo/tokio@1.54.1",
         "pkg:cargo/toml@1.2.1+spec-1.1.0",
+        "pkg:cargo/tower-http@0.6.11",
+        "pkg:cargo/tower@0.5.3",
+        "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/tree-sitter-go@0.25.0",
         "pkg:cargo/tree-sitter-javascript@0.25.0",
         "pkg:cargo/tree-sitter-python@0.25.0",
@@ -12201,13 +12918,22 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.29.2",
         "pkg:cargo/wasmtime@40.0.4",
-        "pkg:cargo/windows-sys@0.61.2"
+        "pkg:cargo/windows-sys@0.61.2",
+        "pkg:cargo/x25519-dalek@2.0.1",
+        "pkg:cargo/zeroize@1.9.1"
       ]
     },
     {
       "ref": "pkg:cargo/addr2line@0.25.1",
       "dependsOn": [
         "pkg:cargo/gimli@0.32.3"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/aead@0.5.2",
+      "dependsOn": [
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/generic-array@0.14.7"
       ]
     },
     {
@@ -12363,9 +13089,19 @@
       ]
     },
     {
+      "ref": "pkg:cargo/axum-macros@0.5.1",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ]
+    },
+    {
       "ref": "pkg:cargo/axum@0.8.9",
       "dependsOn": [
         "pkg:cargo/axum-core@0.5.6",
+        "pkg:cargo/axum-macros@0.5.1",
+        "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/form_urlencoded@1.2.2",
         "pkg:cargo/futures-util@0.3.34",
@@ -12384,7 +13120,9 @@
         "pkg:cargo/serde_json@1.0.154",
         "pkg:cargo/serde_path_to_error@0.1.20",
         "pkg:cargo/serde_urlencoded@0.7.1",
+        "pkg:cargo/sha1@0.10.7",
         "pkg:cargo/sync_wrapper@1.0.2",
+        "pkg:cargo/tokio-tungstenite@0.29.0",
         "pkg:cargo/tokio@1.54.1",
         "pkg:cargo/tower-layer@0.3.3",
         "pkg:cargo/tower-service@0.3.3",
@@ -12398,6 +13136,10 @@
     },
     {
       "ref": "pkg:cargo/base64@0.23.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/base64ct@1.8.3",
       "dependsOn": []
     },
     {
@@ -12422,7 +13164,9 @@
     },
     {
       "ref": "pkg:cargo/bitflags@2.13.2",
-      "dependsOn": []
+      "dependsOn": [
+        "pkg:cargo/serde_core@1.0.229"
+      ]
     },
     {
       "ref": "pkg:cargo/bitmaps@2.1.0",
@@ -12493,6 +13237,32 @@
       ]
     },
     {
+      "ref": "pkg:cargo/chacha20@0.9.1",
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.5",
+        "pkg:cargo/cipher@0.4.4",
+        "pkg:cargo/cpufeatures@0.2.17"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/chacha20poly1305@0.10.1",
+      "dependsOn": [
+        "pkg:cargo/aead@0.5.2",
+        "pkg:cargo/chacha20@0.9.1",
+        "pkg:cargo/cipher@0.4.4",
+        "pkg:cargo/poly1305@0.8.0",
+        "pkg:cargo/zeroize@1.9.1"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/cipher@0.4.4",
+      "dependsOn": [
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/inout@0.1.4",
+        "pkg:cargo/zeroize@1.9.1"
+      ]
+    },
+    {
       "ref": "pkg:cargo/clap@4.6.7",
       "dependsOn": [
         "pkg:cargo/clap_builder@4.6.7",
@@ -12547,6 +13317,10 @@
         "pkg:cargo/ryu@1.0.23",
         "pkg:cargo/static_assertions@1.1.0"
       ]
+    },
+    {
+      "ref": "pkg:cargo/const-oid@0.9.6",
+      "dependsOn": []
     },
     {
       "ref": "pkg:cargo/convert_case@0.10.0",
@@ -12745,6 +13519,7 @@
       "ref": "pkg:cargo/crypto-common@0.1.7",
       "dependsOn": [
         "pkg:cargo/generic-array@0.14.7",
+        "pkg:cargo/rand_core@0.6.4",
         "pkg:cargo/typenum@1.20.1"
       ]
     },
@@ -12753,6 +13528,26 @@
       "dependsOn": [
         "pkg:cargo/lab@0.11.0",
         "pkg:cargo/phf@0.11.3"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/curve25519-dalek-derive@0.1.1",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/curve25519-dalek@4.1.3",
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.5",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/curve25519-dalek-derive@0.1.1",
+        "pkg:cargo/digest@0.10.7",
+        "pkg:cargo/rustc_version@0.4.1",
+        "pkg:cargo/subtle@2.6.1",
+        "pkg:cargo/zeroize@1.9.1"
       ]
     },
     {
@@ -12806,6 +13601,13 @@
       ]
     },
     {
+      "ref": "pkg:cargo/der@0.7.10",
+      "dependsOn": [
+        "pkg:cargo/const-oid@0.9.6",
+        "pkg:cargo/zeroize@1.9.1"
+      ]
+    },
+    {
       "ref": "pkg:cargo/deranged@0.5.9",
       "dependsOn": [
         "pkg:cargo/serde_core@1.0.229"
@@ -12832,7 +13634,8 @@
       "ref": "pkg:cargo/digest@0.10.7",
       "dependsOn": [
         "pkg:cargo/block-buffer@0.10.4",
-        "pkg:cargo/crypto-common@0.1.7"
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/subtle@2.6.1"
       ]
     },
     {
@@ -12868,8 +13671,29 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/ed25519-dalek@2.2.0",
+      "dependsOn": [
+        "pkg:cargo/curve25519-dalek@4.1.3",
+        "pkg:cargo/ed25519@2.2.3",
+        "pkg:cargo/rand_core@0.6.4",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/subtle@2.6.1",
+        "pkg:cargo/zeroize@1.9.1"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/ed25519@2.2.3",
+      "dependsOn": [
+        "pkg:cargo/pkcs8@0.10.2",
+        "pkg:cargo/signature@2.2.0"
+      ]
+    },
+    {
       "ref": "pkg:cargo/either@1.19.0",
-      "dependsOn": []
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.229"
+      ]
     },
     {
       "ref": "pkg:cargo/embedded-io@0.4.0",
@@ -12989,6 +13813,14 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/futures-executor@0.3.34",
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.34",
+        "pkg:cargo/futures-task@0.3.34",
+        "pkg:cargo/futures-util@0.3.34"
+      ]
+    },
+    {
       "ref": "pkg:cargo/futures-io@0.3.34",
       "dependsOn": []
     },
@@ -13027,6 +13859,7 @@
       "dependsOn": [
         "pkg:cargo/futures-channel@0.3.34",
         "pkg:cargo/futures-core@0.3.34",
+        "pkg:cargo/futures-executor@0.3.34",
         "pkg:cargo/futures-io@0.3.34",
         "pkg:cargo/futures-sink@0.3.34",
         "pkg:cargo/futures-task@0.3.34",
@@ -13129,6 +13962,18 @@
     {
       "ref": "pkg:cargo/hex@0.4.3",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/hkdf@0.12.4",
+      "dependsOn": [
+        "pkg:cargo/hmac@0.12.1"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/hmac@0.12.1",
+      "dependsOn": [
+        "pkg:cargo/digest@0.10.7"
+      ]
     },
     {
       "ref": "pkg:cargo/http-body-util@0.1.5",
@@ -13352,6 +14197,12 @@
       "ref": "pkg:cargo/indoc@2.0.8",
       "dependsOn": [
         "pkg:cargo/rustversion@1.0.23"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/inout@0.1.4",
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7"
       ]
     },
     {
@@ -13627,6 +14478,10 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/opaque-debug@0.3.1",
+      "dependsOn": []
+    },
+    {
       "ref": "pkg:cargo/openssl-probe@0.2.2",
       "dependsOn": []
     },
@@ -13774,8 +14629,23 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/pkcs8@0.10.2",
+      "dependsOn": [
+        "pkg:cargo/der@0.7.10",
+        "pkg:cargo/spki@0.7.3"
+      ]
+    },
+    {
       "ref": "pkg:cargo/pkg-config@0.3.34",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/poly1305@0.8.0",
+      "dependsOn": [
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/opaque-debug@0.3.1",
+        "pkg:cargo/universal-hash@0.5.1"
+      ]
     },
     {
       "ref": "pkg:cargo/portable-atomic@1.15.0",
@@ -13799,6 +14669,12 @@
     {
       "ref": "pkg:cargo/powerfmt@0.2.1",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/ppv-lite86@0.2.21",
+      "dependsOn": [
+        "pkg:cargo/zerocopy@0.8.63"
+      ]
     },
     {
       "ref": "pkg:cargo/proc-macro2@1.0.107",
@@ -13829,6 +14705,10 @@
         "pkg:cargo/quote@1.0.47",
         "pkg:cargo/syn@2.0.119"
       ]
+    },
+    {
+      "ref": "pkg:cargo/qrcode@0.14.1",
+      "dependsOn": []
     },
     {
       "ref": "pkg:cargo/quinn-proto@0.11.19",
@@ -13890,7 +14770,30 @@
     {
       "ref": "pkg:cargo/rand@0.8.8",
       "dependsOn": [
+        "pkg:cargo/libc@0.2.191",
+        "pkg:cargo/rand_chacha@0.3.1",
         "pkg:cargo/rand_core@0.6.4"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/rand@0.9.5",
+      "dependsOn": [
+        "pkg:cargo/rand_chacha@0.9.0",
+        "pkg:cargo/rand_core@0.9.5"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/rand_chacha@0.3.1",
+      "dependsOn": [
+        "pkg:cargo/ppv-lite86@0.2.21",
+        "pkg:cargo/rand_core@0.6.4"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/rand_chacha@0.9.0",
+      "dependsOn": [
+        "pkg:cargo/ppv-lite86@0.2.21",
+        "pkg:cargo/rand_core@0.9.5"
       ]
     },
     {
@@ -13899,7 +14802,15 @@
     },
     {
       "ref": "pkg:cargo/rand_core@0.6.4",
-      "dependsOn": []
+      "dependsOn": [
+        "pkg:cargo/getrandom@0.2.17"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/rand_core@0.9.5",
+      "dependsOn": [
+        "pkg:cargo/getrandom@0.3.4"
+      ]
     },
     {
       "ref": "pkg:cargo/rand_pcg@0.10.2",
@@ -14070,6 +14981,9 @@
         "pkg:cargo/rustls-pki-types@1.16.0",
         "pkg:cargo/rustls-platform-verifier@0.7.1",
         "pkg:cargo/rustls@0.23.46",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/serde_json@1.0.154",
+        "pkg:cargo/serde_urlencoded@0.7.1",
         "pkg:cargo/sync_wrapper@1.0.2",
         "pkg:cargo/tokio-rustls@0.26.6",
         "pkg:cargo/tokio@1.54.1",
@@ -14278,6 +15192,14 @@
       ]
     },
     {
+      "ref": "pkg:cargo/sha1@0.10.7",
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.5",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/digest@0.10.7"
+      ]
+    },
+    {
       "ref": "pkg:cargo/sha2@0.10.9",
       "dependsOn": [
         "pkg:cargo/cfg-if@1.0.5",
@@ -14312,6 +15234,12 @@
       ]
     },
     {
+      "ref": "pkg:cargo/signature@2.2.0",
+      "dependsOn": [
+        "pkg:cargo/rand_core@0.6.4"
+      ]
+    },
+    {
       "ref": "pkg:cargo/simdutf8@0.1.5",
       "dependsOn": []
     },
@@ -14341,6 +15269,13 @@
       "dependsOn": [
         "pkg:cargo/libc@0.2.191",
         "pkg:cargo/windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/spki@0.7.3",
+      "dependsOn": [
+        "pkg:cargo/base64ct@1.8.3",
+        "pkg:cargo/der@0.7.10"
       ]
     },
     {
@@ -14612,6 +15547,19 @@
       ]
     },
     {
+      "ref": "pkg:cargo/tokio-tungstenite@0.29.0",
+      "dependsOn": [
+        "pkg:cargo/futures-util@0.3.34",
+        "pkg:cargo/log@0.4.35",
+        "pkg:cargo/rustls-native-certs@0.8.5",
+        "pkg:cargo/rustls-pki-types@1.16.0",
+        "pkg:cargo/rustls@0.23.46",
+        "pkg:cargo/tokio-rustls@0.26.6",
+        "pkg:cargo/tokio@1.54.1",
+        "pkg:cargo/tungstenite@0.29.0"
+      ]
+    },
+    {
       "ref": "pkg:cargo/tokio-util@0.7.20",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
@@ -14687,12 +15635,14 @@
         "pkg:cargo/bitflags@2.13.2",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/futures-util@0.3.34",
+        "pkg:cargo/http-body-util@0.1.5",
         "pkg:cargo/http-body@1.1.0",
         "pkg:cargo/http@1.5.0",
         "pkg:cargo/pin-project-lite@0.2.17",
         "pkg:cargo/tower-layer@0.3.3",
         "pkg:cargo/tower-service@0.3.3",
         "pkg:cargo/tower@0.5.3",
+        "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/url@2.5.8"
       ]
     },
@@ -14795,6 +15745,21 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/tungstenite@0.29.0",
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.1",
+        "pkg:cargo/data-encoding@2.11.1",
+        "pkg:cargo/http@1.5.0",
+        "pkg:cargo/httparse@1.10.1",
+        "pkg:cargo/log@0.4.35",
+        "pkg:cargo/rand@0.9.5",
+        "pkg:cargo/rustls-pki-types@1.16.0",
+        "pkg:cargo/rustls@0.23.46",
+        "pkg:cargo/sha1@0.10.7",
+        "pkg:cargo/thiserror@2.0.21"
+      ]
+    },
+    {
       "ref": "pkg:cargo/typenum@1.20.1",
       "dependsOn": []
     },
@@ -14827,6 +15792,13 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/universal-hash@0.5.1",
+      "dependsOn": [
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/subtle@2.6.1"
+      ]
+    },
+    {
       "ref": "pkg:cargo/unsafe-libyaml@0.2.11",
       "dependsOn": []
     },
@@ -14844,7 +15816,8 @@
         "pkg:cargo/form_urlencoded@1.2.2",
         "pkg:cargo/idna@1.1.0",
         "pkg:cargo/percent-encoding@2.3.2",
-        "pkg:cargo/serde@1.0.229"
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/serde_derive@1.0.229"
       ]
     },
     {
@@ -14865,7 +15838,8 @@
       "ref": "pkg:cargo/uuid@1.29.2",
       "dependsOn": [
         "pkg:cargo/atomic@0.6.1",
-        "pkg:cargo/getrandom@0.4.3"
+        "pkg:cargo/getrandom@0.4.3",
+        "pkg:cargo/serde_core@1.0.229"
       ]
     },
     {
@@ -15323,6 +16297,15 @@
       "dependsOn": []
     },
     {
+      "ref": "pkg:cargo/x25519-dalek@2.0.1",
+      "dependsOn": [
+        "pkg:cargo/curve25519-dalek@4.1.3",
+        "pkg:cargo/rand_core@0.6.4",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/zeroize@1.9.1"
+      ]
+    },
+    {
       "ref": "pkg:cargo/x509-parser@0.18.1",
       "dependsOn": [
         "pkg:cargo/asn1-rs@0.7.2",
@@ -15362,6 +16345,20 @@
       ]
     },
     {
+      "ref": "pkg:cargo/zerocopy-derive@0.8.63",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/zerocopy@0.8.63",
+      "dependsOn": [
+        "pkg:cargo/zerocopy-derive@0.8.63"
+      ]
+    },
+    {
       "ref": "pkg:cargo/zerofrom-derive@0.1.8",
       "dependsOn": [
         "pkg:cargo/proc-macro2@1.0.107",
@@ -15378,7 +16375,18 @@
     },
     {
       "ref": "pkg:cargo/zeroize@1.9.1",
-      "dependsOn": []
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/zeroize_derive@1.5.0"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/zeroize_derive@1.5.0",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ]
     },
     {
       "ref": "pkg:cargo/zerotrie@0.2.5",
