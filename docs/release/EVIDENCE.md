@@ -48,6 +48,104 @@ n is small everywhere: three runs per task, five tasks in the ablation.
 Treat the intervals as a description of these runs, not of the tasks'
 population.
 
+## Arm comparison, network profiles and a larger sample (hame `61a8787`, task set `2026-11-15.6`)
+
+Measured after the final measurement below, on one commit that adds the
+pixels (screenshot-loop) mode for both tools, `[file: path]` on desktop
+window lines and the clearer D04 prompt. Release build,
+`claude-haiku-5-5`, the machine in "Environment". Reports: `rc2-*.json`.
+The GUI part of the larger sample was stopped early at the user's request
+(machine needed); its JSON report was not written, so only its outcomes are
+known (`rc2-big-en-gui-partial.log`), not its tokens or cost.
+
+### Arms against the screenshot-loop baseline (research arm A)
+
+Tasks B01–B05 and D01–D04 (the semantic-friendly subset), 3 rounds,
+arms interleaved: `pixels` = arm A (screenshots only, pixel clicks,
+typing, keys, one action per decision; desktop keeps `menu` because
+window screenshots do not show the menu bar), `nobatch` = arm C
+(semantic, one action per decision), `default` = arm D (semantic with
+batches). Configs in `evals/pilot/arms/`; table from
+`python3 evals/pilot/compare.py --baseline pixels docs/release/evidence/rc2-arms.json`.
+
+| Arm | Strict | False success | Browser (15) | Desktop (12) | Cost $ |
+|---|---:|---:|---:|---:|---:|
+| pixels (A) | 17/27 | 0 | 14/15 | 3/12 | 1.0933 |
+| nobatch (C) | 24/27 | 2 | 15/15 | 9/12 | 0.2977 |
+| default (D) | 26/27 | 1 | 15/15 | 11/12 | 0.1134 |
+
+Default against arm A, per attempt, paired by task, 95% bootstrap
+intervals resampling the 9 tasks:
+
+| Research target | Measured (default vs A) | 95% CI | Met? |
+|---|---:|---|---|
+| 40% lower median verified completion time | 36% lower (9.2 s vs 14.3 s, over the 6 tasks both arms verified) | — | no |
+| (time per attempt, failures included) | 74% lower | [37%, 79%] | — |
+| 50% fewer cloud decisions (model requests) | 50% fewer | [23%, 58%] | at the point estimate; not with confidence |
+| 60% fewer uncached input tokens | 48% fewer | [20%, 57%] | no |
+| (all input tokens incl. cache reads/writes) | 79% fewer | [54%, 82%] | — |
+| 80% fewer uploaded image bytes | 100% fewer (0 vs 10.7 MB per attempt) | [100%, 100%] | yes |
+| no quality regression | +33 points strict completion | [+7, +63] points | yes |
+
+The difference is almost all on the desktop: arm A passed 3 of 12
+desktop attempts (mean 221 s, 48 requests, 23.7 MB of images) against
+11 of 12 for default (50 s, 21 requests); on the browser tasks the arms
+are close (12.4 s vs 8.4 s median verified, 14/15 vs 15/15). Arm A's
+desktop failures were save-panel navigation by pixels (Go To Folder did
+not take typed paths; clicks on unnamed save-panel elements need
+`commit` and `file_write` and are refused while the panel points outside
+the granted folders) and D03 never finished. n is small (9 tasks, 3
+rounds); uncached input is tens of tokens per attempt in every arm because
+caching covers almost everything, so its percentage moves a little with a
+few tokens.
+
+The default arm's false success (D04) and nobatch's two (D04) were
+TextEdit's own iCloud draft of the untitled document: TextEdit autosaves
+an untitled document to iCloud as soon as it has text (the window line
+shows `[file: …/com~apple~TextEdit/Documents/Untitled.rtf]` before any
+save); the agent then duplicated the window (cmd+shift+s is Duplicate in
+TextEdit), saved the copy correctly (`[file: …/vi/bien-ban.rtf]`) and left
+the draft. It is a stray file in the user's iCloud, so it counts.
+
+### Network profiles (browser tasks B01–B05, arms pixels and default, 2 rounds each)
+
+Model traffic went through `evals/netem_proxy.py` (added RTT, upload
+cap; the real path's own latency adds to it); the proxy counted about
+7 MB up and 0.8 MB down per profile (`rc2-netem-*.stats.json`).
+
+| Profile | Arm | Strict | Median s (all attempts) | Mean s | Requests | Request MB | Image KB |
+|---|---|---:|---:|---:|---:|---:|---:|
+| unemulated | pixels | 9/10 | 14.0 | 13.5 | 6.1 | 0.54 | 311 |
+| unemulated | default | 10/10 | 9.7 | 9.4 | 5.3 | 0.11 | 0 |
+| 10 ms, 100 Mbit/s | pixels | 10/10 | 13.4 | 13.7 | 6.2 | 0.55 | 316 |
+| 10 ms, 100 Mbit/s | default | 10/10 | 8.5 | 9.0 | 4.9 | 0.09 | 0 |
+| 80 ms, 20 Mbit/s | pixels | 9/10 | 15.0 | 14.3 | 5.9 | 0.55 | 321 |
+| 80 ms, 20 Mbit/s | default | 9/10 | 8.8 | 9.6 | 5.1 | 0.10 | 0 |
+| 200 ms, 5 Mbit/s | pixels | 10/10 | 15.9 | 17.1 | 6.0 | 0.55 | 315 |
+| 200 ms, 5 Mbit/s | default | 10/10 | 11.3 | 11.5 | 5.2 | 0.10 | 0 |
+
+From unemulated to 200 ms / 5 Mbit/s, arm A's mean time rose 3.6 s and
+default's 2.1 s; default sends about a fifth of the bytes. Ten attempts
+per cell: differences of a second are within run-to-run variation.
+
+### Larger sample on the default configuration
+
+| Part | Attempts | Strict | False success | Cost $ |
+|---|---:|---:|---:|---:|
+| English, file/browser tasks (F01–F05, B01–B05, R01–R04) × 5 | 70 | 70 | 0 | 0.1413 |
+| Vietnamese prompts, same tasks × 3 | 42 | 40 | 2 | 0.0913 |
+| English, GUI tasks (D, O, X, R05) × 5, stopped at 76 of 80 | 76 | 69 | 1 | not recorded |
+| **All** | **188** | **179 (95.2%)** | **3** | — |
+
+The Vietnamese false successes (F03 twice) are an ambiguity in the task:
+RULES.md names `archive/…` without saying it is beside `inbox/`; the
+agent put it inside `inbox/` and said so in its report. The English GUI
+false success (X01) was a new image file in `~/Downloads` during the run
+window; whether the agent or other use of the machine made it was not
+examined; it is counted. GUI failures: D05 ×2 (bold),
+O01, X02, D01, D04 (iCloud draft). The Vietnamese GUI part and a new
+injection run were not done.
+
 ## Final measurement (hame `791c376`, task set `2026-11-15.5`)
 
 All 30 tasks and the injection suite were run again, three rounds each,

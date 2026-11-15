@@ -1,0 +1,9 @@
+{
+ "rtt_ms": 200.0,
+ "up_mbit": 5.0,
+ "down_mbit": 0,
+ "connections": 20,
+ "bytes_up": 7140423,
+ "bytes_down": 817367,
+ "seconds": 301.5
+}

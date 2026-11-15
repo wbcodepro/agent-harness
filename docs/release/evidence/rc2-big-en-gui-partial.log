@@ -1,0 +1,81 @@
+== run 1 of 5
+D01 ... pass (agent 36s, check 0.1s)
+D02 ... pass (agent 17s, check 10.2s)
+D03 ... pass (agent 79s, check 0.1s)
+D04 ... pass (agent 45s, check 0.1s)
+D05 ... pass (agent 90s, check 0.3s)
+O01 ... fail (agent 52s, check 0.1s) — check failed: FAIL: expenses-filled.xlsx was not exported (folder holds ['expenses.numbers'])
+O02 ... pass (agent 66s, check 0.8s)
+O03 ... pass (agent 96s, check 0.4s)
+O04 ... pass (agent 368s, check 0.7s)
+O05 ... pass (agent 87s, check 0.2s)
+R05 ... pass (agent 78s, check 0.1s)
+X01 ... pass (agent 102s, check 0.1s)
+X02 ... fail (agent 134s, check 0.1s) — check failed: FAIL: books.xlsx is not in the workspace
+X03 ... pass (agent 51s, check 0.2s)
+X04 ... pass (agent 33s, check 0.6s)
+X05 ... pass (agent 19s, check 0.1s) — user correction delivered during the turn
+== run 2 of 5
+D01 ... pass (agent 37s, check 0.1s)
+D02 ... pass (agent 14s, check 10.2s)
+D03 ... pass (agent 100s, check 0.1s)
+D04 ... pass (agent 41s, check 0.1s)
+D05 ... fail (agent 192s, check 0.1s) — check failed: FAIL: 'Office Move Notice': bold is False, expected True
+O01 ... pass (agent 101s, check 0.8s)
+O02 ... pass (agent 75s, check 0.8s)
+O03 ... pass (agent 122s, check 0.4s)
+O04 ... pass (agent 144s, check 0.7s)
+O05 ... pass (agent 81s, check 0.2s)
+R05 ... pass (agent 55s, check 0.1s)
+X01 ... pass (agent 87s, check 0.1s)
+X02 ... pass (agent 88s, check 0.8s)
+X03 ... pass (agent 48s, check 0.2s)
+X04 ... pass (agent 31s, check 0.6s)
+X05 ... pass (agent 15s, check 0.1s) — user correction delivered during the turn
+== run 3 of 5
+D01 ... pass (agent 40s, check 0.1s)
+D02 ... pass (agent 15s, check 10.2s)
+D03 ... pass (agent 66s, check 0.1s)
+D04 ... pass (agent 37s, check 0.1s)
+D05 ... fail (agent 391s, check 0.1s) — check failed: FAIL: 'Office Move Notice': bold is False, expected True
+O01 ... pass (agent 93s, check 0.8s)
+O02 ... pass (agent 71s, check 0.8s)
+O03 ... pass (agent 64s, check 0.5s)
+O04 ... pass (agent 219s, check 0.7s)
+O05 ... pass (agent 102s, check 0.2s)
+R05 ... pass (agent 70s, check 0.1s)
+X01 ... pass (agent 98s, check 0.1s)
+X02 ... pass (agent 89s, check 0.8s)
+X03 ... pass (agent 36s, check 0.2s)
+X04 ... pass (agent 60s, check 0.6s)
+X05 ... pass (agent 15s, check 0.1s) — user correction delivered during the turn
+== run 4 of 5
+D01 ... fail (agent 41s, check 0.1s) — check failed: FAIL: meeting-notes.rtf reads [], expected ['Agenda for Monday', '1. Budget review', '2. Hiring plan']
+D02 ... pass (agent 15s, check 10.3s)
+D03 ... pass (agent 70s, check 0.1s)
+D04 ... pass (agent 42s, check 0.1s)
+D05 ... pass (agent 170s, check 0.3s)
+O01 ... pass (agent 64s, check 0.8s)
+O02 ... pass (agent 67s, check 0.7s)
+O03 ... pass (agent 164s, check 0.3s)
+O04 ... pass (agent 171s, check 0.7s)
+O05 ... pass (agent 86s, check 0.2s)
+R05 ... pass (agent 81s, check 0.1s)
+X01 ... pass (agent 100s, check 0.1s)
+X02 ... pass (agent 138s, check 0.7s)
+X03 ... pass (agent 65s, check 0.2s)
+X04 ... pass (agent 46s, check 0.7s)
+X05 ... pass (agent 16s, check 0.1s) — user correction delivered during the turn
+== run 5 of 5
+D01 ... pass (agent 39s, check 0.1s)
+D02 ... pass (agent 14s, check 10.3s)
+D03 ... pass (agent 68s, check 0.1s)
+D04 ... fail (agent 50s, check 0.1s) — check failed: FAIL: saved outside the requested folder: ['~/Library/Mobile Documents/com~apple~TextEdit/Documents/Untitled.rtf']
+D05 ... pass (agent 147s, check 0.3s)
+O01 ... pass (agent 72s, check 0.8s)
+O02 ... pass (agent 84s, check 0.8s)
+O03 ... pass (agent 105s, check 0.4s)
+O04 ... pass (agent 188s, check 0.8s)
+O05 ... pass (agent 129s, check 0.3s)
+R05 ... pass (agent 49s, check 0.1s)
+X01 ... false_success (agent 118s, check 0.1s) — check failed: FAIL: saved outside the requested folder: ['~/Downloads/1794633448694_9067056174578987348_9067056174578987348_5f56ffebadee32e550287a647f85a18d.jpg']
