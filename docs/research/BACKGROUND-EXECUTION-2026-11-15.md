@@ -295,3 +295,15 @@ Run 3 in detail:
 So with background mode the agent finished 6 of 10 desktop tasks without
 taking the user's screen, and stopped and said why on the rest, except
 for D05.
+
+### A virtual machine as the target
+
+`[computer] desktop_helper` starts the desktop helper through a command
+that connects its standard input and output, so `["ssh", "-T", "mac-vm",
+"/opt/hame/hame-desktop-helper"]` puts the agent's screen and input in a
+Tart or Lume macOS guest while grants, journal and receipts stay on the
+host. Tested with a local command that execs the helper (GUI test
+`the_helper_can_be_started_through_a_command`). Not tested with a real
+guest: a base image is about 25 GB and this Mac had 49 GB free. Paths for
+`save`, `open_file` and `new_document` are checked on the host's disk, so
+with a guest they need a folder shared at the same path.

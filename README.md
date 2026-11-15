@@ -173,6 +173,7 @@ browser_channel = "chrome"      # chrome (installed Google Chrome, default) | ms
 # batch = true                  # the tools' batch action (default on; off only to measure it)
 # observation = "semantic"      # semantic (default) | screenshot | pixels (both need a "screen" grant; screenshot measures vision cost, pixels is the screenshot-loop baseline: screenshots only, clicks by coordinates)
 # desktop_background = false     # true: the desktop tool works without taking your screen: text, plain keys, and new_document / open_file / save through Apple Events; menus, pixel clicks and shortcuts are refused
+# desktop_helper = ["ssh", "-T", "mac-vm", "/opt/hame/hame-desktop-helper"]   # run the desktop helper on another Mac (a VM): the agent uses its screen and input
 # profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
 
 [[computer.grant]]              # read and use pages on local servers, profile "work" only
@@ -263,7 +264,7 @@ A workflow runs only if you trusted that exact file: `hame workflow show NAME` p
 
 ## Built-in tools
 
-`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list` / `task_claim` (a board shared with subagents: dependencies, owners, claiming a free task); `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured; `browser` and `desktop` when [enabled or granted](#browser-and-desktop-control); `workflow` when [workflows](#workflows) exist. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
+`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map` (also `symbol`: where a name is defined, what calls it, what it calls), `subagent`, `task_create` / `task_update` / `task_list` / `task_claim` (a board shared with subagents: dependencies, owners, claiming a free task); `send_message` (to the lead or a running subagent, by name); `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured; `browser` and `desktop` when [enabled or granted](#browser-and-desktop-control); `workflow` when [workflows](#workflows) exist. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
 
 `write` refuses to overwrite an existing file the model has not read in the session (a file's content is usually what the task depends on); when a write shrinks a file by more than half, the result says the whole file was replaced. When `edit` cannot find the text to replace, it shows how far it matched and where it differs. `grep` names the function or class around each match. After every `edit`, `write` or `apply_patch`, if a valid source file has become syntactically invalid, the result points at the error (Python is checked with `python3` when present; Rust, JS, TS and Go with tree-sitter).
 

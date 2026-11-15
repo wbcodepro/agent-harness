@@ -123,10 +123,14 @@ resolution does not follow (hame's `references` tool, through a language
 server, does). Ambiguous names (`Authorization` in four files) are refused
 with candidates, which is the right behaviour.
 
-**Taken.** Nothing in code. graphify installs as a skill hame finds
-(`~/.agents/skills`), so users who want it can use it. A cheap call graph
-(callers and callees from tree-sitter, no language server) would be a
-reasonable addition to `repo_map` later; not done here.
+**Taken.** `repo_map` takes `symbol`: where a name is defined, the
+definitions that call it, and the project functions it calls, from
+tree-sitter calls in Rust, Python, JavaScript, TypeScript and Go (by name;
+no language server). On hame itself it lists all four callers of
+`check_save_folder` (graphify found two) and the cross-crate callers of
+`save_folders` (graphify found none), in about 1.5 s for 142 files in a
+debug build. graphify itself installs as a skill hame finds
+(`~/.agents/skills`).
 
 ## agent-desktop (Vercel Labs)
 
@@ -161,9 +165,11 @@ Both kept the user's app in front throughout. agent-desktop is honest
 that the key press is unverified but cannot save in the background; hame
 refuses what a background app ignores and saves through scripting.
 
-**Taken:** nothing in code now; worth adopting later: a skeleton snapshot
-for dense apps, and its Windows (UI Automation) and Linux (AT-SPI)
-backends as the reference if hame's desktop tool goes beyond macOS.
+**Taken:** `observe` takes `skeleton: true` (regions with their child
+counts) and `root` (one region's subtree), after its `--skeleton` /
+`--root` (GUI test on TextEdit). Its Windows (UI Automation) and Linux
+(AT-SPI) backends remain the reference if hame's desktop tool goes beyond
+macOS.
 
 ## Agent-Reach
 
@@ -200,9 +206,11 @@ there is no messaging between running agents.
 finish before its dependencies; finishing one reports what it unblocked),
 `owner`, and `task_claim`, which takes the given or the first free task
 under the board's file lock, so two agents never get the same task (unit
-test with two board handles). Messaging between running subagents is not
-done: it needs delivery into a running agent's turn, which `hame run
---inbox` provides only for the main agent.
+test with two board handles). And `send_message`: subagents take a `name`,
+the agent the user talks to is `lead`, and a message lands in the
+recipient's steering queue, reaching its model at its next step, labelled
+as coming from another agent (unit test, and an integration test where a
+named worker writes to the lead). No broadcast, as in Claude Code.
 
 ## Orca
 
@@ -225,4 +233,8 @@ UI around review and remote machines, outside hame's scope.
 | Scan: quoted defensive phrases and named key files defused; word-boundary fix | 1,143 real SKILL.md files | 14 → 5 refusals, 0 traps among them; unit tests keep traps refused |
 | Plugin scan: docs/tests are notices; notices summarized | affaan-m/ECC | 29 → 17 dangers, ~9,500 → 32 lines |
 | Task board `depends_on`, `owner`, `task_claim` | Claude Code agent teams | unit test with two agents |
+| `send_message` between running agents | Claude Code agent teams | unit and integration tests |
+| `repo_map` `symbol` (callers, callees) | graphify | unit test; on hame finds callers graphify missed |
+| Desktop `observe` `skeleton` / `root` | agent-desktop | GUI test |
+| `[computer] desktop_helper` (helper through a command, e.g. SSH to a VM) | Tart, Lume, Cua | GUI test with a local launcher; no real VM (disk) |
 | Desktop background mode, `save`, `new_document`, `open_file` | Cua Driver, agent-desktop, own probes | see BACKGROUND-EXECUTION-2026-11-15.md |
