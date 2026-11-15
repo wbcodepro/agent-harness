@@ -1,9 +1,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use hame_session::{Block, Delta, Message, Role, StopReason, Usage};
 use serde_json::{Value, json};
 
-use crate::{BoxFuture, Completion, DeltaSink, Llm, LlmError, Request, Retry};
+use crate::media::{Inliner, Media, Piece, has_media, joined, pieces, text_form};
+use crate::{
+    BoxFuture, Completion, DeltaSink, Llm, LlmError, Measure, ModelProfile, Provider, Request,
+    Retry, Timed,
+};
 
 const API_VERSION: &str = "2026-10-21";
 /// Room for a long answer; streaming keeps a large value from timing out.
@@ -19,6 +24,8 @@ pub struct Anthropic {
     /// Ask the API to continue on another model when this one declines.
     fallbacks: bool,
     retry: Retry,
+    /// What the model takes besides text.
+    profile: ModelProfile,
     /// Request features this model turned out not to accept.
     unsupported: Unsupported,
     /// Set once the API refuses replayed thinking. It would refuse the
@@ -76,12 +83,18 @@ fn supports_fallbacks(model: &str) -> bool {
 
 impl Anthropic {
     /// `base_url` is the API root, normally `https://api.anthropic.com`.
+    ///
+    /// What the model can be shown besides text is resolved from its id
+    /// ([`ModelProfile::resolve`] with [`Provider::Anthropic`]); replace it
+    /// with [`Anthropic::with_profile`].
     pub fn new(base_url: &str, api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        let model = model.into();
         Self {
             client: reqwest::Client::new(),
             url: format!("{}/v1/messages", base_url.trim_end_matches('/')),
             api_key: api_key.into(),
-            model: model.into(),
+            profile: ModelProfile::resolve(Provider::Anthropic, &model),
+            model,
             effort: None,
             fallbacks: true,
             retry: Retry::default(),
@@ -119,7 +132,18 @@ impl Anthropic {
         self
     }
 
-    async fn open(&self, body: &Value) -> Result<reqwest::Response, LlmError> {
+    /// Overrides what the model is taken to accept besides text, e.g. from
+    /// configuration for a model id the built-in table does not know.
+    pub fn with_profile(mut self, profile: ModelProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn profile(&self) -> ModelProfile {
+        self.profile
+    }
+
+    async fn open(&self, body: &[u8]) -> Result<reqwest::Response, LlmError> {
         let mut request = self
             .client
             .post(&self.url)
@@ -130,7 +154,7 @@ impl Anthropic {
             request = request.header("anthropic-beta", FALLBACK_BETA);
         }
         let response = request
-            .body(serde_json::to_vec(body).map_err(|e| LlmError::Protocol(e.to_string()))?)
+            .body(body.to_vec())
             .send()
             .await
             .map_err(|e| LlmError::Transport(e.to_string()))?;
@@ -140,11 +164,14 @@ impl Anthropic {
         Err(crate::http_error(response).await)
     }
 
-    async fn open_with_retry(&self, body: &Value) -> Result<reqwest::Response, LlmError> {
+    /// Sends `body`, retrying what can be retried. Returns the response and
+    /// when the request that got it was sent.
+    async fn open_with_retry(&self, body: &[u8]) -> Result<(reqwest::Response, Instant), LlmError> {
         let mut attempt = 0;
         loop {
+            let sent = Instant::now();
             match self.open(body).await {
-                Ok(response) => return Ok(response),
+                Ok(response) => return Ok((response, sent)),
                 Err(e) => match self.retry.delay(attempt, &e) {
                     Some(wait) => {
                         tokio::time::sleep(wait).await;
@@ -170,11 +197,12 @@ impl Llm for Anthropic {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let mut response = loop {
+            let (mut response, mut measure) = loop {
                 let off = |flag: &AtomicBool| flag.load(Ordering::Relaxed);
                 let with_thinking = !off(&self.thinking_rejected);
-                let body = build_body(
+                let (body, images, image_bytes) = build_body(
                     &self.model,
+                    self.profile,
                     self.effort
                         .as_deref()
                         .filter(|_| !off(&self.unsupported.effort)),
@@ -184,8 +212,15 @@ impl Llm for Anthropic {
                     !off(&self.unsupported.eager_input),
                     !off(&self.unsupported.request_cache),
                 );
+                let body =
+                    serde_json::to_vec(&body).map_err(|e| LlmError::Protocol(e.to_string()))?;
                 match self.open_with_retry(&body).await {
-                    Ok(response) => break response,
+                    Ok((response, sent)) => {
+                        break (
+                            response,
+                            Measure::new(body.len(), images, image_bytes, sent),
+                        );
+                    }
                     // The history carries reasoning this conversation can
                     // no longer vouch for. Send it once more without any,
                     // and leave it out for the rest of the session; the
@@ -202,41 +237,71 @@ impl Llm for Anthropic {
 
             let mut lines = SseData::default();
             let mut decoder = Decoder::default();
-            while let Some(chunk) = response
+            let mut timed = Timed {
+                inner: sink,
+                sent: measure.sent,
+                first: None,
+            };
+            'stream: while let Some(chunk) = response
                 .chunk()
                 .await
                 .map_err(|e| LlmError::Transport(e.to_string()))?
             {
+                measure.response_bytes += chunk.len() as u64;
                 for data in lines.push(&chunk) {
-                    if decoder.feed(&data, sink)? {
-                        return decoder.finish();
+                    if decoder.feed(&data, &mut timed)? {
+                        break 'stream;
                     }
                 }
             }
-            decoder.finish()
+            measure.first_delta = timed.first;
+            decoder.finish().map(|completion| measure.apply(completion))
         })
     }
 }
 
-fn text_of(blocks: &[Block]) -> String {
-    let mut text = String::new();
-    for block in blocks {
-        match block {
-            Block::Text { text: part } => text.push_str(part),
-            other => {
-                if let Some(part) = other.as_text() {
-                    if !text.is_empty() {
-                        text.push('\n');
-                    }
-                    text.push_str(&part);
-                }
+/// A content block for an image or document the inliner decided on.
+/// Shapes from platform.claude.com/docs/en/build-with-claude/vision and
+/// .../agents-and-tools/tool-use/handle-tool-calls (images and documents
+/// are allowed inside `tool_result` content).
+fn media_block(media: Media) -> Value {
+    match media {
+        Media::Image { mime, data } => json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": mime, "data": data},
+        }),
+        Media::Pdf { data, name } => {
+            let mut block = json!({
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": data},
+            });
+            if let Some(name) = name {
+                block["title"] = json!(name);
             }
+            block
         }
+        Media::Note(text) => json!({"type": "text", "text": text}),
     }
-    text
 }
 
-fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
+/// A tool result's content: a plain string while it is all text, which
+/// is how it always was sent, and an array of text, image and document
+/// blocks once something in it is sent natively.
+fn result_content(blocks: &[Block], inliner: &mut Inliner) -> Value {
+    let pieces = pieces(blocks, inliner);
+    if !has_media(&pieces) {
+        return json!(joined(pieces));
+    }
+    pieces
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => json!({"type": "text", "text": text}),
+            Piece::Media(media, _) => media_block(media),
+        })
+        .collect()
+}
+
+fn wire_blocks(message: &Message, with_thinking: bool, inliner: &mut Inliner) -> Vec<Value> {
     let mut out = Vec::new();
     for block in &message.content {
         match block {
@@ -269,13 +334,17 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
                 out.push(json!({"type": "fallback", "from": from, "to": to}));
             }
             Block::Fallback { .. } => {}
-            // Not yet sent natively: described in text so the loss is
-            // visible to the model.
-            Block::Image { .. }
-            | Block::Artifact { .. }
-            | Block::Data { .. }
-            | Block::Unsupported { .. } => {
-                if let Some(text) = block.as_text() {
+            // An assistant turn cannot carry images: described instead.
+            Block::Image { .. } | Block::Artifact { .. } if message.role == Role::Assistant => {
+                if let Some(text) = text_form(block) {
+                    out.push(json!({"type": "text", "text": text}));
+                }
+            }
+            Block::Image { .. } | Block::Artifact { .. } => {
+                out.push(media_block(inliner.block(block)));
+            }
+            Block::Data { .. } | Block::Unsupported { .. } => {
+                if let Some(text) = text_form(block) {
                     out.push(json!({"type": "text", "text": text}));
                 }
             }
@@ -287,7 +356,7 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
                 let mut result = json!({
                     "type": "tool_result",
                     "tool_use_id": call_id,
-                    "content": text_of(content),
+                    "content": result_content(content, inliner),
                 });
                 if *is_error {
                     result["is_error"] = json!(true);
@@ -299,15 +368,25 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
     out
 }
 
+/// More images than this in one request make the API apply a stricter
+/// per-image edge limit (vision docs, "Request limits"); images are kept
+/// under it rather than have the request refused.
+const MANY_IMAGES: usize = 20;
+const MANY_IMAGES_EDGE: u32 = 2000;
+
+/// The request body, and how many images it carries and their raw bytes.
+#[allow(clippy::too_many_arguments)]
 fn build_body(
     model: &str,
+    profile: ModelProfile,
     effort: Option<&str>,
     fallbacks: bool,
     request: &Request,
     with_thinking: bool,
     eager_input: bool,
     request_cache: bool,
-) -> Value {
+) -> (Value, u32, u64) {
+    let mut inliner = Inliner::new(profile, request).many_images(MANY_IMAGES, MANY_IMAGES_EDGE);
     // Tool results travel in user turns, and adjacent turns of one role
     // are merged, so every tool result for an assistant turn lands in the
     // single user message that follows it.
@@ -317,7 +396,7 @@ fn build_body(
             Role::Assistant => "assistant",
             Role::User | Role::Tool => "user",
         };
-        let blocks = wire_blocks(message, with_thinking);
+        let blocks = wire_blocks(message, with_thinking, &mut inliner);
         if blocks.is_empty() {
             continue;
         }
@@ -385,7 +464,7 @@ fn build_body(
     if fallbacks {
         body["fallbacks"] = json!("default");
     }
-    body
+    (body, inliner.images, inliner.image_bytes)
 }
 
 /// Collects the `data:` payloads of a server-sent-event stream.
@@ -414,6 +493,11 @@ struct Decoder {
     stop: Option<StopReason>,
     usage: Usage,
     done: bool,
+    model: Option<String>,
+    /// The usage the API reported, as received: `message_start` carries the
+    /// input side and `message_delta` the cumulative totals, so the later
+    /// event's fields are laid over the earlier one's.
+    raw_usage: Option<Value>,
 }
 
 impl Decoder {
@@ -423,7 +507,12 @@ impl Decoder {
             .map_err(|e| LlmError::Protocol(format!("invalid stream event: {e}")))?;
         let mut emit = |delta: Delta| sink.delta(delta).map_err(LlmError::Sink);
         match event["type"].as_str() {
-            Some("message_start") => self.read_usage(&event["message"]["usage"]),
+            Some("message_start") => {
+                if let Some(model) = event["message"]["model"].as_str() {
+                    self.model = Some(model.to_string());
+                }
+                self.read_usage(&event["message"]["usage"]);
+            }
             Some("content_block_start") => {
                 let block = &event["content_block"];
                 match block["type"].as_str() {
@@ -496,7 +585,17 @@ impl Decoder {
     }
 
     /// `input_tokens` already excludes cached tokens in this API.
+    ///
+    /// `cache_creation_input_tokens` is the total written; the
+    /// `cache_creation` object only splits that total by lifetime, so it is
+    /// not added again.
     fn read_usage(&mut self, usage: &Value) {
+        if let Value::Object(fields) = usage {
+            let raw = self.raw_usage.get_or_insert_with(|| json!({}));
+            for (name, value) in fields {
+                raw[name] = value.clone();
+            }
+        }
         let read = |name: &str| usage[name].as_u64();
         if let Some(n) = read("input_tokens") {
             self.usage.input_tokens = n;
@@ -517,7 +616,11 @@ impl Decoder {
             (true, Some(stop)) => Ok(Completion {
                 stop,
                 usage: self.usage,
-                meta: crate::CallMeta::default(),
+                meta: crate::CallMeta {
+                    model: self.model,
+                    raw_usage: self.raw_usage,
+                    ..crate::CallMeta::default()
+                },
             }),
             _ => Err(LlmError::Protocol(
                 "the stream ended before the message was complete".into(),
@@ -635,7 +738,7 @@ mod tests {
     fn answer() -> String {
         let delta = |index: u64, delta: Value| json!({"type": "content_block_delta", "index": index, "delta": delta});
         sse(&[
-            json!({"type": "message_start", "message": {"usage": {
+            json!({"type": "message_start", "message": {"model": "claude-test-1", "usage": {
                 "input_tokens": 12, "cache_read_input_tokens": 900,
                 "cache_creation_input_tokens": 40, "output_tokens": 1
             }}}),
@@ -675,10 +778,12 @@ mod tests {
         let (base_url, bodies) = serve(vec![(200, answer())]).await;
         let (deltas, result) = collect(&adapter(&base_url), &request()).await;
 
+        let completion = result.unwrap();
+        let meta = completion.meta.clone();
         assert_eq!(
-            result.unwrap(),
+            completion,
             Completion {
-                meta: Default::default(),
+                meta: meta.clone(),
                 stop: StopReason::ToolUse,
                 usage: Usage {
                     input_tokens: 12,
@@ -705,6 +810,20 @@ mod tests {
         );
 
         let sent = bodies.lock().unwrap()[0].clone();
+        assert_eq!(
+            meta.request_bytes,
+            Some(serde_json::to_vec(&sent).unwrap().len() as u64)
+        );
+        assert_eq!(meta.response_bytes, Some(answer().len() as u64));
+        assert_eq!((meta.images, meta.image_bytes), (Some(0), Some(0)));
+        assert!(meta.ttft_ms.is_some());
+        assert_eq!(meta.model.as_deref(), Some("claude-test-1"));
+        // Usage arrives in two events; the later one's fields win.
+        assert_eq!(
+            meta.raw_usage,
+            Some(json!({"input_tokens": 12, "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 40, "output_tokens": 57}))
+        );
         assert_eq!(
             sent,
             json!({
@@ -903,5 +1022,170 @@ mod tests {
         let (_, result) = collect(&adapter(&base_url), &request()).await;
         assert!(matches!(result, Err(LlmError::Http { status: 401, .. })));
         assert_eq!(bodies.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn images_and_documents_go_natively_and_what_cannot_go_is_named() {
+        use crate::media::tests::{b64, fixture, png};
+        let fx = fixture();
+        let profile = ModelProfile::resolve(Provider::Anthropic, "claude-haiku-5-5");
+        let (body, images, image_bytes) =
+            build_body("m", profile, None, false, &fx.request, true, false, true);
+        assert_eq!(images, 2);
+        assert_eq!(image_bytes, fx.red.bytes + fx.blue.bytes);
+        let image = |bytes: &[u8]| {
+            json!({"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                "data": b64(bytes)}})
+        };
+        let missing = format!(
+            "[image image/png 8x8 {} bytes, artifact {}: not sent, it is missing from the \
+             artifact store]",
+            fx.gone.bytes,
+            fx.gone.short()
+        );
+        assert_eq!(
+            body["messages"],
+            json!([
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Compare these."},
+                    image(&png(8, 8, [255, 0, 0], [255, 0, 0])),
+                    {"type": "document", "title": "spec.pdf", "source": {"type": "base64",
+                        "media_type": "application/pdf", "data": b64(b"%PDF-1.4 x")}},
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "shot", "input": {}},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": [
+                        {"type": "text", "text": "captured"},
+                        image(&png(8, 8, [0, 0, 255], [0, 0, 255])),
+                        {"type": "text", "text": format!(
+                            "{missing}\n{{\"ok\":true}}\n[audio content not carried: audio/wav, 10 bytes]")},
+                    ]},
+                ]},
+            ])
+        );
+
+        // A model without vision gets every image as a note, and the tool
+        // result stays a plain string; no base64 anywhere.
+        let (body, images, _) = build_body(
+            "m",
+            ModelProfile::TEXT_ONLY,
+            None,
+            false,
+            &fx.request,
+            true,
+            false,
+            true,
+        );
+        assert_eq!(images, 0);
+        let result = &body["messages"][2]["content"][0]["content"];
+        let text = result.as_str().expect("all text");
+        assert!(text.starts_with("captured\n[image image/png 8x8"), "{text}");
+        assert!(text.contains(&format!(
+            "artifact {}: not sent, this model does not take images",
+            fx.blue.short()
+        )));
+        assert!(!body.to_string().contains("iVBOR"), "no base64 in text");
+        assert!(
+            body["messages"][0]["content"][2]["text"]
+                .as_str()
+                .unwrap()
+                .contains("does not take PDF documents")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_call_reports_what_it_sent_and_received() {
+        use crate::media::tests::fixture;
+        let fx = fixture();
+        let mut request = fx.request.clone();
+        request.messages.push(Message {
+            role: Role::User,
+            content: vec![Block::text("What colour?")],
+        });
+        let stream = answer();
+        let (base_url, bodies) = serve(vec![(200, stream.clone())]).await;
+        let model = Anthropic::new(&base_url, "k", "claude-haiku-5-5")
+            .with_client(reqwest::Client::builder().no_proxy().build().unwrap());
+        assert!(model.profile().vision && model.profile().pdf);
+        let (_, result) = collect(&model, &request).await;
+        let meta = result.unwrap().meta;
+        let sent = bodies.lock().unwrap()[0].clone();
+        assert_eq!(
+            meta.request_bytes,
+            Some(serde_json::to_vec(&sent).unwrap().len() as u64)
+        );
+        assert_eq!(meta.response_bytes, Some(stream.len() as u64));
+        assert_eq!(meta.images, Some(2));
+        assert_eq!(meta.image_bytes, Some(fx.red.bytes + fx.blue.bytes));
+        assert_eq!(meta.model.as_deref(), Some("claude-test-1"));
+
+        // The profile can be overridden: no vision, no images sent.
+        let (base_url, _) = serve(vec![(200, stream)]).await;
+        let blind = Anthropic::new(&base_url, "k", "claude-haiku-5-5")
+            .with_client(reqwest::Client::builder().no_proxy().build().unwrap())
+            .with_profile(ModelProfile::TEXT_ONLY);
+        let (_, result) = collect(&blind, &request).await;
+        assert_eq!(result.unwrap().meta.images, Some(0));
+    }
+
+    /// Usage objects recorded from two live calls (claude-haiku-5-5,
+    /// 2026-11-15, `live_cache_reads_and_writes_are_reported_apart`): the
+    /// first wrote an 8417-token prompt to the cache, the second read it.
+    #[test]
+    fn recorded_usage_is_normalized_without_double_counting() {
+        let write = json!({"cache_creation": {"ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 8417}, "cache_creation_input_tokens": 8417,
+            "cache_read_input_tokens": 0, "inference_geo": "global", "input_tokens": 4,
+            "output_tokens": 22, "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard", "speed": "standard"});
+        let read = json!({"cache_creation": {"ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0}, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 8417, "inference_geo": "global", "input_tokens": 4,
+            "output_tokens": 16, "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard", "speed": "standard"});
+        let decode = |usage: &Value| {
+            let mut decoder = Decoder::default();
+            let mut sink = |_: Delta| Ok(());
+            for event in [
+                json!({"type": "message_start", "message": {"model": "claude-haiku-5-5",
+                    "usage": {"input_tokens": 4, "output_tokens": 1}}}),
+                json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                    "usage": usage}),
+                json!({"type": "message_stop"}),
+            ] {
+                decoder.feed(&event.to_string(), &mut sink).unwrap();
+            }
+            decoder.finish().unwrap()
+        };
+        let first = decode(&write);
+        let second = decode(&read);
+        // input_tokens already excludes both cache figures in this API, and
+        // the cache_creation breakdown is not added on top of its total.
+        assert_eq!(
+            first.usage,
+            Usage {
+                input_tokens: 4,
+                output_tokens: 22,
+                cache_read_tokens: 0,
+                cache_write_tokens: 8417,
+            }
+        );
+        assert_eq!(
+            second.usage,
+            Usage {
+                input_tokens: 4,
+                output_tokens: 16,
+                cache_read_tokens: 8417,
+                cache_write_tokens: 0,
+            }
+        );
+        // The same prompt, counted once either way.
+        let prompt = |u: &Usage| u.input_tokens + u.cache_read_tokens + u.cache_write_tokens;
+        assert_eq!(prompt(&first.usage), prompt(&second.usage));
+        // The raw object keeps what the provider sent, later fields winning.
+        assert_eq!(first.meta.raw_usage, Some(write));
+        assert_eq!(first.meta.model.as_deref(), Some("claude-haiku-5-5"));
     }
 }

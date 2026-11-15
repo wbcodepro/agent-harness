@@ -1682,11 +1682,13 @@ dependencies = [
 name = "hame-llm"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
  "hame-kernel",
  "hame-session",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]

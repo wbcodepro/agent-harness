@@ -1,9 +1,14 @@
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use hame_session::{Block, Delta, Message, Role, StopReason, Usage};
 use serde_json::{Value, json};
 
-use crate::{BoxFuture, Completion, DeltaSink, Llm, LlmError, Request, Retry};
+use crate::media::{Inliner, Media, Piece, has_media, joined, pieces};
+use crate::{
+    BoxFuture, Completion, DeltaSink, Llm, LlmError, Measure, ModelProfile, Provider, Request,
+    Retry, Timed,
+};
 
 /// Adapter for the OpenAI chat-completions wire format, which DeepSeek and
 /// many gateways also speak.
@@ -17,6 +22,8 @@ pub struct ChatCompletions {
     /// Whether the server is OpenAI's own, which takes fields that other
     /// servers speaking this format may reject.
     openai: bool,
+    /// What the model takes besides text.
+    profile: ModelProfile,
 }
 
 /// Whether `base_url` points at OpenAI itself rather than a compatible server.
@@ -27,16 +34,39 @@ fn is_openai(base_url: &str) -> bool {
 impl ChatCompletions {
     /// `base_url` is the API root, e.g. `https://api.deepseek.com` or
     /// `https://api.openai.com/v1`.
+    ///
+    /// What the model can be shown besides text is resolved from its id,
+    /// read as an OpenAI model at api.openai.com and as a model behind a
+    /// compatible server elsewhere ([`ModelProfile::resolve`]); replace it
+    /// with [`ChatCompletions::with_profile`].
     pub fn new(base_url: &str, api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        let model = model.into();
+        let openai = is_openai(base_url);
+        let provider = if openai {
+            Provider::OpenAi
+        } else {
+            Provider::Compatible
+        };
         Self {
             client: reqwest::Client::new(),
             url: format!("{}/chat/completions", base_url.trim_end_matches('/')),
             api_key: api_key.into(),
-            model: model.into(),
+            profile: ModelProfile::resolve(provider, &model),
+            model,
             temperature: None,
             retry: Retry::default(),
-            openai: is_openai(base_url),
+            openai,
         }
+    }
+
+    /// Overrides what the model is taken to accept besides text.
+    pub fn with_profile(mut self, profile: ModelProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn profile(&self) -> ModelProfile {
+        self.profile
     }
 
     /// Sampling temperature; `None` leaves the server's default.
@@ -80,16 +110,23 @@ impl Llm for ChatCompletions {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
-            let mut body = build_body(&self.model, request, self.openai);
+            let (mut body, images, image_bytes) =
+                build_body(&self.model, self.profile, request, self.openai);
             if let Some(temperature) = self.temperature {
                 body["temperature"] = json!(temperature);
             }
             let body = serde_json::to_vec(&body).map_err(|e| LlmError::Protocol(e.to_string()))?;
 
             let mut attempt = 0;
-            let mut response = loop {
+            let (mut response, mut measure) = loop {
+                let sent = Instant::now();
                 match self.open(&body).await {
-                    Ok(response) => break response,
+                    Ok(response) => {
+                        break (
+                            response,
+                            Measure::new(body.len(), images, image_bytes, sent),
+                        );
+                    }
                     Err(e) => match self.retry.delay(attempt, &e) {
                         Some(wait) => {
                             tokio::time::sleep(wait).await;
@@ -102,30 +139,44 @@ impl Llm for ChatCompletions {
 
             let mut lines = SseLines::default();
             let mut decoder = Decoder::default();
-            while let Some(chunk) = response
+            let mut timed = Timed {
+                inner: sink,
+                sent: measure.sent,
+                first: None,
+            };
+            'stream: while let Some(chunk) = response
                 .chunk()
                 .await
                 .map_err(|e| LlmError::Transport(e.to_string()))?
             {
+                measure.response_bytes += chunk.len() as u64;
                 for data in lines.push(&chunk) {
-                    if decoder.feed(&data, sink)? {
-                        return decoder.finish();
+                    if decoder.feed(&data, &mut timed)? {
+                        break 'stream;
                     }
                 }
             }
-            decoder.finish()
+            measure.first_delta = timed.first;
+            decoder.finish().map(|completion| measure.apply(completion))
         })
     }
 }
 
+/// The request body, and how many images it carries and their raw bytes.
 /// `cache_key` says whether the server takes `prompt_cache_key`.
-fn build_body(model: &str, request: &Request, cache_key: bool) -> Value {
+fn build_body(
+    model: &str,
+    profile: ModelProfile,
+    request: &Request,
+    cache_key: bool,
+) -> (Value, u32, u64) {
+    let mut inliner = Inliner::new(profile, request);
     let mut messages = Vec::new();
     if let Some(system) = &request.system {
         messages.push(json!({ "role": "system", "content": system }));
     }
     for message in &request.messages {
-        push_message(&mut messages, message);
+        push_message(&mut messages, message, &mut inliner);
     }
 
     let mut body = json!({
@@ -156,7 +207,7 @@ fn build_body(model: &str, request: &Request, cache_key: bool) -> Value {
     if let Some(key) = request.cache_key.as_ref().filter(|_| cache_key) {
         body["prompt_cache_key"] = json!(key);
     }
-    body
+    (body, inliner.images, inliner.image_bytes)
 }
 
 fn text_of(blocks: &[Block]) -> String {
@@ -169,9 +220,39 @@ fn text_of(blocks: &[Block]) -> String {
     text
 }
 
-fn push_message(out: &mut Vec<Value>, message: &Message) {
+/// A user content part for a piece. Shapes from the chat-completions
+/// reference (developers.openai.com, "Create chat completion"): `text`,
+/// `image_url` with the base64 data URL in `image_url.url`, and `file`
+/// with `filename` and `file_data` for a PDF.
+fn user_part(piece: Piece) -> Value {
+    match piece {
+        Piece::Text(text) => json!({"type": "text", "text": text}),
+        Piece::Media(Media::Image { mime, data }, _) => json!({
+            "type": "image_url",
+            "image_url": {"url": Media::data_url(&mime, &data)},
+        }),
+        Piece::Media(Media::Pdf { data, name }, _) => json!({
+            "type": "file",
+            "file": {
+                "filename": name.unwrap_or_else(|| "document.pdf".into()),
+                "file_data": Media::data_url("application/pdf", &data),
+            },
+        }),
+        Piece::Media(Media::Note(text), _) => json!({"type": "text", "text": text}),
+    }
+}
+
+fn push_message(out: &mut Vec<Value>, message: &Message, inliner: &mut Inliner) {
     match message.role {
-        Role::User => out.push(json!({ "role": "user", "content": text_of(&message.content) })),
+        Role::User => {
+            let pieces = pieces(&message.content, inliner);
+            let content = if has_media(&pieces) {
+                Value::Array(pieces.into_iter().map(user_part).collect())
+            } else {
+                json!(joined(pieces))
+            };
+            out.push(json!({ "role": "user", "content": content }));
+        }
         Role::Assistant => {
             let tool_calls: Vec<Value> = message
                 .content
@@ -203,19 +284,49 @@ fn push_message(out: &mut Vec<Value>, message: &Message) {
             }
             out.push(wire);
         }
-        // This format carries one tool result per message.
+        // This format carries one tool result per message, and a tool
+        // message holds text only ("For tool messages, only type `text` is
+        // supported"). Images a result carries follow all the tool messages
+        // of the turn in one user message, labelled with their call, and
+        // the tool message says where they went.
         Role::Tool => {
+            let mut attached: Vec<Value> = Vec::new();
             for block in &message.content {
-                if let Block::ToolResult {
+                let Block::ToolResult {
                     call_id, content, ..
                 } = block
-                {
-                    out.push(json!({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": text_of(content),
-                    }));
+                else {
+                    continue;
+                };
+                let mut text = Vec::new();
+                let mut media = Vec::new();
+                for piece in pieces(content, inliner) {
+                    match piece {
+                        Piece::Text(part) => text.push(part),
+                        Piece::Media(sent, label) => {
+                            text.push(format!(
+                                "{}: attached in the next user message]",
+                                label.trim_end_matches(']')
+                            ));
+                            media.push(user_part(Piece::Media(sent, label)));
+                        }
+                    }
                 }
+                out.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": text.join("\n"),
+                }));
+                if !media.is_empty() {
+                    attached.push(json!({
+                        "type": "text",
+                        "text": format!("Attachments from tool call {call_id}:"),
+                    }));
+                    attached.extend(media);
+                }
+            }
+            if !attached.is_empty() {
+                out.push(json!({"role": "user", "content": attached}));
             }
         }
     }
@@ -256,6 +367,8 @@ struct Decoder {
     saw_tool: bool,
     stop: Option<StopReason>,
     usage: Usage,
+    model: Option<String>,
+    raw_usage: Option<Value>,
 }
 
 struct HeldTool {
@@ -276,8 +389,12 @@ impl Decoder {
         if let Some(error) = chunk.get("error") {
             return Err(LlmError::Protocol(format!("provider error: {error}")));
         }
+        if let Some(model) = chunk["model"].as_str() {
+            self.model = Some(model.to_string());
+        }
         if let Some(usage) = chunk.get("usage").filter(|usage| usage.is_object()) {
             self.usage = read_usage(usage);
+            self.raw_usage = Some(usage.clone());
         }
         let Some(choice) = chunk.pointer("/choices/0") else {
             return Ok(false);
@@ -382,13 +499,20 @@ impl Decoder {
         Ok(Completion {
             stop,
             usage: self.usage,
-            meta: crate::CallMeta::default(),
+            meta: crate::CallMeta {
+                model: self.model,
+                raw_usage: self.raw_usage,
+                ..crate::CallMeta::default()
+            },
         })
     }
 }
 
 /// `input_tokens` counts only the uncached part of the prompt; cached prompt
-/// tokens are reported separately as `cache_read_tokens`.
+/// tokens are reported separately as `cache_read_tokens`. Both DeepSeek
+/// (`prompt_cache_hit_tokens`, with `prompt_cache_miss_tokens` the rest) and
+/// OpenAI (`prompt_tokens_details.cached_tokens`) include the cached tokens
+/// in `prompt_tokens`, so they are subtracted, never added.
 fn read_usage(usage: &Value) -> Usage {
     let prompt = usage["prompt_tokens"].as_u64().unwrap_or(0);
     let cached = usage["prompt_cache_hit_tokens"]
@@ -507,18 +631,21 @@ mod tests {
             tool(0, None, None, "\"b.rs\"}"),
             tool(1, Some("c2"), Some("read"), "{\"path\":\"c.rs\"}"),
             json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
-            json!({"choices": [], "usage": {
+            json!({"choices": [], "model": "deepseek-test", "usage": {
                 "prompt_tokens": 100, "completion_tokens": 20, "prompt_cache_hit_tokens": 60
             }}),
         ]);
+        let response_len = body.len();
         let (base_url, bodies) = serve(vec![(200, body)]).await;
 
         let (deltas, result) = collect(&adapter(&base_url), &request()).await;
 
+        let completion = result.unwrap();
+        let meta = completion.meta.clone();
         assert_eq!(
-            result.unwrap(),
+            completion,
             Completion {
-                meta: Default::default(),
+                meta: meta.clone(),
                 stop: StopReason::ToolUse,
                 usage: Usage {
                     input_tokens: 40,
@@ -550,6 +677,15 @@ mod tests {
         );
 
         let sent = bodies.lock().unwrap()[0].clone();
+        assert_eq!(
+            meta.request_bytes,
+            Some(serde_json::to_vec(&sent).unwrap().len() as u64)
+        );
+        assert_eq!(meta.response_bytes, Some(response_len as u64));
+        assert_eq!((meta.images, meta.image_bytes), (Some(0), Some(0)));
+        assert!(meta.ttft_ms.is_some());
+        assert_eq!(meta.model.as_deref(), Some("deepseek-test"));
+        assert_eq!(meta.raw_usage.unwrap()["prompt_cache_hit_tokens"], 60);
         assert_eq!(
             sent,
             json!({
@@ -638,14 +774,19 @@ mod tests {
     fn the_cache_key_is_sent_only_to_openai_itself() {
         let mut request = request();
         assert!(
-            build_body("m", &request, true)
+            build_body("m", ModelProfile::TEXT_ONLY, &request, true)
+                .0
                 .get("prompt_cache_key")
                 .is_none()
         );
         request.cache_key = Some("s-1".into());
-        assert_eq!(build_body("m", &request, true)["prompt_cache_key"], "s-1");
+        assert_eq!(
+            build_body("m", ModelProfile::TEXT_ONLY, &request, true).0["prompt_cache_key"],
+            "s-1"
+        );
         assert!(
-            build_body("m", &request, false)
+            build_body("m", ModelProfile::TEXT_ONLY, &request, false)
+                .0
                 .get("prompt_cache_key")
                 .is_none()
         );
@@ -732,5 +873,93 @@ mod tests {
         let (deltas, result) = collect(&adapter(&base_url), &request()).await;
         assert_eq!(deltas, vec![Delta::Text { text: "par".into() }]);
         assert!(matches!(result, Err(LlmError::Protocol(_))));
+    }
+
+    #[test]
+    fn tool_images_follow_the_tool_messages_for_a_vision_model_only() {
+        use crate::media::tests::{b64, fixture, png};
+        let fx = fixture();
+        let profile = ModelProfile::resolve(Provider::OpenAi, "gpt-4o-mini");
+        let (body, images, image_bytes) = build_body("m", profile, &fx.request, false);
+        assert_eq!((images, image_bytes), (2, fx.red.bytes + fx.blue.bytes));
+        let url = |bytes: &[u8]| format!("data:image/png;base64,{}", b64(bytes));
+        let missing = format!(
+            "[image image/png 8x8 {} bytes, artifact {}: not sent, it is missing from the \
+             artifact store]",
+            fx.gone.bytes,
+            fx.gone.short()
+        );
+        let attached = format!(
+            "[image image/png 8x8 {} bytes, artifact {}: attached in the next user message]",
+            fx.blue.bytes,
+            fx.blue.short()
+        );
+        assert_eq!(
+            body["messages"],
+            json!([
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Compare these."},
+                    {"type": "image_url", "image_url": {"url": url(&png(8, 8, [255, 0, 0], [255, 0, 0]))}},
+                    {"type": "file", "file": {"filename": "spec.pdf",
+                        "file_data": format!("data:application/pdf;base64,{}", b64(b"%PDF-1.4 x"))}},
+                ]},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "t1", "type": "function", "function": {"name": "shot", "arguments": "{}"}},
+                ]},
+                {"role": "tool", "tool_call_id": "t1", "content": format!(
+                    "captured\n{attached}\n{missing}\n{{\"ok\":true}}\n[audio content not carried: audio/wav, 10 bytes]")},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Attachments from tool call t1:"},
+                    {"type": "image_url", "image_url": {"url": url(&png(8, 8, [0, 0, 255], [0, 0, 255]))}},
+                ]},
+            ])
+        );
+
+        // DeepSeek takes no images: notes in place, no extra user message,
+        // plain string content.
+        let deepseek = ChatCompletions::new("https://api.deepseek.com", "k", "deepseek-chat");
+        assert_eq!(deepseek.profile(), ModelProfile::TEXT_ONLY);
+        let (body, images, _) = build_body("m", deepseek.profile(), &fx.request, false);
+        assert_eq!(images, 0);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert!(messages[0]["content"].is_string());
+        let tool = messages[2]["content"].as_str().unwrap();
+        assert!(
+            tool.contains(&format!(
+                "artifact {}: not sent, this model does not take images",
+                fx.blue.short()
+            )),
+            "{tool}"
+        );
+        assert!(!body.to_string().contains("base64,"));
+    }
+
+    /// Usage in the shapes DeepSeek and OpenAI report it: both include the
+    /// cached tokens in `prompt_tokens`. DeepSeek's fields are from its API
+    /// documentation (`prompt_cache_hit_tokens` + `prompt_cache_miss_tokens`
+    /// = `prompt_tokens`); OpenAI's from its chat-completions reference.
+    #[test]
+    fn cached_prompt_tokens_are_counted_once_for_each_provider() {
+        let deepseek = json!({"prompt_tokens": 5120, "completion_tokens": 410,
+            "total_tokens": 5530, "prompt_cache_hit_tokens": 4864,
+            "prompt_cache_miss_tokens": 256,
+            "prompt_tokens_details": {"cached_tokens": 4864},
+            "completion_tokens_details": {"reasoning_tokens": 300}});
+        let openai = json!({"prompt_tokens": 2048, "completion_tokens": 64,
+            "total_tokens": 2112,
+            "prompt_tokens_details": {"cached_tokens": 1536, "audio_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0}});
+        for (raw, uncached, cached) in [(deepseek, 256, 4864), (openai, 512, 1536)] {
+            let usage = read_usage(&raw);
+            assert_eq!(usage.input_tokens, uncached, "{raw}");
+            assert_eq!(usage.cache_read_tokens, cached, "{raw}");
+            assert_eq!(usage.cache_write_tokens, 0);
+            assert_eq!(
+                usage.input_tokens + usage.cache_read_tokens + usage.output_tokens,
+                raw["total_tokens"].as_u64().unwrap(),
+                "{raw}"
+            );
+        }
     }
 }

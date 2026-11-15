@@ -1,9 +1,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use hame_session::{Block, Delta, Message, Role, StopReason, Usage};
 use serde_json::{Value, json};
 
-use crate::{BoxFuture, Completion, DeltaSink, Llm, LlmError, Request, Retry};
+use crate::media::{Inliner, Media, Piece, has_media, joined, pieces};
+use crate::{
+    BoxFuture, Completion, DeltaSink, Llm, LlmError, Measure, ModelProfile, Provider, Request,
+    Retry, Timed,
+};
 
 /// Marks a thinking signature as an OpenAI reasoning item, so it is only
 /// ever sent back to this API.
@@ -22,6 +27,8 @@ pub struct Responses {
     model: String,
     effort: Option<String>,
     retry: Retry,
+    /// What the model takes besides text.
+    profile: ModelProfile,
     /// Set once the API refuses replayed reasoning. It would refuse the
     /// same items on every later step, so they are no longer sent.
     reasoning_rejected: AtomicBool,
@@ -29,12 +36,18 @@ pub struct Responses {
 
 impl Responses {
     /// `base_url` is the API root, normally `https://api.openai.com/v1`.
+    ///
+    /// What the model can be shown besides text is resolved from its id
+    /// ([`ModelProfile::resolve`] with [`Provider::OpenAi`]); replace it with
+    /// [`Responses::with_profile`].
     pub fn new(base_url: &str, api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        let model = model.into();
         Self {
             client: reqwest::Client::new(),
             url: format!("{}/responses", base_url.trim_end_matches('/')),
             api_key: api_key.into(),
-            model: model.into(),
+            profile: ModelProfile::resolve(Provider::OpenAi, &model),
+            model,
             effort: None,
             retry: Retry::default(),
             reasoning_rejected: AtomicBool::new(false),
@@ -57,21 +70,34 @@ impl Responses {
         self
     }
 
-    async fn open(&self, body: &Value) -> Result<reqwest::Response, LlmError> {
+    /// Overrides what the model is taken to accept besides text.
+    pub fn with_profile(mut self, profile: ModelProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn profile(&self) -> ModelProfile {
+        self.profile
+    }
+
+    /// Sends `body`, retrying what can be retried. Returns the response and
+    /// when the request that got it was sent.
+    async fn open(&self, body: &[u8]) -> Result<(reqwest::Response, Instant), LlmError> {
         let mut attempt = 0;
         loop {
+            let started = Instant::now();
             let sent = self
                 .client
                 .post(&self.url)
                 .bearer_auth(&self.api_key)
                 .header("content-type", "application/json")
                 .header("accept", "text/event-stream")
-                .body(serde_json::to_vec(body).map_err(|e| LlmError::Protocol(e.to_string()))?)
+                .body(body.to_vec())
                 .send()
                 .await
                 .map_err(|e| LlmError::Transport(e.to_string()));
             let error = match sent {
-                Ok(response) if response.status().is_success() => return Ok(response),
+                Ok(response) if response.status().is_success() => return Ok((response, started)),
                 Ok(response) => crate::http_error(response).await,
                 Err(e) => e,
             };
@@ -84,21 +110,43 @@ impl Responses {
     }
 }
 
-fn text_of(blocks: &[Block]) -> String {
-    let mut text = String::new();
-    for block in blocks {
-        if let Block::Text { text: part } = block {
-            text.push_str(part);
-        }
+/// An input content item for a piece of a user turn or tool output. Shapes
+/// from the Responses API reference (developers.openai.com, "Create a
+/// model response"): `input_text`, `input_image` with a base64 data URL in
+/// `image_url`, and `input_file` with `filename` and `file_data`; the same
+/// three are accepted in a `function_call_output`'s `output` array.
+fn input_part(piece: Piece) -> Value {
+    match piece {
+        Piece::Text(text) => json!({"type": "input_text", "text": text}),
+        Piece::Media(Media::Image { mime, data }, _) => json!({
+            "type": "input_image",
+            "image_url": Media::data_url(&mime, &data),
+            "detail": "auto",
+        }),
+        Piece::Media(Media::Pdf { data, name }, _) => json!({
+            "type": "input_file",
+            "filename": name.unwrap_or_else(|| "document.pdf".into()),
+            "file_data": Media::data_url("application/pdf", &data),
+        }),
+        Piece::Media(Media::Note(text), _) => json!({"type": "input_text", "text": text}),
     }
-    text
 }
 
-fn input_items(message: &Message, with_reasoning: bool, out: &mut Vec<Value>) {
+fn input_items(
+    message: &Message,
+    with_reasoning: bool,
+    inliner: &mut Inliner,
+    out: &mut Vec<Value>,
+) {
     match message.role {
         Role::User => {
-            let text = text_of(&message.content);
-            out.push(json!({"role": "user", "content": [{"type": "input_text", "text": text}]}));
+            let pieces = pieces(&message.content, inliner);
+            let content: Vec<Value> = if has_media(&pieces) {
+                pieces.into_iter().map(input_part).collect()
+            } else {
+                vec![json!({"type": "input_text", "text": joined(pieces)})]
+            };
+            out.push(json!({"role": "user", "content": content}));
         }
         // Each block is its own item, in the order the model produced them.
         Role::Assistant => {
@@ -139,10 +187,18 @@ fn input_items(message: &Message, with_reasoning: bool, out: &mut Vec<Value>) {
                     call_id, content, ..
                 } = block
                 {
+                    // A string while the output is all text; an array of
+                    // input items once it carries an image or a file.
+                    let pieces = pieces(content, inliner);
+                    let output = if has_media(&pieces) {
+                        Value::Array(pieces.into_iter().map(input_part).collect())
+                    } else {
+                        json!(joined(pieces))
+                    };
                     out.push(json!({
                         "type": "function_call_output",
                         "call_id": call_id,
-                        "output": text_of(content),
+                        "output": output,
                     }));
                 }
             }
@@ -150,10 +206,18 @@ fn input_items(message: &Message, with_reasoning: bool, out: &mut Vec<Value>) {
     }
 }
 
-fn build_body(model: &str, effort: Option<&str>, request: &Request, with_reasoning: bool) -> Value {
+/// The request body, and how many images it carries and their raw bytes.
+fn build_body(
+    model: &str,
+    profile: ModelProfile,
+    effort: Option<&str>,
+    request: &Request,
+    with_reasoning: bool,
+) -> (Value, u32, u64) {
+    let mut inliner = Inliner::new(profile, request);
     let mut input = Vec::new();
     for message in &request.messages {
-        input_items(message, with_reasoning, &mut input);
+        input_items(message, with_reasoning, &mut inliner, &mut input);
     }
     let mut body = json!({
         "model": model,
@@ -188,7 +252,7 @@ fn build_body(model: &str, effort: Option<&str>, request: &Request, with_reasoni
     if let Some(max_tokens) = request.max_tokens {
         body["max_output_tokens"] = json!(max_tokens);
     }
-    body
+    (body, inliner.images, inliner.image_bytes)
 }
 
 /// Whether an error says replayed reasoning was not accepted.
@@ -204,40 +268,67 @@ impl Llm for Responses {
         sink: &'a mut dyn DeltaSink,
     ) -> BoxFuture<'a, Result<Completion, LlmError>> {
         Box::pin(async move {
+            let encode = |with_reasoning: bool| {
+                let (body, images, image_bytes) = build_body(
+                    &self.model,
+                    self.profile,
+                    self.effort.as_deref(),
+                    request,
+                    with_reasoning,
+                );
+                let has_reasoning = body.to_string().contains("\"type\":\"reasoning\"");
+                serde_json::to_vec(&body)
+                    .map(|bytes| (bytes, images, image_bytes, has_reasoning))
+                    .map_err(|e| LlmError::Protocol(e.to_string()))
+            };
             let with_reasoning = !self.reasoning_rejected.load(Ordering::Relaxed);
-            let body = build_body(&self.model, self.effort.as_deref(), request, with_reasoning);
-            let has_reasoning = body.to_string().contains("\"type\":\"reasoning\"");
-            let mut response = match self.open(&body).await {
+            let (body, images, image_bytes, has_reasoning) = encode(with_reasoning)?;
+            let (mut response, mut measure) = match self.open(&body).await {
+                Ok((response, sent)) => (
+                    response,
+                    Measure::new(body.len(), images, image_bytes, sent),
+                ),
                 // Reasoning from an earlier step is no longer accepted:
                 // send the conversation once more without any, and leave
                 // it out from now on.
                 Err(e) if has_reasoning && rejects_reasoning(&e) => {
                     self.reasoning_rejected.store(true, Ordering::Relaxed);
-                    let body = build_body(&self.model, self.effort.as_deref(), request, false);
-                    self.open(&body).await?
+                    let (body, images, image_bytes, _) = encode(false)?;
+                    let (response, sent) = self.open(&body).await?;
+                    (
+                        response,
+                        Measure::new(body.len(), images, image_bytes, sent),
+                    )
                 }
-                other => other?,
+                Err(e) => return Err(e),
             };
 
             let mut buffer: Vec<u8> = Vec::new();
             let mut decoder = Decoder::default();
-            while let Some(chunk) = response
+            let mut timed = Timed {
+                inner: sink,
+                sent: measure.sent,
+                first: None,
+            };
+            'stream: while let Some(chunk) = response
                 .chunk()
                 .await
                 .map_err(|e| LlmError::Transport(e.to_string()))?
             {
+                measure.response_bytes += chunk.len() as u64;
                 buffer.extend_from_slice(&chunk);
                 while let Some(end) = buffer.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = buffer.drain(..=end).collect();
                     let line = String::from_utf8_lossy(&line);
                     if let Some(data) = line.trim_end_matches(['\r', '\n']).strip_prefix("data:")
-                        && decoder.feed(data.trim_start(), sink)?
+                        && decoder.feed(data.trim_start(), &mut timed)?
                     {
-                        return decoder.finish();
+                        break 'stream;
                     }
                 }
             }
-            decoder.finish()
+            measure.first_delta = timed.first;
+            decoder.finish().map(|completion| measure.apply(completion))
         })
     }
 }
@@ -246,6 +337,8 @@ impl Llm for Responses {
 struct Decoder {
     called_tools: bool,
     outcome: Option<(StopReason, Usage)>,
+    model: Option<String>,
+    raw_usage: Option<Value>,
 }
 
 impl Decoder {
@@ -256,6 +349,9 @@ impl Decoder {
         }
         let event: Value = serde_json::from_str(data)
             .map_err(|e| LlmError::Protocol(format!("invalid stream event: {e}")))?;
+        if let Some(model) = event["response"]["model"].as_str() {
+            self.model = Some(model.to_string());
+        }
         let mut emit = |delta: Delta| sink.delta(delta).map_err(LlmError::Sink);
         match event["type"].as_str() {
             Some("response.output_text.delta" | "response.refusal.delta") => {
@@ -303,19 +399,10 @@ impl Decoder {
             }
             Some(kind @ ("response.completed" | "response.incomplete")) => {
                 let response = &event["response"];
-                let usage = &response["usage"];
-                let cached = usage["input_tokens_details"]["cached_tokens"]
-                    .as_u64()
-                    .unwrap_or(0);
-                let usage = Usage {
-                    input_tokens: usage["input_tokens"]
-                        .as_u64()
-                        .unwrap_or(0)
-                        .saturating_sub(cached),
-                    output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
-                    cache_read_tokens: cached,
-                    cache_write_tokens: 0,
-                };
+                if response["usage"].is_object() {
+                    self.raw_usage = Some(response["usage"].clone());
+                }
+                let usage = read_usage(&response["usage"]);
                 let reason = response["incomplete_details"]["reason"].as_str();
                 let stop = match (kind, reason) {
                     ("response.incomplete", Some("content_filter")) => StopReason::Refusal,
@@ -343,15 +430,38 @@ impl Decoder {
     }
 
     fn finish(self) -> Result<Completion, LlmError> {
+        let (model, raw_usage) = (self.model, self.raw_usage);
         self.outcome
             .map(|(stop, usage)| Completion {
                 stop,
                 usage,
-                meta: crate::CallMeta::default(),
+                meta: crate::CallMeta {
+                    model,
+                    raw_usage,
+                    ..crate::CallMeta::default()
+                },
             })
             .ok_or_else(|| {
                 LlmError::Protocol("the stream ended before the response was complete".into())
             })
+    }
+}
+
+/// `input_tokens` includes the cached prompt tokens in this API
+/// (`input_tokens_details.cached_tokens`); they are taken out so they are
+/// counted once, as `cache_read_tokens`. OpenAI reports no cache writes.
+fn read_usage(usage: &Value) -> Usage {
+    let cached = usage["input_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .unwrap_or(0);
+    Usage {
+        input_tokens: usage["input_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(cached),
+        output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+        cache_read_tokens: cached,
+        cache_write_tokens: 0,
     }
 }
 
@@ -401,7 +511,7 @@ mod tests {
                 "call_id": "call_9", "name": "read", "arguments": ""}}),
             json!({"type": "response.function_call_arguments.delta", "delta": "{\"path\":"}),
             json!({"type": "response.function_call_arguments.delta", "delta": "\"a.rs\"}"}),
-            json!({"type": "response.completed", "response": {"status": "completed", "usage": {
+            json!({"type": "response.completed", "response": {"status": "completed", "model": "gpt-test", "usage": {
                 "input_tokens": 120, "input_tokens_details": {"cached_tokens": 100}, "output_tokens": 30}}}),
         ])
     }
@@ -443,13 +553,14 @@ mod tests {
     fn the_conversation_is_named_so_its_requests_share_a_cache() {
         let mut request = request(Vec::new());
         assert!(
-            build_body("m", None, &request, true)
+            build_body("m", ModelProfile::TEXT_ONLY, None, &request, true)
+                .0
                 .get("prompt_cache_key")
                 .is_none()
         );
         request.cache_key = Some("s-1".into());
         assert_eq!(
-            build_body("m", None, &request, true)["prompt_cache_key"],
+            build_body("m", ModelProfile::TEXT_ONLY, None, &request, true).0["prompt_cache_key"],
             "s-1"
         );
     }
@@ -460,10 +571,12 @@ mod tests {
         let adapter = adapter(&base_url);
 
         let (deltas, result) = collect(&adapter, &request(vec![])).await;
+        let completion = result.unwrap();
+        let meta = completion.meta.clone();
         assert_eq!(
-            result.unwrap(),
+            completion,
             Completion {
-                meta: Default::default(),
+                meta: meta.clone(),
                 stop: StopReason::ToolUse,
                 usage: Usage {
                     input_tokens: 20,
@@ -505,6 +618,16 @@ mod tests {
             },
         ]);
         collect(&adapter, &next).await.1.unwrap();
+        let first = bodies.lock().unwrap()[0].clone();
+        assert_eq!(
+            meta.request_bytes,
+            Some(serde_json::to_vec(&first).unwrap().len() as u64)
+        );
+        assert_eq!(meta.response_bytes, Some(answer().len() as u64));
+        assert_eq!((meta.images, meta.image_bytes), (Some(0), Some(0)));
+        assert!(meta.ttft_ms.is_some());
+        assert_eq!(meta.model.as_deref(), Some("gpt-test"));
+        assert_eq!(meta.raw_usage.unwrap()["input_tokens"], 120);
         let sent = bodies.lock().unwrap()[1].clone();
         assert_eq!(
             sent,
@@ -583,5 +706,77 @@ mod tests {
         .await;
         let (_, result) = collect(&adapter(&base_url), &request(vec![])).await;
         assert!(matches!(result, Err(LlmError::Protocol(_))));
+    }
+
+    #[test]
+    fn images_go_as_input_images_in_user_turns_and_function_output() {
+        use crate::media::tests::{b64, fixture, png};
+        let fx = fixture();
+        let profile = ModelProfile::resolve(Provider::OpenAi, "gpt-5.2");
+        let (body, images, image_bytes) = build_body("m", profile, None, &fx.request, true);
+        assert_eq!((images, image_bytes), (2, fx.red.bytes + fx.blue.bytes));
+        let url = |bytes: &[u8]| format!("data:image/png;base64,{}", b64(bytes));
+        let missing = format!(
+            "[image image/png 8x8 {} bytes, artifact {}: not sent, it is missing from the \
+             artifact store]",
+            fx.gone.bytes,
+            fx.gone.short()
+        );
+        assert_eq!(
+            body["input"],
+            json!([
+                {"role": "user", "content": [
+                    {"type": "input_text", "text": "Compare these."},
+                    {"type": "input_image", "detail": "auto",
+                        "image_url": url(&png(8, 8, [255, 0, 0], [255, 0, 0]))},
+                    {"type": "input_file", "filename": "spec.pdf",
+                        "file_data": format!("data:application/pdf;base64,{}", b64(b"%PDF-1.4 x"))},
+                ]},
+                {"type": "function_call", "call_id": "t1", "name": "shot", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "t1", "output": [
+                    {"type": "input_text", "text": "captured"},
+                    {"type": "input_image", "detail": "auto",
+                        "image_url": url(&png(8, 8, [0, 0, 255], [0, 0, 255]))},
+                    {"type": "input_text", "text": format!(
+                        "{missing}\n{{\"ok\":true}}\n[audio content not carried: audio/wav, 10 bytes]")},
+                ]},
+            ])
+        );
+
+        // Text only: the output stays a string, with the reasons in it.
+        let (body, images, _) = build_body("m", ModelProfile::TEXT_ONLY, None, &fx.request, true);
+        assert_eq!(images, 0);
+        let output = body["input"][2]["output"].as_str().expect("a string");
+        assert!(output.contains("does not take images"), "{output}");
+        assert!(!body.to_string().contains("base64,"));
+    }
+
+    /// Usage in the shape the Responses API reports it, cached tokens
+    /// included in `input_tokens` (OpenAI's documented response object;
+    /// the account here has no credit for a live recording).
+    #[test]
+    fn cached_input_is_counted_once() {
+        let raw = json!({"input_tokens": 2006, "input_tokens_details": {"cached_tokens": 1920},
+            "output_tokens": 300, "output_tokens_details": {"reasoning_tokens": 256},
+            "total_tokens": 2306});
+        let usage = read_usage(&raw);
+        assert_eq!(
+            usage,
+            Usage {
+                input_tokens: 86,
+                output_tokens: 300,
+                cache_read_tokens: 1920,
+                cache_write_tokens: 0,
+            }
+        );
+        assert_eq!(
+            usage.input_tokens + usage.cache_read_tokens,
+            raw["input_tokens"].as_u64().unwrap()
+        );
+        // Reasoning tokens are part of output_tokens, not extra.
+        assert_eq!(
+            usage.input_tokens + usage.cache_read_tokens + usage.output_tokens,
+            raw["total_tokens"].as_u64().unwrap()
+        );
     }
 }
