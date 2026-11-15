@@ -31,6 +31,10 @@ pub struct SetupArgs {
     /// Address of a compatible server.
     #[arg(long)]
     base_url: Option<String>,
+    /// Windows: accept that tools are confined for writes only (the
+    /// interactive setup asks). Needed when setup runs without a terminal.
+    #[arg(long)]
+    allow_partial: bool,
 }
 
 /// One line of the report.
@@ -220,7 +224,8 @@ async fn sandbox_check(config: &hame_policy::Config) -> Check {
             "sandbox",
             Some(false),
             "on Windows hame confines only where tools write; accept that with \
-             `allow_partial = true` under [sandbox] in config.toml (`hame setup` asks), or \
+             `allow_partial = true` under [sandbox] in config.toml (`hame setup` asks, or takes \
+             --allow-partial), or \
              run with --sandbox danger-full-access and approve each change",
         );
     }
@@ -407,7 +412,9 @@ pub async fn setup(home: &Path, args: SetupArgs) -> Result<ExitCode, String> {
     if provider == "compatible" {
         settings.push(("model", "api", "chat-completions".into()));
     }
-    if cfg!(windows) && interactive {
+    if cfg!(windows) && args.allow_partial {
+        settings.push(("sandbox", "allow_partial", true.into()));
+    } else if cfg!(windows) && interactive {
         println!(
             "\nOn Windows hame can confine where tools write, but cannot hide your files from \
              them or limit their network access."

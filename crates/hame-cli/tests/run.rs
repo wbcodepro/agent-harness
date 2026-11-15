@@ -448,15 +448,15 @@ fn setup_saves_a_key_that_doctor_then_finds() {
         text(&before.stdout)
     );
 
-    let setup = hame(&["setup", "--provider", "anthropic"], "test-key-not-real\n");
+    // Without a terminal nobody is asked; on Windows the acceptance of
+    // confining writes only is given as a flag.
+    let mut args = vec!["setup", "--provider", "anthropic"];
+    if cfg!(windows) {
+        args.push("--allow-partial");
+    }
+    let setup = hame(&args, "test-key-not-real\n");
     let shown = text(&setup.stdout);
-    // On Windows the closing checks fail until confining writes only is
-    // accepted, which only the interactive setup asks about.
-    assert!(
-        setup.status.success() || cfg!(windows),
-        "{shown}{}",
-        text(&setup.stderr)
-    );
+    assert!(setup.status.success(), "{shown}{}", text(&setup.stderr));
     assert!(shown.contains("Saved ANTHROPIC_API_KEY"), "{shown}");
     assert!(
         !shown.contains("test-key-not-real"),
