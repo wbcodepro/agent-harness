@@ -46,15 +46,16 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 - [x] Reusable workflows: parameter schema with patterns, required grants, preconditions (drift ⇒ nothing runs), steps through the tool pipeline and sandbox runner, postconditions, trust list keyed by file SHA-256 (editing revokes trust) (`hame-verify/src/workflow.rs`).
 - [x] `[computer]` config with scoped grants → `Authorization`; Control-effect tools fall back to Allow because adapters enforce grants; explicit rules can still ask/deny (`hame-policy`).
 - [x] Security fix: `script` inner calls to non-host-side tools now go through the sandboxed runner (previously ran in the harness process).
-- [x] Budget guard (tokens, deadline) before every model request (`hame-verify/src/budget.rs`); cost budget waits for the tariff table (E).
+- [x] Budget guard (tokens, deadline, cost) before every model request (`hame-verify/src/budget.rs`); cost uses E's dated tariff and stops when a price is unknown (7bafd62).
 - [x] Task files (TOML) → `TaskContract` + task prompt (`hame-verify/src/task_file.rs`).
 - [x] `hame task` CLI + app assembly: `Computer` (browser/desktop from config + task grants, batch via pipeline, `ComputerProbe`), workflows offered when present, OutcomeGate for tasks, BudgetGuard, trace spans for turn and verification; plan mode drops Control tools (74efb91).
 - [x] `[model] vision`/`pdf` overrides wired; `[computer] browser_channel`.
 - [x] Browser `page_state` and desktop `app_state` for independent verification.
 - [x] Journal fsync only on `dispatched` (D measured 15–21 ms/action of syncs).
 - [x] Live: `hame task` Vietnamese file task, claude-haiku-5-5: verified, 3 requests, 4.6 s.
-- [ ] Pilot browser/desktop/cross-app/recovery tasks + injection suite + ablations with real API (wave 2, agent G2).
-- [ ] Docs, packaging, clean install (macOS + Linux Docker), licenses/SBOM, release notes (wave 2, agent F).
+- [x] Pilot browser/desktop/cross-app/recovery tasks + injection suite + ablations with real API (G2, merged): see the G2 section.
+- [ ] Remaining 11 tasks of the roadmap's 30-task manifest (D02, D05, O01–O05, X02–X05): agent G3.
+- [x] Docs, packaging, clean install (macOS + Linux Docker), licenses/SBOM, release notes (F, merged): see the F section.
 - [ ] Independent review (wave 3).
 
 ### C — merged (5930db4)
@@ -75,6 +76,21 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 - [x] Live F01–F05 claude-haiku-5-5: 5/5, $0.0106, p50 11.9 s; trace totals = per-request sums.
 - Follow-ups: false-success detection is phrase-based; no compaction spans.
 
+### G2 — merged (c19d608..e7f6f57)
+- [x] Live pilot tasks via `hame eval`: fresh fixture app per run, checker access hidden from the agent, kill-and-resume, teardown. Tasks B01–B05, D01, D03, D04, F01–F05, R01–R05, X01; injection suite I01–I04 (`evals/pilot/injection.toml`).
+- [x] Haiku × 3: 56/57, 0 false successes/timeouts/errors, p50 15.1 s, p95 83.6 s, $0.2474. B04 failure = commit refused for lack of grant (authorization as designed). Sonnet 1/1 on B04.
+- [x] Faults fired every run: R03 kill after payment + resume (exactly one payment), R04 helper killed during slow load, R05 window raised over agent's, X01 save dialog cancelled.
+- [x] Ablations (B01–B05 × 3, interleaved, bootstrap 95% CI): batch off +0.73 requests/attempt [0.13, 1.33], +1.57 s [0.88, 2.31]; screenshot-first +308 KB request bytes, +$0.0007 [0.0006, 0.0009]. `[computer] batch` (default on) and `observation` (default semantic) flags.
+- [x] Injection 12/12 held (model ignored planted text; harness block not exercised).
+- [x] Bugs fixed with tests: `hame run` killed browser at exit; Save As field accepting a full path (saved to iCloud); keys not reaching TextEdit's Open window; line breaks lost in observed values; typing into a window that took focus; success-claim check reading whole answer.
+- Evidence: [EVIDENCE.md](EVIDENCE.md). Total API spend $0.61 (priced from reported usage).
+- Limits: n = 3 per task, 5 tasks in ablation; screenshot arm keeps refs (not a pixels-only agent); Haiku over-declares commits.
+
+### F — merged
+- [x] `hame workflow list|show|trust|untrust`, doctor checks; README/README.vi, CHANGELOG, SECURITY, CONTRIBUTING; INSTALL, SUPPORT-MATRIX, RELEASE-NOTES, RELEASE-INSTRUCTIONS, THIRD-PARTY-LICENSES, `sbom.cdx.json`, `scripts/license-report.py`, `scripts/release-check.sh`, `scripts/docker-clean-install.sh`, manual `release.yml` (never run). Version 0.1.0-rc.1.
+- [x] Clean install: macOS (340 pass), Linux arm64 Docker (339 pass). 432 crates; MPL-2.0 im-rc/bitmaps/sized-chunks (unmodified), WTFPL terminfo.
+- Unverified: Linux x86_64, macOS x86_64, Windows, MSRV 1.89, ACP image display in editors, OpenAI/PDF live paths. `command` predicate runs `sh -c` outside the sandbox (documented).
+
 ## Test log
 
 | Date | Command | Result |
@@ -90,6 +106,9 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 | 2026-11-15 | `cargo test -p hame-desktop --test gui -- --ignored --test-threads=1` (D) | 11/11 pass, 58 s |
 | 2026-11-15 | `cargo test --workspace` after merging D + integration (74efb91) | 336 passed, 0 failed, 16 ignored (live + GUI) |
 | 2026-11-15 | `hame task t1.toml --provider anthropic --model claude-haiku-5-5` | verified; 3 requests, 10949 in / 7065 cached / 422 out |
+| 2026-11-15 | `cargo test --workspace` after merging F + cost budget (7bafd62) | 340 passed, 0 failed, 16 ignored |
+| 2026-11-15 | `hame eval evals/pilot --runs 3 --provider anthropic --model claude-haiku-5-5` (G2, at 74ba6e4) | 56/57 pass; details in EVIDENCE.md |
+| 2026-11-15 | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` after merging G2 | clean; 349 passed, 0 failed, 17 ignored |
 
 ### A — merged (c844fef, e3024b3, 2932957)
 - [x] Per-session ToolContext (artifacts, journal, session id) derived from `SessionWriter` each turn; `request.artifacts` set.

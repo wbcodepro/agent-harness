@@ -170,6 +170,8 @@ browser = true                  # offer the browser tool
 desktop = true                  # offer the desktop tool (macOS 14+)
 headless = true                 # browser without a window (default)
 browser_channel = "chrome"      # chrome (installed Google Chrome, default) | msedge | chromium
+# batch = true                  # the tools' batch action (default on; off only to measure it)
+# observation = "semantic"      # semantic (default) | screenshot (needs a "screen" grant; for measuring vision cost)
 # profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
 
 [[computer.grant]]              # read and use pages on local servers, profile "work" only
@@ -410,6 +412,8 @@ desktop = false
 headless = true
 browser_channel = "chrome"      # chrome | msedge | chromium
 # profiles_dir = "/path"        # default ~/.hame/browser-profiles
+batch = true                    # batch action in browser and desktop tools
+observation = "semantic"        # semantic | screenshot
 
 [[computer.grant]]
 channel = "browser"             # browser | desktop | visual
@@ -450,7 +454,7 @@ hame eval evals/pilot --arm base --arm lean=lean.toml --runs 3 --json out/pilot.
 hame eval evals/pilot --arm base --arm nodedupe --set nodedupe:context.dedupe_results=false
 ```
 
-Arms run interleaved; each is compared with the first, task by task, with a bootstrap confidence interval (`--bootstrap 2000`, `--seed 1`). Each run is recorded with its outcome (`pass`, `fail`, `false_success` when the agent claimed success and the hidden check failed, `timeout`, `error`, `unsupported`), the agent's time, the checker's time and their sum. Task manifests are described in [evals/pilot/README.md](evals/pilot/README.md); measured results are in `docs/release/EVIDENCE.md`.
+Arms run interleaved; each is compared with the first, task by task, with a bootstrap confidence interval (`--bootstrap 2000`, `--seed 1`). Each run is recorded with its outcome (`pass`, `fail`, `false_success` when the agent claimed success and the hidden check failed, `timeout`, `error`, `unsupported`), the agent's time, the checker's time and their sum. Task manifests are described in [evals/pilot/README.md](evals/pilot/README.md); measured results are in [docs/release/EVIDENCE.md](docs/release/EVIDENCE.md).
 
 ## Troubleshooting
 

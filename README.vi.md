@@ -158,6 +158,8 @@ browser = true                  # cung cấp tool browser
 desktop = true                  # cung cấp tool desktop (macOS 14+)
 headless = true                 # trình duyệt không có cửa sổ (mặc định)
 browser_channel = "chrome"      # chrome (Google Chrome đã cài, mặc định) | msedge | chromium
+# batch = true                  # hành động batch của công cụ (mặc định bật; chỉ tắt để đo)
+# observation = "semantic"      # semantic (mặc định) | screenshot (cần grant "screen"; để đo chi phí thị giác)
 # profiles_dir = "/đường/dẫn"   # hồ sơ trình duyệt lâu dài; mặc định ~/.hame/browser-profiles
 
 [[computer.grant]]              # đọc và dùng trang của máy chủ cục bộ, chỉ hồ sơ "work"
@@ -351,6 +353,8 @@ browser = false
 desktop = false
 headless = true
 browser_channel = "chrome"      # chrome | msedge | chromium
+batch = true
+observation = "semantic"        # semantic | screenshot
 
 [[computer.grant]]
 channel = "browser"             # browser | desktop | visual
@@ -393,7 +397,7 @@ hame eval evals/pilot --arm base --arm lean=lean.toml --runs 3 --json out/pilot.
 hame eval evals/pilot --arm base --arm nodedupe --set nodedupe:context.dedupe_results=false
 ```
 
-Các nhánh chạy xen kẽ; mỗi nhánh được so với nhánh đầu, từng tác vụ, kèm khoảng tin cậy bootstrap (`--bootstrap 2000`, `--seed 1`). Mỗi lần chạy ghi kết quả (`pass`, `fail`, `false_success` khi agent báo xong mà bộ chấm ẩn không đạt, `timeout`, `error`, `unsupported`), thời gian của agent, của bộ chấm và tổng. Định dạng manifest ở [evals/pilot/README.md](evals/pilot/README.md); số liệu đo được ở `docs/release/EVIDENCE.md`.
+Các nhánh chạy xen kẽ; mỗi nhánh được so với nhánh đầu, từng tác vụ, kèm khoảng tin cậy bootstrap (`--bootstrap 2000`, `--seed 1`). Mỗi lần chạy ghi kết quả (`pass`, `fail`, `false_success` khi agent báo xong mà bộ chấm ẩn không đạt, `timeout`, `error`, `unsupported`), thời gian của agent, của bộ chấm và tổng. Định dạng manifest ở [evals/pilot/README.md](evals/pilot/README.md); số liệu đo được ở [docs/release/EVIDENCE.md](docs/release/EVIDENCE.md).
 
 ## Xử lý sự cố
 

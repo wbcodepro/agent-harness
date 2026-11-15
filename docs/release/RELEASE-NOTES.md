@@ -1,6 +1,6 @@
 # hame 0.1.0-rc.1 — release notes
 
-Release candidate. hame was a coding agent; this version lets it carry out tasks whose outcome it checks itself, in files, a web browser and native macOS applications, and keeps the evidence. Build from source ([INSTALL.md](INSTALL.md)); see [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md) for what was tested where and `docs/release/EVIDENCE.md` for measured results.
+Release candidate. hame was a coding agent; this version lets it carry out tasks whose outcome it checks itself, in files, a web browser and native macOS applications, and keeps the evidence. Build from source ([INSTALL.md](INSTALL.md)); see [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md) for what was tested where and [EVIDENCE.md](EVIDENCE.md) for measured results.
 
 ## What's new
 
