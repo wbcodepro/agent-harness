@@ -115,8 +115,11 @@ session-wide `always` from a remote device; the connector relays the
 event and the answer unchanged.
 
 **Remote policy**: hame web applies its `[remote]` policy to every request
-carrying `RemoteCaller` (session folders within `[remote] roots`, no "Full
-access", no session-wide grants, bound approval answers). On top of it,
+carrying `RemoteCaller` (session folders within `[remote] roots`, and with
+roots set no sight of sessions outside them, which answer 404; no "Full
+access" or "Accept edits" unless `[remote] allow_full_access = true`; no
+session-wide grants; bound approval answers; browser and desktop actions
+that act are asked about in remote-driven turns, looking still runs). On top of it,
 `hame connect` builds every session of its router with
 `hame_app::Options::ask_before_changes`, so each call that is not
 read-only asks the user, whatever the configuration or the session's mode
@@ -127,7 +130,21 @@ refused unless `[remote] allow_full_access = true`. The connector limits
 each device to 32 running requests, 8 subscriptions, 2 artifact downloads
 (read from hame web's streamed artifact route chunk by chunk, never
 buffered whole) and 10 new sessions a minute; loaded sessions are released
-by hame web's idle eviction (`[web] idle_seconds`).
+by hame web's idle eviction (`[web] idle_seconds`). Because a host under
+`hame connect` asks whatever the mode says, hame web reports it: `info`
+has `"enforced": "ask"`, each session `"enforced": "ask"` (or
+`"ask-without-sandbox"` for Full access, which there still asks), the
+interface shows "Asks first" instead of the mode, and a remote device's
+new session is recorded as Ask.
+
+The event loop never waits on the relay: pairing answers, refusals and
+the "changed key" refusal are sent from tasks of their own, and the
+revocation watcher runs in its own task, so a stalled relay (sends
+waiting for room) cannot delay a revocation. A "changed key" warning can
+be produced by anyone on the relay path, the relay included; it changes
+nothing (pairing again needs a new QR code and the code shown on the
+host), is worded so, and is shown at most once per device every ten
+minutes.
 
 ## What the host connector exposes
 

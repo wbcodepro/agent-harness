@@ -433,8 +433,10 @@ fn print_notice(notice: Notice) {
             p(&reason)
         ),
         Notice::KeyChanged { device } => eprintln!(
-            "hame connect: WARNING: device {} presented a different key than the one it was \
-             paired with. Refused. If you reset that device, revoke it and pair again.",
+            "hame connect: warning: a pairing request named device {} with a different key \
+             than the one it was paired with; refused. It may come from the relay itself, which \
+             can send this at will. Nothing changes: a device can only pair again with a new QR \
+             code and the code shown on this computer.",
             p(&device)
         ),
         Notice::Revoked { device, by } => {

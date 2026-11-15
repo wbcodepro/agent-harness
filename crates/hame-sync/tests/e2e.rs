@@ -533,6 +533,16 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
         phone.public(),
         "the pinned key is unchanged"
     );
+    // Anyone on the relay path can trigger that warning: it is shown at
+    // most once per device in a while.
+    let _ = impostor.start_pairing(&fresh, "Phone").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let warnings = host
+        .notices()
+        .iter()
+        .filter(|n| matches!(n, Notice::KeyChanged { device } if device == &phone_id))
+        .count();
+    assert_eq!(warnings, 1, "rate-limited");
     impostor.close();
     relay.kick(&phone_id);
 

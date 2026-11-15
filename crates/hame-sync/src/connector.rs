@@ -52,6 +52,8 @@ pub const SESSIONS_PER_MINUTE: usize = 10;
 /// Artifact requests one device may have running at once (each may hold up
 /// to [`MAX_BLOB`] in the web server while it is read).
 pub const ARTIFACTS_PER_DEVICE: usize = 2;
+/// At most one "changed key" warning per device in this time.
+pub const KEY_WARNING_EVERY: Duration = Duration::from_secs(600);
 /// How long the host user has to answer a pairing prompt.
 pub const PAIRING_PROMPT_LIMIT: Duration = Duration::from_secs(120);
 /// Host counters reserved on disk ahead of use (see [`Inner::send_to`]).
@@ -154,6 +156,8 @@ struct Inner {
     /// Artifact requests running, per device.
     artifacts: Mutex<HashMap<String, usize>>,
     prompt_limit: Mutex<Duration>,
+    /// When each device's last "changed key" warning was shown.
+    key_warnings: Mutex<HashMap<String, Instant>>,
     tasks: Mutex<HashMap<(String, u64), (AbortHandle, TaskKind)>>,
     /// Sessions each device created or prompted, to cancel on revocation.
     sessions: Mutex<HashMap<String, HashSet<String>>>,
@@ -194,6 +198,7 @@ impl Connector {
                 spent: Mutex::new(None),
                 artifacts: Mutex::new(HashMap::new()),
                 prompt_limit: Mutex::new(PAIRING_PROMPT_LIMIT),
+                key_warnings: Mutex::new(HashMap::new()),
                 tasks: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 created: Mutex::new(HashMap::new()),
@@ -265,19 +270,31 @@ impl Connector {
     /// Handles relay events until the relay connection ends.
     pub async fn run(&self, mut events: mpsc::Receiver<RelayEvent>) {
         // A revocation made by another process takes effect within half a
-        // second even if the device sends nothing.
-        let mut check = tokio::time::interval(Duration::from_millis(500));
-        loop {
-            let event = tokio::select! {
-                event = events.recv() => event,
-                _ = check.tick() => {
-                    if let Err(error) = self.inner.reload_if_changed() {
-                        (self.inner.notice)(Notice::Relay(format!("allowlist: {error}")));
+        // second even if the device sends nothing, in a task of its own so a
+        // stalled relay (sends waiting for room) cannot hold it up.
+        let watcher = {
+            let inner = Arc::clone(&self.inner);
+            tokio::spawn(async move {
+                let mut check = tokio::time::interval(Duration::from_millis(500));
+                loop {
+                    check.tick().await;
+                    if let Err(error) = inner.reload_if_changed() {
+                        (inner.notice)(Notice::Relay(format!("allowlist: {error}")));
                     }
-                    continue;
                 }
+            })
+        };
+        struct Stop(tokio::task::JoinHandle<()>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _watcher = Stop(watcher);
+        loop {
+            let Some(event) = events.recv().await else {
+                break;
             };
-            let Some(event) = event else { break };
             match event {
                 RelayEvent::Deliver {
                     seq,
@@ -530,15 +547,13 @@ impl Inner {
             device: from.clone(),
             reason: reason.clone(),
         });
-        let _ = self
-            .send_to(
-                &from,
-                &keys.x,
-                Frame::PairRefused {
-                    reason: reason.clone(),
-                },
-            )
-            .await;
+        self.send_later(
+            from.clone(),
+            keys.x,
+            Frame::PairRefused {
+                reason: reason.clone(),
+            },
+        );
         Err(SyncError::Pairing(reason))
     }
 
@@ -558,18 +573,39 @@ impl Inner {
             return;
         }
         let device = sealed.header.from.clone();
+        // Anyone who can reach the host through the relay (the relay
+        // itself) can produce this: warn at most once per device per ten
+        // minutes, and never act on it.
+        {
+            let mut warned = self.key_warnings.lock().expect("warnings");
+            let now = Instant::now();
+            if warned
+                .get(&device)
+                .is_some_and(|at| now.duration_since(*at) < KEY_WARNING_EVERY)
+            {
+                return;
+            }
+            warned.insert(device.clone(), now);
+        }
         (self.notice)(Notice::KeyChanged {
             device: device.clone(),
         });
-        let _ = self
-            .send_to(
-                &device,
-                &x,
-                Frame::PairRefused {
-                    reason: SyncError::KeyChanged(device.clone()).to_string(),
-                },
-            )
-            .await;
+        self.send_later(
+            device.clone(),
+            x,
+            Frame::PairRefused {
+                reason: SyncError::KeyChanged(device).to_string(),
+            },
+        );
+    }
+
+    /// Seals and queues a frame in a task of its own, so the event loop
+    /// never waits for room in the relay queue.
+    fn send_later(self: &Arc<Self>, device: String, x: [u8; 32], frame: Frame) {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let _ = this.send_to(&device, &x, frame).await;
+        });
     }
 
     /// A pairing request answering the open offer: from a device not on
@@ -622,22 +658,19 @@ impl Inner {
                 device: from.clone(),
                 reason: reason.clone(),
             });
-            let _ = self
-                .send_to(
-                    &from,
-                    &keys.x,
-                    Frame::PairRefused {
-                        reason: reason.clone(),
-                    },
-                )
-                .await;
+            self.send_later(
+                from.clone(),
+                keys.x,
+                Frame::PairRefused {
+                    reason: reason.clone(),
+                },
+            );
             return Err(SyncError::Pairing(reason));
         }
         // The host's nonce, chosen after the device committed to its keys,
         // goes into the SAS: nobody can search for keys whose digits match.
+        // It is sent from the pairing task below, not from the event loop.
         let nonce = random32();
-        self.send_to(&from, &keys.x, Frame::PairChallenge { nonce: b64(&nonce) })
-            .await?;
         let prompt = PairingPrompt {
             device: from.clone(),
             label: label.clone(),
@@ -647,6 +680,13 @@ impl Inner {
         let counter = sealed.header.counter;
         let this = Arc::clone(&self);
         tokio::spawn(async move {
+            if this
+                .send_to(&from, &keys.x, Frame::PairChallenge { nonce: b64(&nonce) })
+                .await
+                .is_err()
+            {
+                return;
+            }
             // No answer within the time limit is a no; nor is a yes given
             // after the code expired.
             let limit = *this.prompt_limit.lock().expect("limit");
