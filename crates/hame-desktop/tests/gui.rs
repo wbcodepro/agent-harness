@@ -528,6 +528,146 @@ async fn d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy()
     });
 }
 
+/// Return in a save panel saves the file, so it needs Commit and FileWrite
+/// like pressing Save does; a newline typed there is the same Return. In
+/// the document's own text area a newline stays a line break and needs
+/// only GlobalInput. (Before this, `key return` needed only GlobalInput
+/// and saved without either grant.)
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
+async fn return_in_the_save_panel_needs_commit_and_file_write() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "hame-return.rtf";
+        let saved = dir.path().join(name);
+        let doc = gui.new_document().await;
+        let area = gui.text_area(doc).await;
+        gui.ok(json!({"action": "set_value", "ref": area, "value": "first line"}))
+            .await;
+
+        let typist_home = tempfile::tempdir().unwrap();
+        let typist = DesktopTool::new(config(
+            typist_home.path(),
+            textedit_grants(vec![
+                Capability::Observe,
+                Capability::Interact,
+                Capability::GlobalInput,
+            ]),
+        ));
+        gui.ok(json!({"action": "focus", "ref": area})).await;
+        let typed = typist
+            .call(
+                &json!({"action": "type", "app": TEXTEDIT, "window": doc, "role": "textarea",
+                        "text": "\nsecond line"}),
+                &gui.ctx,
+            )
+            .await;
+        assert!(!typed.is_error, "{}", typed.text);
+        gui.ok(json!({"action": "wait", "ref": area, "until": "value",
+                      "value": "first line\nsecond line"}))
+            .await;
+
+        // Open the save panel and point it at the folder, with full grants.
+        gui.ok(json!({"action": "menu", "app": TEXTEDIT, "window": doc, "path": "File > Save…"}))
+            .await;
+        gui.ok(json!({"action": "wait", "app": TEXTEDIT, "window": doc, "until": "dialog"}))
+            .await;
+        gui.ok(json!({"action": "focus", "app": TEXTEDIT, "window": doc}))
+            .await;
+        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "cmd+shift+g"}))
+            .await;
+        let obs = gui.observe_until(doc, "PathTextField").await;
+        let path_field = find_ref(&obs, "PathTextField").unwrap();
+        gui.ok(json!({"action": "set_value", "ref": path_field,
+                      "value": dir.path().to_str().unwrap()}))
+            .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}))
+            .await;
+        let folder = dir.path().file_name().unwrap().to_str().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let obs = gui.observe(doc).await;
+            if !obs.contains("PathTextField")
+                && line_of(&obs, "popupbutton \"Where:\"").contains(folder)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the panel did not go to {folder}: {obs}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        gui.ok(
+            json!({"action": "set_value", "app": TEXTEDIT, "window": doc,
+                      "name": "Save As:", "role": "textfield", "value": name}),
+        )
+        .await;
+        gui.ok(json!({"action": "focus", "app": TEXTEDIT, "window": doc,
+                      "name": "Save As:", "role": "textfield"}))
+            .await;
+
+        // Focus is in the save panel: Return there, or a typed newline, is
+        // refused without Commit, and without FileWrite.
+        for (caps, missing) in [
+            (
+                vec![
+                    Capability::Observe,
+                    Capability::Interact,
+                    Capability::GlobalInput,
+                ],
+                "Commit",
+            ),
+            (
+                vec![
+                    Capability::Observe,
+                    Capability::Interact,
+                    Capability::Commit,
+                    Capability::GlobalInput,
+                ],
+                "FileWrite",
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let restricted = DesktopTool::new(config(home.path(), textedit_grants(caps)));
+            for input in [
+                json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}),
+                json!({"action": "type", "app": TEXTEDIT, "window": doc, "text": "\n"}),
+            ] {
+                let refused = restricted.call(&input, &gui.ctx).await;
+                assert!(
+                    refused.is_error
+                        && refused.text.starts_with("not_authorized")
+                        && refused.text.contains(missing)
+                        && refused.text.contains("save panel"),
+                    "{input}: {}",
+                    refused.text
+                );
+            }
+        }
+        assert!(!saved.exists(), "a refused Return saved the file");
+
+        // With both, Return saves, journalled as a commit with a key.
+        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}))
+            .await;
+        gui.ok(json!({"action": "wait", "app": TEXTEDIT, "window": doc,
+                      "until": "title", "contains": "hame-return"}))
+            .await;
+        assert!(saved.is_file());
+        assert_eq!(plain_text(&saved).trim_end(), "first line\nsecond line");
+        let key = gui
+            .receipts()
+            .into_iter()
+            .rfind(|r| r.action == "desktop.key")
+            .unwrap();
+        assert_eq!(key.status, ActionStatus::Completed);
+        assert_eq!(key.capability, Capability::Commit);
+        assert!(key.idempotency_key.is_some());
+    });
+}
+
 /// The standalone Open panel (File > Open…) is drawn by the out-of-process
 /// panel service: keys posted to TextEdit never reached it, so Go To
 /// Folder could not be opened there (found by pilot task D03).

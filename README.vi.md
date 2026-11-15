@@ -171,9 +171,9 @@ capabilities = ["observe", "interact"]
 [[computer.grant]]              # TextEdit: đọc, bấm, gõ, lưu file qua hộp thoại Save
 channel = "desktop"
 app = "com.apple.TextEdit"
-capabilities = ["observe", "interact", "global_input", "file_write"]
+capabilities = ["observe", "interact", "global_input", "commit", "file_write"]
 
-[[computer.grant]]              # chụp cửa sổ TextEdit và bấm vào điểm ảnh của ảnh chụp
+[[computer.grant]]              # chụp cửa sổ TextEdit và bấm vào điểm ảnh của ảnh chụp (không bấm Save, Delete, ...)
 channel = "visual"
 app = "com.apple.TextEdit"
 capabilities = ["screen", "global_input"]
@@ -185,10 +185,10 @@ Một quyền cấp có `channel` (`browser`, `desktop`, hoặc `visual` cho ả
 |---|---|
 | `observe` | đọc trang, cửa sổ và cây accessibility; chờ; trích dữ liệu |
 | `interact` | bấm, điền, chọn, nhấn phím trên phần tử, đặt giá trị, mục menu chỉ mở thêm thứ gì đó |
-| `commit` | thao tác gửi, lưu, xóa, thanh toán, mua (nhận ra theo tên nút, phương thức của form, hoặc model khai `commit: true`) |
-| `file_write` | tải file về workspace; xác nhận hộp thoại lưu file |
-| `clipboard` | đọc và đặt clipboard (desktop; nội dung cũ được khôi phục) |
-| `global_input` | sự kiện bàn phím, tổ hợp phím và cú bấm theo điểm ảnh; cần cửa sổ đích ở trên cùng và giữ một khóa liên tiến trình |
+| `commit` | thao tác gửi, lưu, xóa, thanh toán, mua (nhận ra theo tên nút, phương thức của form, hoặc model khai `commit: true`), bằng bất kỳ đường nào: trên desktop còn gồm Return hoặc Space khi nó bấm một nút, cmd+s, cmd+w, cmd+q, cmd+d, cmd+delete, ký tự xuống dòng gõ vào bất cứ đâu ngoài vùng văn bản của tài liệu, và cú bấm theo điểm ảnh vào một nút như vậy hoặc vào thứ hame không nhận ra được |
+| `file_write` | tải file về workspace; xác nhận hộp thoại lưu file (nút Save, Return hoặc ký tự xuống dòng gõ trong hộp thoại, cú bấm vào Save) và cmd+s |
+| `clipboard` | đọc và đặt clipboard (desktop; nội dung cũ được khôi phục), và cmd+c, cmd+x, cmd+v |
+| `global_input` | sự kiện bàn phím, tổ hợp phím và cú bấm theo điểm ảnh; cần cửa sổ đích ở trên cùng và giữ một khóa liên tiến trình. Riêng nó chỉ đủ cho việc gõ chữ và các phím không commit; xem `commit` |
 | `screen` | ảnh chụp màn hình (lưu thành artifact) |
 
 Mô hình an toàn:
@@ -198,7 +198,7 @@ Mô hình an toàn:
 - Helper trình duyệt chặn điều hướng cấp trang tới origin không có quyền, trước khi request rời máy. Các request của chính trang (script, ảnh, gọi API) không bị lọc, và trình duyệt không đi qua proxy của hame.
 - Mọi thao tác có tác động đều được ghi nhật ký (`not_started`, `dispatched`, rồi `completed`, `failed` hoặc `outcome_unknown`) trước và sau khi gửi. Thao tác commit mang khóa idempotency; một thao tác có thể đã có hiệu lực sẽ không được lặp lại cho tới khi trang hay cửa sổ được quan sát lại và agent nêu thao tác trước đó (`reconciled`). Sau crash, các thao tác đã gửi đi thành `outcome_unknown` và agent được dặn kiểm tra trạng thái; hame không bao giờ tự làm lại chúng.
 - Ref (`e12`, `o3:e7`) thuộc về một lần quan sát. Ref mà trang đã chuyển đi, phần tử đã đổi hoặc bị xóa, hay cửa sổ đã đóng đều bị từ chối (`stale_ref`, `stale_window`), hai đích cùng khớp bị từ chối là `ambiguous`; tool không bao giờ tự nhắm sang một phần tử "giống giống". Nhập liệu vật lý dừng khi focus chuyển đi (`interference`) hoặc có hộp thoại bật lên (`unexpected_dialog`) và báo chính xác đã gõ được gì.
-- Việc nhận ra commit là heuristic theo tên nút và phương thức form: một nút gửi dữ liệu bằng JavaScript có thể bị tính là `interact`. Đừng chỉ dựa vào việc không cấp `commit` để bảo vệ một trang mà một cú bấm có thể gây hại.
+- Việc nhận ra commit là heuristic theo tên nút và phương thức form: một nút gửi dữ liệu bằng JavaScript có thể bị tính là `interact`. Đừng chỉ dựa vào việc không cấp `commit` để bảo vệ một trang mà một cú bấm có thể gây hại. Trên desktop, nhập liệu vật lý được phân loại theo nơi đang có focus bàn phím (hoặc thứ nằm dưới điểm ảnh được bấm), đọc từ ứng dụng ngay trước khi gửi; helper từ chối gửi nếu điều đó đã đổi trong lúc ấy, và khi không đọc được thì cần bộ năng lực chặt hơn. Gõ chữ bình thường vào một ô, và Return trong vùng văn bản của tài liệu, chỉ cần `global_input`.
 
 Hồ sơ trình duyệt là thư mục lâu dài (`~/.hame/browser-profiles/<tên>`), nên hồ sơ đã đăng nhập sẽ giữ đăng nhập; hãy coi nó như hồ sơ trình duyệt của chính bạn. File tải về nằm trong workspace. Helper desktop là một chương trình Swift được biên dịch ở lần dùng đầu vào `~/.hame/helpers/` (khoảng 4 giây). Chi tiết từng tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
 

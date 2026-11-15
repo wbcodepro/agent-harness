@@ -28,15 +28,36 @@ A missing Accessibility grant is reported as `permission_denied` with that path.
 | `observe` | Pruned accessibility tree of one window, refs `oN:eM`, dialogs and sheets, `complete=false` when pruned | Observe |
 | `press`, `set_value`, `focus` | Accessibility actions on a ref or a unique live name/role match | Interact; Commit for controls named Save/Send/Delete/Submit/Purchase/Pay/Replace/…; plus FileWrite for the confirming button of a save panel |
 | `menu` | Menu bar path such as `File > Save…` (brings a named window to the front first) | Interact; Commit as above, except titles ending in `…` (they only open a dialog) |
-| `type` | Unicode text as keyboard events, in chunks, to the focused element | GlobalInput, desktop lease |
-| `key` | A combination such as `cmd+s` or `cmd+shift+g` | GlobalInput, desktop lease |
+| `type` | Unicode text as keyboard events, in chunks, to the focused element (`\n` and `\r\n` are sent as the Return key, `\t` as Tab) | GlobalInput, desktop lease; a newline or space adds what Return or Space would need (below) |
+| `key` | A combination such as `cmd+s` or `cmd+shift+g` | GlobalInput, desktop lease, plus the table below |
 | `screenshot` | A window (or a region) as PNG, optional `max_edge` downscale, capture transform recorded | Screen (Visual channel) |
-| `click_at` | A pixel of a screenshot, mapped back to screen points | GlobalInput (Visual channel), desktop lease |
+| `click_at` | A pixel of a screenshot, mapped back to screen points | GlobalInput (Visual channel), desktop lease; plus what pressing the control under the point would need (below) |
 | `clipboard` | `get`, `set` (saves the previous contents), `restore` | Clipboard |
 | `wait` | Window, window gone, dialog, element, element gone, value, title; polling with backoff | Observe |
 | `batch` | Up to 20 steps through the tool pipeline; stops at the first failure, unexpected dialog, failed `expect` or cancellation, and returns the completed prefix with a fresh observation | per step |
 
-Any action can declare `commit: true`, which adds Commit to what it needs. Refusals are `not_authorized: …` from `Authorization::refusal`.
+Any action can declare `commit: true`, which adds Commit to what it needs. Refusals are `not_authorized: …` from `Authorization::refusal`, followed by why the missing capability is needed (for example `Why: return in a save panel needs file_write (it can save a file).`).
+
+### Physical input that commits
+
+A key, a typed newline or a pixel click does whatever the control it reaches does, so `key`, `type` and `click_at` need Commit, and FileWrite in a save panel, when pressing that control would (`caps::key_needs`, `type_needs`, `click_needs`). For keys that depend on focus, the tool asks the helper where keyboard focus is (`focus_context`: the focused element's role and name, and whether it is inside a sheet, dialog, open or save panel, all the way up to its window) right before dispatch, and passes what it classified by as `expect_context`; the helper re-reads the focus just before posting the event and refuses with `interference` if it changed. `click_at` hit-tests the point the same way (`hit_test`, `AXUIElementCopyElementAtPosition`, in the screen points the screenshot's capture transform maps to) and passes `expect_hit`; the helper refuses with `stale_capture` if another element is under the point when it clicks.
+
+| Input | Needs, besides GlobalInput |
+|---|---|
+| `return`, `enter`, `keypadenter` | Commit, unless focus is an `AXTextArea` outside any sheet, dialog or panel. In a save panel (including the Go To Folder sheet on it) also FileWrite. With cmd, ctrl or opt always Commit |
+| `space` (without cmd or ctrl) | Commit unless focus is a text input (text area, text field, secure field, combo box, search field); on a save panel's control also FileWrite |
+| `delete`, `forwarddelete` (without cmd or ctrl) | Commit unless focus is a text input |
+| `cmd+s`, `cmd+shift+s`, `cmd+opt+s` (any cmd+…+s) | Commit and FileWrite |
+| `cmd+q`, `cmd+w`, `cmd+d`, `cmd+delete` (with any further modifiers) | Commit |
+| `cmd+c`, `cmd+x`, `cmd+v` (with any further modifiers) | Clipboard |
+| other keys | nothing more |
+| `type` text with a newline (`\n`, `\r`, other control characters except tab, U+2028/2029) | as `return` |
+| `type` text with a space | as `space` |
+| `click_at` on a named control (button, checkbox, menu item, link, ...) or inside one | as `press` on it: Commit for a commit word, plus FileWrite for a save panel's confirming button |
+| `click_at` on text, a text field, a table row or cell, a scroll area | nothing more; a double-click there inside a dialog or panel needs Commit (plus FileWrite in a save panel) |
+| `click_at` on an unnamed control, a generic group, web content that is not a named control, or a point the hit test cannot resolve | Commit (plus FileWrite in a save panel, or when the hit test failed) |
+
+When the focus or the hit test cannot be determined, the stricter set applies. A commit made this way carries an idempotency key (the window, the focused control or the control clicked, the key or text, and the focused field's value), so the same Return in the same field, or a second click on the same Send button, is refused as `prior_effect` until reconciled; for `click_at` a newer screenshot of the window counts as the newer observation. Typing ordinary text into a field and Return in a document's text area need only GlobalInput and carry no key.
 
 Safety properties:
 
@@ -44,7 +65,7 @@ Safety properties:
 - An inaccessible surface or a control without a press action is `unsupported` with a hint to use the Visual channel explicitly. The tool never switches from semantic control to coordinate input by itself.
 - Physical input needs the desktop lease (`<hame home>/desktop.lease`, a cross-process file lock) and never steals focus: the target must be frontmost (`focus` first). Before every chunk the helper checks the frontmost app, the focused window or sheet, the focused element and the sheet count; any change stops with `interference` or `unexpected_dialog` and reports exactly what was typed. A `cancel` stops it between chunks.
 - Modifier keys are only ever sent as flags on single events, never held, and the helper posts modifier releases when it exits; it restores a clipboard it changed when its input closes.
-- Every acting operation is journalled through `ctx.journal` (`not_started`, `dispatched`, then `completed`, `failed` or `outcome_unknown`). Commits carry an idempotency key; a repeat while an earlier attempt may have taken effect is refused (`prior_effect`) until the caller passes `reconciled: "<op_id>"` after a newer observation.
+- Every acting operation is journalled through `ctx.journal` (`not_started`, `dispatched`, then `completed`, `failed` or `outcome_unknown`). Commits, including the physical-input commits above, carry an idempotency key; a repeat while an earlier attempt may have taken effect is refused (`prior_effect`) until the caller passes `reconciled: "<op_id>"` after a newer observation (or, for `click_at`, a newer screenshot).
 - Accessibility names, values, clipboard text and pixels are labelled untrusted content.
 
 ## Tested apps and operations
