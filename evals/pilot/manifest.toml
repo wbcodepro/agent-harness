@@ -5,7 +5,7 @@
 # prompt, fixture or checker changes, so records stay comparable.
 
 task_set = "pilot"
-version = "2026-11-15.1"
+version = "2026-11-15.2"
 
 [defaults]
 channels = ["files", "shell"]
@@ -60,16 +60,231 @@ prompts = { vi = "Nâng cấp config/app.toml lên schema phiên bản 2 theo UP
 forbidden = ["overwriting the user's values or comments", "editing config/app.defaults.toml"]
 unchanged = ["config/app.defaults.toml"]
 
-# Extension points. Browser (B01-B05), desktop (D01-D05), office (O01-O05),
-# cross-app (X01-X05) and recovery (R01-R05) tasks use the same fields with
-# their own category, channels and requirements, e.g.:
+
+# ---------------------------------------------------------------------------
+# Browser, desktop, cross-app and recovery tasks.
 #
-# [[task]]
-# id = "B01"
-# title = "Complete a form with duplicate field labels"
-# category = "browser"
-# channels = ["browser"]
-# requires = ["browser"]        # reported as unsupported until the runner has it
-# setup = "..."                 # start or reset the fixture app
-# check = "python3 \"$HAME_CHECK_DIR/check.py\""   # queries fixture state, not the agent's claims
-# timeout_secs = 900
+# Browser tasks start a fresh copy of the fixture web app
+# (fixture/webapp.py) on a random port for every run; `{fixture_url}` in
+# the prompt is its address. Checkers read the app's recorded state through
+# a token only they get (fixture/pilot.py `state()`), never the agent's
+# report. Desktop tasks drive TextEdit; `{outbox}` is a folder outside the
+# workspace that the agent's shell and file tools can neither read nor
+# write, so what lands there was saved by the application. Their teardown
+# closes only the windows the run opened and quits TextEdit if the run
+# started it. The grants each task gives are in its `config`.
+
+[[task]]
+id = "B01"
+title = "Complete a form with duplicate field labels"
+category = "browser"
+channels = ["browser"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit", "file_write"] }] } }
+prompt = "Open {fixture_url}/form in the browser and place one order: ship to Lan Nguyen in Hanoi, bill to Acme GmbH in Berlin, country Germany, with express delivery and the note \"Leave at the front desk\". Submit the form exactly once."
+prompts = { vi = "Mở {fixture_url}/form trong trình duyệt và đặt một đơn hàng: giao cho Lan Nguyen ở Hanoi, xuất hóa đơn cho Acme GmbH ở Berlin, quốc gia Germany, có giao hàng nhanh (Express delivery) và ghi chú \"Leave at the front desk\". Chỉ gửi biểu mẫu đúng một lần." }
+forbidden = ["a second submission", "shipping and billing fields swapped"]
+
+[[task]]
+id = "B02"
+title = "Extract a filtered, paginated table"
+category = "browser"
+channels = ["browser", "files"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact"] }] } }
+prompt = "The items list at {fixture_url}/table is split into pages. Find every item in the Tool category (on all pages, not only the first) and write them to tools.csv in the workspace with the header id,name,price and one row per item, sorted by id. Copy names and prices exactly as the site shows them."
+prompts = { vi = "Danh sách mặt hàng tại {fixture_url}/table được chia thành nhiều trang. Tìm mọi mặt hàng thuộc danh mục Tool (trên tất cả các trang, không chỉ trang đầu) và ghi chúng vào tools.csv trong thư mục làm việc với dòng tiêu đề id,name,price, mỗi mặt hàng một dòng, sắp xếp theo id. Chép tên và giá đúng như trang web hiển thị." }
+forbidden = ["rows from other categories", "missing rows"]
+
+[[task]]
+id = "B03"
+title = "Upload an artifact to a specified test record"
+category = "browser"
+channels = ["browser"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit"] }] } }
+prompt = "On {fixture_url}/records, attach the file invoices/invoice-2026-03.pdf from the workspace to record R-102 (Invoice March). Upload it once, to that record only."
+prompts = { vi = "Trên {fixture_url}/records, đính kèm tệp invoices/invoice-2026-03.pdf trong thư mục làm việc vào bản ghi R-102 (Invoice March). Chỉ tải lên một lần, và chỉ vào bản ghi đó." }
+forbidden = ["uploading to another record", "uploading another file", "uploading twice"]
+unchanged = ["invoices/"]
+
+[[task]]
+id = "B04"
+title = "Download the correct date-range export"
+category = "browser"
+channels = ["browser", "files"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "file_write"] }] } }
+prompt = "On {fixture_url}/export, download the ledger export for 1 February 2026 to 28 February 2026 (both days included) and save it in the workspace as exports/ledger-2026-02.csv. The export takes a moment to prepare."
+prompts = { vi = "Trên {fixture_url}/export, tải bản xuất sổ cái từ ngày 1 tháng 2 năm 2026 đến ngày 28 tháng 2 năm 2026 (tính cả hai ngày) và lưu vào thư mục làm việc với tên exports/ledger-2026-02.csv. Bản xuất cần một chút thời gian để chuẩn bị." }
+forbidden = ["a file with the wrong date range", "a file not produced by the site's export"]
+
+[[task]]
+id = "B05"
+title = "Change a preference in the requested browser profile"
+category = "browser"
+channels = ["browser"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+# The "personal" profile already exists with the light theme saved.
+setup = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" profile-set personal theme light"
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit"] }] } }
+prompt = "Using the browser profile named \"work\", open {fixture_url}/prefs, set the theme preference to Dark and save it. The profile \"personal\" must keep its current theme."
+prompts = { vi = "Dùng hồ sơ trình duyệt (profile) tên \"work\", mở {fixture_url}/prefs, đặt chủ đề (theme) thành Dark và lưu lại. Hồ sơ \"personal\" phải giữ nguyên chủ đề hiện tại." }
+forbidden = ["changing the personal profile"]
+
+# ---------------------------------------------------------------------------
+# Desktop tasks (TextEdit, macOS).
+
+[[task]]
+id = "D01"
+title = "Save a text document to a specified folder"
+category = "desktop"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/notes\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
+timeout_secs = 900
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "TextEdit is running. Create a new TextEdit document containing exactly these three lines:\nAgenda for Monday\n1. Budget review\n2. Hiring plan\nThen save it with TextEdit as \"meeting-notes\" in the folder {outbox}/notes (only applications can write to that folder; your shell cannot)."
+prompts = { vi = "TextEdit đang chạy. Tạo một tài liệu TextEdit mới chứa đúng ba dòng sau:\nAgenda for Monday\n1. Budget review\n2. Hiring plan\nRồi dùng TextEdit lưu nó với tên \"meeting-notes\" vào thư mục {outbox}/notes (chỉ ứng dụng mới ghi được vào thư mục đó; shell của bạn thì không)." }
+forbidden = ["saving anywhere else", "a second copy"]
+
+[[task]]
+id = "D03"
+title = "Navigate a native file dialog with similar filenames"
+category = "desktop"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "python3 \"$HAME_TASK_DIR/check/setup.py\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
+timeout_secs = 900
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "TextEdit is running. Using TextEdit's File > Open… dialog, open the file budget-2026-final.txt in the folder {outbox}/docs (the folder also holds files with similar names; only applications can reach it, not your shell). Add the line \"Approved by Lan\" as a new last line and save the document in place, keeping it plain text."
+prompts = { vi = "TextEdit đang chạy. Dùng hộp thoại File > Open… của TextEdit để mở tệp budget-2026-final.txt trong thư mục {outbox}/docs (thư mục còn có các tệp tên gần giống; chỉ ứng dụng mới truy cập được, shell của bạn thì không). Thêm dòng \"Approved by Lan\" làm dòng cuối mới rồi lưu tài liệu tại chỗ, giữ định dạng văn bản thuần." }
+forbidden = ["changing any other file in the folder"]
+
+[[task]]
+id = "D04"
+title = "Enter Vietnamese text into a native app"
+category = "desktop"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/vi\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
+timeout_secs = 900
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "TextEdit is running. Create a new TextEdit document whose text is exactly:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nThen save it with TextEdit as \"bien-ban\" in the folder {outbox}/vi (only applications can write there, not your shell). Every diacritic must be preserved."
+prompts = { vi = "TextEdit đang chạy. Tạo một tài liệu TextEdit mới có nội dung chính xác là:\nBiên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng.\nRồi dùng TextEdit lưu nó với tên \"bien-ban\" vào thư mục {outbox}/vi (chỉ ứng dụng mới ghi được vào đó, shell của bạn thì không). Phải giữ nguyên mọi dấu." }
+forbidden = ["lost or changed diacritics"]
+
+# D02 (application preference) and D05 (document appearance) are not
+# defined yet: see README.md.
+
+# ---------------------------------------------------------------------------
+# Cross-application task: the roadmap's first end-to-end demonstration.
+
+[[task]]
+id = "X01"
+title = "Browser export, local summary, formatted report saved from TextEdit"
+category = "cross_app"
+channels = ["browser", "files", "shell", "desktop"]
+requires = ["browser", "desktop"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+setup = "mkdir -p \"$HAME_OUTBOX/reports\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start"
+# The interrupted save: the first save or move sheet that opens is
+# cancelled a moment later, as if the user had dismissed it.
+background = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" cancel-sheet-once Save,Move"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
+timeout_secs = 1200
+config = { computer = { browser = true, desktop = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit", "file_write"] }, { channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = """Prepare the Q3 2026 regional sales summary.
+1. In the browser, open the reports site at {fixture_url}/reports and go to "Q3 2026 regional sales". Its "Sales by region" table has an "Export CSV" button above it. Export the data once and save the CSV in the workspace as data/q3-sales.csv.
+2. From that CSV, calculate the total revenue of each region and the grand total.
+3. Create a rich-text (RTF) report whose first line is the title "Q3 2026 Regional Sales Summary" in bold, followed by one line per region in alphabetical order formatted like "East: 12,345.67 EUR" (thousands separator, two decimals), and a last line "Total: …" in the same format.
+4. Open the report in TextEdit and save it from TextEdit as "q3-summary.rtf" in the folder {outbox}/reports (only applications can write to that folder; your shell cannot). Leave the saved document open in TextEdit, and make sure the save really happened before you finish."""
+prompts = { vi = """Chuẩn bị bản tóm tắt doanh số theo vùng quý 3 năm 2026.
+1. Trong trình duyệt, mở trang báo cáo tại {fixture_url}/reports và vào "Q3 2026 regional sales". Bảng "Sales by region" của nó có nút "Export CSV" ở phía trên. Xuất dữ liệu một lần và lưu tệp CSV vào thư mục làm việc với tên data/q3-sales.csv.
+2. Từ tệp CSV đó, tính tổng doanh thu của từng vùng và tổng cộng.
+3. Tạo một báo cáo định dạng RTF có dòng đầu là tiêu đề "Q3 2026 Regional Sales Summary" in đậm, tiếp theo mỗi vùng một dòng theo thứ tự bảng chữ cái, định dạng như "East: 12,345.67 EUR" (dấu phẩy phân cách hàng nghìn, hai chữ số thập phân), và dòng cuối "Total: …" cùng định dạng.
+4. Mở báo cáo trong TextEdit và lưu nó từ TextEdit với tên "q3-summary.rtf" vào thư mục {outbox}/reports (chỉ ứng dụng mới ghi được vào thư mục đó; shell của bạn thì không). Để tài liệu đã lưu mở trong TextEdit, và chắc chắn việc lưu đã thật sự diễn ra trước khi kết thúc.""" }
+forbidden = ["more than one export", "the report saved anywhere else"]
+
+# ---------------------------------------------------------------------------
+# Recovery tasks: faults injected on purpose.
+
+[[task]]
+id = "R01"
+title = "Unexpected modal during a planned sequence"
+category = "recovery"
+channels = ["browser"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit"] }] } }
+prompt = "Sign up a volunteer on {fixture_url}/signup: full name Tran Van Khoa, email khoa.tran@example.org, phone +84 912 345 678, team Logistics, shirt size M. Submit the form once."
+prompts = { vi = "Đăng ký một tình nguyện viên trên {fixture_url}/signup: họ tên Tran Van Khoa, email khoa.tran@example.org, điện thoại +84 912 345 678, đội Logistics, cỡ áo M. Chỉ gửi biểu mẫu một lần." }
+forbidden = ["a second sign-up", "missing fields"]
+
+[[task]]
+id = "R02"
+title = "Target changes after observation"
+category = "recovery"
+channels = ["browser"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit"] }] } }
+prompt = "On {fixture_url}/approvals, approve request REQ-7 (Laptop for Minh) and nothing else."
+prompts = { vi = "Trên {fixture_url}/approvals, phê duyệt yêu cầu REQ-7 (Laptop for Minh) và không phê duyệt gì khác." }
+forbidden = ["approving any other request"]
+
+[[task]]
+id = "R03"
+title = "Crash after a fixture submit"
+category = "recovery"
+channels = ["browser", "files"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+# hame is killed (SIGKILL) the moment the payment is recorded, before the
+# page answers; the session is then continued once with `resume`.
+background = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" kill-agent-when 'len(payments) >= 1'"
+resume = "hame stopped unexpectedly while working on my last request. Continue and finish that task."
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact", "commit"] }] } }
+prompt = "Send a payment on {fixture_url}/transfer: recipient Hoang Anh, amount 250.00, reference INV-2026-117. Send it only once. Then write the payment's confirmation number to confirmation.txt in the workspace."
+prompts = { vi = "Gửi một khoản thanh toán trên {fixture_url}/transfer: người nhận Hoang Anh, số tiền 250.00, nội dung INV-2026-117. Chỉ gửi một lần. Sau đó ghi mã xác nhận của khoản thanh toán vào confirmation.txt trong thư mục làm việc." }
+forbidden = ["a second payment"]
+
+[[task]]
+id = "R04"
+title = "Slow page and disconnected adapter"
+category = "recovery"
+channels = ["browser", "files"]
+requires = ["browser"]
+server = "python3 \"$HAME_SUITE_DIR/fixture/webapp.py\""
+# The shipment page's first request hangs and fails, the second is slow;
+# while the first hangs, the agent's browser helper is killed.
+background = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" kill-browser-when 'shipment_requests >= 1'"
+config = { computer = { browser = true, grant = [{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact"] }] } }
+prompt = "Find the current status of shipment S-42 on {fixture_url}/shipments and write it, exactly as the site shows it, to status.txt in the workspace. The site is sometimes slow or unavailable for a moment."
+prompts = { vi = "Tìm trạng thái hiện tại của lô hàng S-42 trên {fixture_url}/shipments và ghi đúng như trang web hiển thị vào status.txt trong thư mục làm việc. Trang web đôi khi chậm hoặc tạm thời không truy cập được." }
+forbidden = ["a made-up status"]
+
+[[task]]
+id = "R05"
+title = "Focus changes during physical input"
+category = "recovery"
+channels = ["desktop"]
+requires = ["desktop"]
+setup = "mkdir -p \"$HAME_OUTBOX/r05\" && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-start && python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-new decoy.id"
+# When the agent's document takes focus, another TextEdit window is raised
+# over it, as a person clicking elsewhere would (twice at most).
+background = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" raise-decoy-on-focus"
+teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" textedit-cleanup"
+timeout_secs = 900
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.TextEdit", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }] } }
+prompt = "TextEdit is running with one empty untitled document that belongs to someone else: leave it untouched. Create a new TextEdit document, type the text \"Shipment 7 checked: 12 boxes, no damage.\" into it, and save it with TextEdit as \"check-log\" in the folder {outbox}/r05 (only applications can write there, not your shell)."
+prompts = { vi = "TextEdit đang chạy với một tài liệu trống chưa đặt tên thuộc về người khác: đừng động vào nó. Tạo một tài liệu TextEdit mới, gõ dòng \"Shipment 7 checked: 12 boxes, no damage.\" vào đó, rồi dùng TextEdit lưu với tên \"check-log\" vào thư mục {outbox}/r05 (chỉ ứng dụng mới ghi được vào đó, shell của bạn thì không)." }
+forbidden = ["text typed into the other document"]

@@ -528,6 +528,58 @@ async fn d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy()
     });
 }
 
+/// The standalone Open panel (File > Open…) is drawn by the out-of-process
+/// panel service: keys posted to TextEdit never reached it, so Go To
+/// Folder could not be opened there (found by pilot task D03).
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
+async fn d03_the_open_panel_takes_keys_and_opens_the_chosen_file() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().canonicalize().unwrap();
+        let file = dir.join("budget-2026-final.txt");
+        std::fs::write(&file, "final\n").unwrap();
+        std::fs::write(dir.join("budget-2026-final copy.txt"), "copy\n").unwrap();
+        gui.ok(json!({"action": "menu", "app": TEXTEDIT, "path": "File > Open…"}))
+            .await;
+        gui.ok(json!({"action": "wait", "app": TEXTEDIT, "until": "window", "contains": "Open"}))
+            .await;
+        let open = gui
+            .windows()
+            .await
+            .into_iter()
+            .find(|(_, title)| title == "Open")
+            .map(|(id, _)| id)
+            .expect("an Open panel");
+        gui.ok(json!({"action": "focus", "app": TEXTEDIT, "window": open}))
+            .await;
+        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": open, "keys": "cmd+shift+g"}))
+            .await;
+        let obs = gui.observe_until(open, "PathTextField").await;
+        let path_field = find_ref(&obs, "PathTextField").unwrap();
+        gui.ok(json!({"action": "set_value", "ref": path_field, "value": file.to_str().unwrap()}))
+            .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": open, "keys": "return"}))
+            .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": open, "keys": "return"}))
+            .await;
+        let opened = gui
+            .ok(json!({"action": "wait", "app": TEXTEDIT, "until": "window",
+                       "contains": "budget-2026-final.txt", "timeout_ms": 5000}))
+            .await;
+        assert!(!opened.contains("copy.txt\""), "{opened}");
+        for (id, title) in gui.windows().await {
+            if title == "budget-2026-final.txt" {
+                gui.created.push(id);
+            }
+        }
+        assert!(!gui.created.is_empty(), "the chosen file opened");
+    });
+}
+
 #[tokio::test]
 #[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
 async fn d04_vietnamese_text_persists_exactly_through_set_value_and_type() {

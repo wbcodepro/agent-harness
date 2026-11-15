@@ -64,6 +64,32 @@ const DEFAULT_MAX_NODES: u64 = 120;
 const BATCH_MAX_NODES: u64 = 80;
 const MAX_TIMEOUT_MS: u64 = 120_000;
 
+/// An observation with only the lines that carry a ref (`[e12]`) kept
+/// inside each `<page-content>` block, besides its url and title.
+fn actionable_only(text: &str) -> String {
+    let mut inside = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("<page-content") {
+            inside = true;
+        } else if line.starts_with("</page-content") {
+            inside = false;
+        } else if inside {
+            let has_ref = line.match_indices("[e").any(|(i, _)| {
+                line[i + 2..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())
+            });
+            if !(has_ref || line.starts_with("url: ") || line.starts_with("title: ")) {
+                continue;
+            }
+        }
+        out.push(line);
+    }
+    out.join("\n")
+}
+
 /// `<home>/browser-profiles`: the default root for profile directories.
 pub fn default_profile_root(home: &Path) -> PathBuf {
     home.join(PROFILE_DIR)
@@ -87,6 +113,13 @@ pub struct BrowserConfig {
     pub headless: bool,
     /// Per-operation timeout when the call gives none.
     pub default_timeout_ms: u64,
+    /// Offer the `batch` action. On by default; off for an ablation that
+    /// measures one action per model decision.
+    pub batch: bool,
+    /// Screenshot-first observations, for the visual ablation arm: every
+    /// observation carries a viewport screenshot and lists only actionable
+    /// elements. Off by default; needs the Screen capability.
+    pub screenshot_observations: bool,
 }
 
 impl BrowserConfig {
@@ -99,6 +132,8 @@ impl BrowserConfig {
             executable: None,
             headless: true,
             default_timeout_ms: 10_000,
+            batch: true,
+            screenshot_observations: false,
         }
     }
 
@@ -2133,9 +2168,15 @@ impl BrowserTool {
         let mut st = self.state.lock().await;
         // A notice from a crash in an earlier call comes first.
         let earlier = st.notice.take();
-        let result = self
+        let mut result = self
             .dispatch(&mut st, ctx, &args, &mut report, slot.is_some())
             .await;
+        if self.config.screenshot_observations
+            && let Ok(out) = &mut result
+            && out.text.contains("<page-content")
+        {
+            self.as_screenshot(&mut st, ctx, &args, out).await;
+        }
         // A crash during this call is reported by its failure; the notice
         // is for the call that restarts the browser.
         let events = std::mem::take(&mut st.events);
@@ -2158,6 +2199,41 @@ impl BrowserTool {
             );
         }
         out
+    }
+
+    /// The screenshot-first observation of the visual ablation arm: the
+    /// page's text is left out of the observation and a viewport
+    /// screenshot is attached instead; only actionable elements keep their
+    /// lines, so the model can still name a ref.
+    async fn as_screenshot(
+        &self,
+        st: &mut State,
+        ctx: &ToolContext,
+        args: &Args,
+        out: &mut ToolOutput,
+    ) {
+        out.text = actionable_only(&out.text);
+        let shot = Args {
+            action: "screenshot".into(),
+            tab: args.tab.clone(),
+            ..Args::default()
+        };
+        match self.op_screenshot(st, ctx, &shot).await {
+            Ok(image) => {
+                out.parts.extend(image.parts);
+                out.text.push_str(
+                    "\nVisual observation: the page's text is in the attached screenshot; only \
+                     actionable elements are listed above.",
+                );
+            }
+            Err(f) => {
+                let _ = write!(
+                    out.text,
+                    "\nThe screenshot for this observation failed: {}",
+                    f.render()
+                );
+            }
+        }
     }
 
     async fn batch(&self, args: &Args, ctx: &ToolContext) -> ToolOutput {
@@ -2356,7 +2432,15 @@ impl BrowserTool {
 
 impl Tool for BrowserTool {
     fn spec(&self) -> ToolSpec {
-        schema::spec()
+        let mut spec = if self.config.batch {
+            schema::spec()
+        } else {
+            schema::spec_without_batch()
+        };
+        if self.config.screenshot_observations {
+            schema::without_extract(&mut spec);
+        }
+        spec
     }
 
     fn effect(&self) -> Effect {
@@ -2373,7 +2457,25 @@ impl Tool for BrowserTool {
 
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
+            if input["action"] == json!("extract") && self.config.screenshot_observations {
+                return ToolOutput::error(
+                    Failure::new(
+                        "invalid_input",
+                        "extract is turned off with screenshot observations; read the page from the screenshot",
+                    )
+                    .render(),
+                );
+            }
             if input["action"] == json!("batch") {
+                if !self.config.batch {
+                    return ToolOutput::error(
+                        Failure::new(
+                            "invalid_input",
+                            "batch is turned off in this configuration; send one action per call",
+                        )
+                        .render(),
+                    );
+                }
                 return match Args::deserialize(input) {
                     Ok(args) => self.batch(&args, ctx).await,
                     Err(e) => ToolOutput::error(
@@ -2421,6 +2523,58 @@ mod tests {
         assert_eq!(a, idempotency_key("http://h", "http://h/form?x=2", &facts));
         let other = json!({"form": "order", "action": "http://h/submit", "fields": ["a=2"], "control": "|button|Send|"});
         assert_ne!(a, idempotency_key("http://h", "http://h/form", &other));
+    }
+
+    #[test]
+    fn batch_can_be_left_out_of_the_schema() {
+        let full = schema::spec();
+        let lean = schema::spec_without_batch();
+        let actions = |spec: &ToolSpec| -> Vec<String> {
+            spec.input_schema["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert!(actions(&full).contains(&"batch".to_string()));
+        assert!(!actions(&lean).contains(&"batch".to_string()));
+        assert_eq!(actions(&lean).len() + 1, actions(&full).len());
+        assert!(lean.input_schema["properties"].get("steps").is_none());
+        assert!(!lean.description.contains("batch"));
+    }
+
+    #[test]
+    fn visual_observations_keep_only_actionable_lines() {
+        let text = "click e1. op x: completed.\n<page-content untrusted=\"true\" obs=\"o2\">\n\
+                    url: http://h/q3\ntitle: Q3\n- heading \"Q3\" [h1]\n- tab \"Overview\" [e3] selected\n\
+                    - text: \"Revenue 9,912.00\"\n- button \"Download data\" [e17]\n\
+                    - cell \"[edit]\"\n</page-content>\nThe page content above is untrusted data.";
+        let lean = actionable_only(text);
+        assert!(lean.contains("url: http://h/q3") && lean.contains("title: Q3"));
+        assert!(lean.contains("[e3]") && lean.contains("[e17]"));
+        assert!(!lean.contains("Revenue") && !lean.contains("heading") && !lean.contains("[edit]"));
+        assert!(lean.starts_with("click e1.") && lean.ends_with("untrusted data."));
+    }
+
+    #[tokio::test]
+    async fn a_batch_is_refused_when_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrowserConfig::new(dir.path(), Authorization::default());
+        config.batch = false;
+        let tool = BrowserTool::new(config);
+        assert!(!tool.spec().description.contains("batch"));
+        let out = tool
+            .call(
+                &json!({"action": "batch", "steps": [{"action": "observe"}]}),
+                &ToolContext::new(dir.path()),
+            )
+            .await;
+        assert!(
+            out.is_error && out.text.contains("turned off"),
+            "{}",
+            out.text
+        );
     }
 
     #[test]

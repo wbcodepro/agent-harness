@@ -95,6 +95,9 @@ pub struct DesktopConfig {
     pub authorization: Authorization,
     /// Test hook: the helper reports Accessibility as not granted.
     pub simulate_untrusted: bool,
+    /// Offer the `batch` action. On by default; off for an ablation that
+    /// measures one action per model decision.
+    pub batch: bool,
 }
 
 impl DesktopConfig {
@@ -108,6 +111,7 @@ impl DesktopConfig {
             lease_wait: Duration::from_secs(2),
             authorization,
             simulate_untrusted: false,
+            batch: true,
         }
     }
 
@@ -182,6 +186,9 @@ struct State {
     /// Receipts of this tool, for idempotency checks when the context has
     /// no journal.
     receipts: Vec<ActionReceipt>,
+    /// The window the latest successful `focus` acted on. Physical input
+    /// that names only the app goes to this window or nowhere.
+    focused: Option<WindowKey>,
 }
 
 /// The window an operation ended up acting on.
@@ -295,6 +302,47 @@ pub fn parse_ref(r: &str) -> Result<(String, String), String> {
         ));
     }
     Ok((obs.to_string(), el.to_string()))
+}
+
+/// Why physical input that names only the application must not go ahead:
+/// the agent focused one window, and another window of the same app has
+/// taken focus since (a person clicked it, a dialog raised it). Without
+/// this, `type` with just `app` follows whatever window is focused now,
+/// which in a pilot run was another person's document.
+fn focus_moved(focused: Option<WindowKey>, now: &Value) -> Option<String> {
+    let focused = focused?;
+    let pid = now["pid"].as_u64()?;
+    let window = now["window_id"].as_u64()?;
+    (focused.pid == pid && focused.window_id != window).then(|| {
+        format!(
+            "interference: you focused window {} of this app, but window {window} ({}) has \
+             focus now; nothing was sent. Observe, and focus the window you mean again (or \
+             name it with window or a ref).",
+            focused.window_id,
+            quote(now["title"].as_str().unwrap_or(""), 60)
+        )
+    })
+}
+
+/// Why a value must not go into a save panel's file name field. The field
+/// takes a name, not a path: macOS turns every `/` in it into `:` and saves
+/// in whatever folder the panel shows, which writes a file somewhere the
+/// user never asked for (seen in a pilot run: the iCloud TextEdit folder).
+pub fn save_name_problem(element: &ElementFacts, value: &str) -> Option<String> {
+    let name_field = element.save_panel
+        && matches!(element.role.as_str(), "AXTextField" | "AXComboBox")
+        && element
+            .name
+            .trim_end_matches(':')
+            .eq_ignore_ascii_case("save as");
+    (name_field && value.contains('/')).then(|| {
+        "the save panel's \"Save As:\" field takes a file name only; a path typed there is \
+         saved as one odd name in the folder the panel currently shows. Choose the folder \
+         first: with the panel open, key cmd+shift+g, set the path field that appears to the \
+         folder, key return, check that \"Where:\" shows the folder, then set \"Save As:\" to \
+         the bare file name."
+            .to_string()
+    })
 }
 
 /// A key that names what a commit does, not when: the same control in
@@ -893,6 +941,11 @@ impl DesktopTool {
         if action == "set_value" && value.is_none() {
             return Err(invalid("set_value needs value."));
         }
+        if action == "set_value"
+            && let Some(problem) = save_name_problem(&facts, value.unwrap_or(""))
+        {
+            return Err(invalid(&problem));
+        }
         let idem = caps
             .contains(&Capability::Commit)
             .then(|| idempotency_key(action, &target, &facts, value.unwrap_or("")));
@@ -1086,10 +1139,15 @@ impl DesktopTool {
             return Ok((params, resolved, target));
         }
         let params = self.window_params(input, ctx)?;
+        let names_window = !input["window"].is_null() || input["title"].is_string();
         let state = self
             .req_quick("window_state", params)
             .await
             .map_err(|e| fail(&e))?;
+        if !names_window && let Some(problem) = focus_moved(self.state().focused, &state["window"])
+        {
+            return Err(Outcome::err(problem));
+        }
         let target = self.target_of(&state["window"], channel, ctx);
         let params = json!({
             "pid": state["window"]["pid"],
@@ -1618,7 +1676,11 @@ impl DesktopTool {
                 ACTIONS.join(", ")
             ))),
         };
-        result.unwrap_or_else(|failure| failure)
+        let outcome = result.unwrap_or_else(|failure| failure);
+        if action == "focus" && !outcome.output.is_error && outcome.window.is_some() {
+            self.state().focused = outcome.window;
+        }
+        outcome
     }
 
     /// Runs one batch step through the pipeline, so policy rules on it.
@@ -1882,7 +1944,7 @@ impl DesktopTool {
 
 impl Tool for DesktopTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
+        let mut spec = ToolSpec {
             name: DESKTOP_TOOL.into(),
             description: "Observe and operate native macOS applications through accessibility. \
                 Start with observe (app, optional window or title) to get refs like o3:e12; refs \
@@ -1931,7 +1993,23 @@ impl Tool for DesktopTool {
                 "required": ["action"],
                 "additionalProperties": false
             }),
+        };
+        if !self.config.batch {
+            spec.description = spec.description.replace(
+                " batch runs up to 20 steps and stops at the first failure, unexpected dialog or \
+                 failed expect.",
+                "",
+            );
+            let properties = &mut spec.input_schema["properties"];
+            if let Some(actions) = properties["action"]["enum"].as_array_mut() {
+                actions.retain(|a| a != "batch");
+            }
+            if let Some(properties) = properties.as_object_mut() {
+                properties.remove("steps");
+                properties.remove("expect");
+            }
         }
+        spec
     }
 
     fn effect(&self) -> Effect {
@@ -1950,6 +2028,12 @@ impl Tool for DesktopTool {
         Box::pin(async move {
             self.cancel.flag.store(false, Ordering::SeqCst);
             if input["action"] == "batch" {
+                if !self.config.batch {
+                    return ToolOutput::error(
+                        "invalid: batch is turned off in this configuration; send one action per \
+                         call.",
+                    );
+                }
                 if !supported() {
                     return ToolOutput::error(
                         "unsupported: Desktop control is available only on macOS.",
@@ -2045,6 +2129,67 @@ mod tests {
         let t = tool(Authorization::default());
         assert_eq!(t.effect(), Effect::Control);
         assert!(t.host_side() && !t.concurrent());
+    }
+
+    #[test]
+    fn input_naming_only_the_app_stops_when_focus_moved_to_another_window() {
+        let focused = Some(WindowKey {
+            pid: 7,
+            window_id: 41,
+        });
+        let other = json!({"pid": 7, "window_id": 39, "title": "Untitled"});
+        let problem = focus_moved(focused, &other).unwrap();
+        assert!(
+            problem.starts_with("interference:") && problem.contains("39"),
+            "{problem}"
+        );
+        assert!(focus_moved(focused, &json!({"pid": 7, "window_id": 41})).is_none());
+        // Another app, or nothing focused through the tool yet: no opinion.
+        assert!(focus_moved(focused, &json!({"pid": 8, "window_id": 39})).is_none());
+        assert!(focus_moved(None, &other).is_none());
+    }
+
+    #[test]
+    fn a_path_is_refused_in_a_save_panels_name_field() {
+        let field = |name: &str, save_panel: bool| ElementFacts {
+            name: name.into(),
+            role: "AXTextField".into(),
+            save_panel,
+        };
+        let path = "/private/var/tmp/outbox/notes/meeting-notes";
+        let problem = save_name_problem(&field("Save As:", true), path).unwrap();
+        assert!(problem.contains("cmd+shift+g"), "{problem}");
+        assert!(save_name_problem(&field("Save As:", true), "meeting-notes").is_none());
+        // The Go To Folder field takes paths; so do fields outside panels.
+        assert!(save_name_problem(&field("PathTextField", true), path).is_none());
+        assert!(save_name_problem(&field("Save As:", false), path).is_none());
+    }
+
+    #[tokio::test]
+    async fn batch_can_be_turned_off() {
+        let mut config = DesktopConfig::new("/nonexistent-hame-home", Authorization::default());
+        config.batch = false;
+        let t = DesktopTool::new(config);
+        let spec = t.spec();
+        let actions = spec.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap();
+        assert_eq!(actions.len(), ACTIONS.len() - 1);
+        assert!(!actions.contains(&json!("batch")));
+        assert!(!spec.description.contains("batch"), "{}", spec.description);
+        assert!(spec.input_schema["properties"].get("steps").is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let out = t
+            .call(
+                &json!({"action": "batch", "steps": []}),
+                &ToolContext::new(dir.path()),
+            )
+            .await;
+        assert!(
+            out.is_error && out.text.contains("turned off"),
+            "{}",
+            out.text
+        );
     }
 
     #[test]

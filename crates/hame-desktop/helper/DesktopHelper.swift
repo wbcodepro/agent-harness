@@ -973,8 +973,13 @@ func releaseModifiers() {
 /// just verified frontmost and focused, and is re-verified before each chunk.
 func postsToHID(_ req: [String: Any], _ t: InputTarget) -> Bool {
     if let via = req["via"] as? String { return via == "hid" }
+    // A standalone Open or Save panel (TextEdit's File > Open…) is a window
+    // of the app in accessibility but is drawn by the out-of-process panel
+    // service, like a sheet: events posted to the app never reach it.
+    let panelId = attr(t.focusedWindow, kAXIdentifierAttribute) as? String
     return !CFEqual(t.focusedWindow, elementAttr(t.appEl, kAXFocusedWindowAttribute) ?? t.appEl)
         || roleOf(t.focusedWindow).0 == "AXSheet"
+        || panelId == "open-panel" || panelId == "save-panel"
 }
 
 /// What physical input would go to when an operation starts.

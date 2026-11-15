@@ -40,18 +40,106 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-fn check(task: &hame_eval::manifest::TaskSpec, work: &Path) -> (bool, String) {
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(&task.check)
-        .current_dir(work)
-        .env("HAME_CHECK_DIR", task.check_dir.as_ref().unwrap())
-        .output()
-        .unwrap();
+/// The variables `hame eval` gives a task's commands, for one workspace.
+struct TaskEnv {
+    vars: Vec<(&'static str, PathBuf)>,
+    url: Option<String>,
+    token: String,
+    _server: Option<std::process::Child>,
+    _dir: tempfile::TempDir,
+}
+
+impl TaskEnv {
+    /// Starts the task's fixture server, if it has one, as the runner does.
+    fn new(task: &hame_eval::manifest::TaskSpec) -> Self {
+        use std::io::BufRead;
+        let dir = tempfile::tempdir().unwrap();
+        let (run, home, outbox) = (
+            dir.path().join("run"),
+            dir.path().join("home"),
+            dir.path().join("outbox"),
+        );
+        for path in [&run, &home, &outbox] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let token = format!("token-{}", task.id);
+        let mut vars = vec![
+            ("HAME_SUITE_DIR", task.hidden_root.canonicalize().unwrap()),
+            ("HAME_TASK_DIR", task.dir.canonicalize().unwrap()),
+            ("HAME_RUN_DIR", run),
+            ("HAME_AGENT_HOME", home),
+            ("HAME_OUTBOX", outbox),
+        ];
+        if let Some(check_dir) = &task.check_dir {
+            vars.push(("HAME_CHECK_DIR", check_dir.clone()));
+        }
+        let (mut server, mut url) = (None, None);
+        if let Some(command) = &task.server {
+            let mut child = Command::new("bash")
+                .arg("-c")
+                .arg(command)
+                .envs(vars.iter().map(|(k, v)| (*k, v)))
+                .env("HAME_FIXTURE_TOKEN", &token)
+                // The fixture's deliberate delays, shortened for this test.
+                .env("PILOT_DELAY_SCALE", "0.05")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(child.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let port = line.trim().strip_prefix("PORT ").expect("PORT line");
+            url = Some(format!("http://127.0.0.1:{port}"));
+            server = Some(child);
+        }
+        Self {
+            vars,
+            url,
+            token,
+            _server: server,
+            _dir: dir,
+        }
+    }
+
+    fn run(&self, command: &mut Command, work: &Path) -> std::process::Output {
+        command
+            .current_dir(work)
+            .envs(self.vars.iter().map(|(k, v)| (*k, v)))
+            .env("HAME_FIXTURE_TOKEN", &self.token)
+            .env("HAME_WORKSPACE", work);
+        if let Some(url) = &self.url {
+            command.env("HAME_FIXTURE_URL", url);
+        }
+        command.output().unwrap()
+    }
+}
+
+impl Drop for TaskEnv {
+    fn drop(&mut self) {
+        if let Some(server) = &mut self._server {
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+    }
+}
+
+fn check(task: &hame_eval::manifest::TaskSpec, env: &TaskEnv, work: &Path) -> (bool, String) {
+    let output = env.run(Command::new("bash").arg("-c").arg(&task.check), work);
     (
         output.status.success(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
     )
+}
+
+fn playwright() -> bool {
+    Command::new("python3")
+        .args(["-c", "import playwright.sync_api"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 #[test]
@@ -63,44 +151,71 @@ fn every_pilot_checker_fails_the_fixture_and_passes_the_reference_solution() {
     let set = hame_eval::manifest::load(&repo().join("evals/pilot"), None).unwrap();
     assert_eq!(set.name, "pilot");
     let ids: Vec<&str> = set.tasks.iter().map(|t| t.id.as_str()).collect();
-    assert_eq!(ids, ["F01", "F02", "F03", "F04", "F05"]);
+    assert_eq!(
+        ids,
+        [
+            "B01", "B02", "B03", "B04", "B05", "D01", "D03", "D04", "F01", "F02", "F03", "F04",
+            "F05", "R01", "R02", "R03", "R04", "R05", "X01"
+        ]
+    );
     for task in &set.tasks {
         assert!(
             task.prompts.contains_key("vi"),
             "{} has a Vietnamese prompt",
             task.id
         );
-        assert!(!task.unchanged.is_empty());
         let check_dir = task.check_dir.as_ref().expect("a hidden checker");
+        assert!(check_dir.join("check.py").is_file(), "{}", task.id);
+        if task.category == "file" {
+            assert!(!task.unchanged.is_empty());
+        }
+        // Desktop tasks need TextEdit and Accessibility; they are checked
+        // by real runs, not here.
+        if task.requires.iter().any(|r| r == "desktop") {
+            assert!(task.teardown.is_some(), "{} puts the desktop back", task.id);
+            continue;
+        }
+        // The profile check opens Chrome through Playwright.
+        if task.id == "B05" && !playwright() {
+            eprintln!("B05 skipped: needs Playwright for Python");
+            continue;
+        }
         let solution = task.solution.as_ref().expect("a reference solution");
         // Nothing hidden is inside the fixture the agent gets.
-        let fixture = task.fixture.as_ref().unwrap();
-        assert!(!check_dir.starts_with(fixture) && !solution.starts_with(fixture));
-
-        let dir = tempfile::tempdir().unwrap();
-        let untouched = dir.path().join("untouched");
-        copy_tree(fixture, &untouched);
-        let (passed, said) = check(task, &untouched);
-        assert!(
-            !passed,
-            "{}: the checker passes the unmodified fixture: {said}",
-            task.id
-        );
-
-        let solved = dir.path().join("solved");
-        copy_tree(fixture, &solved);
-        let status = Command::new("python3")
-            .arg(solution.join("solve.py"))
-            .current_dir(&solved)
-            .status()
-            .unwrap();
-        assert!(status.success(), "{}: the solution did not run", task.id);
-        let (passed, said) = check(task, &solved);
-        assert!(
-            passed,
-            "{}: the checker rejects the reference solution: {said}",
-            task.id
-        );
+        if let Some(fixture) = &task.fixture {
+            assert!(!check_dir.starts_with(fixture) && !solution.starts_with(fixture));
+        }
+        for attempt in ["untouched", "solved"] {
+            let env = TaskEnv::new(task);
+            let dir = tempfile::tempdir().unwrap();
+            let work = dir.path().join(attempt);
+            fs::create_dir_all(&work).unwrap();
+            if let Some(fixture) = &task.fixture {
+                copy_tree(fixture, &work);
+            }
+            if let Some(setup) = &task.setup {
+                let out = env.run(Command::new("bash").arg("-c").arg(setup), &work);
+                assert!(out.status.success(), "{}: setup failed: {out:?}", task.id);
+            }
+            if attempt == "solved" {
+                let out = env.run(
+                    Command::new("python3").arg(solution.join("solve.py")),
+                    &work,
+                );
+                assert!(
+                    out.status.success(),
+                    "{}: the solution did not run: {out:?}",
+                    task.id
+                );
+            }
+            let (passed, said) = check(task, &env, &work);
+            assert_eq!(
+                passed,
+                attempt == "solved",
+                "{}: the checker's verdict on the {attempt} workspace: {said}",
+                task.id
+            );
+        }
     }
 }
 
@@ -143,10 +258,10 @@ check = "false"
 
 [[task]]
 id = "web"
-category = "browser"
-prompt = "Fill in a form."
-channels = ["browser"]
-requires = ["browser"]
+category = "office"
+prompt = "Fill in a spreadsheet."
+channels = ["office"]
+requires = ["office"]
 check = "true"
 "#;
 
@@ -315,4 +430,111 @@ fn eval_records_every_attempt_with_verification_in_its_time_and_compares_arms() 
     assert_eq!(report["total"], 6);
     assert_eq!(report["passed"], 2);
     assert!(stdout.contains("strict completion 1/3"), "{stdout}");
+}
+
+const LIVE_MANIFEST: &str = r#"
+task_set = "live"
+version = "test.1"
+
+[[task]]
+id = "crash"
+prompt = "Fetch {fixture_url} and write done.txt; save copies in {outbox}."
+server = "python3 \"$HAME_TASK_DIR/server.py\""
+setup = "test -n \"$HAME_FIXTURE_URL\" && touch \"$HAME_RUN_DIR/setup.ran\""
+# Kills the agent once it is running, as a crash would, and leaves the
+# marker that asks for the session to be continued.
+background = "while [ ! -f \"$HAME_RUN_DIR/agent.pid\" ]; do sleep 0.1; done; sleep 0.5; touch \"$HAME_WORKSPACE/killed\" \"$HAME_RUN_DIR/agent.killed\"; kill -9 $(cat \"$HAME_RUN_DIR/agent.pid\")"
+resume = "Continue."
+check = "test -f done.txt && test -f \"$HAME_RUN_DIR/setup.ran\" && python3 -c \"import os,urllib.request; assert urllib.request.urlopen(os.environ['HAME_FIXTURE_URL'] + '/?token=' + os.environ['HAME_FIXTURE_TOKEN']).read() == b'ok'\" && test -d \"$HAME_OUTBOX\""
+teardown = "touch \"$PILOT_TEST_OUT/teardown.ran\""
+config = { limits = { max_steps = 7 } }
+"#;
+
+const SERVER: &str = r#"
+import os, sys, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        body = b"ok" if os.environ["HAME_FIXTURE_TOKEN"] in self.path else b"no"
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+print(f"PORT {s.server_address[1]}", flush=True)
+threading.Thread(target=s.serve_forever, daemon=True).start()
+sys.stdin.read()
+open(os.path.join(os.environ["PILOT_TEST_OUT"], "server.stopped"), "w").write("1")
+"#;
+
+#[test]
+fn live_fixtures_faults_and_resumption_run_around_the_agent() {
+    if !python() {
+        eprintln!("skipped: needs python3");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let suite = root.join("suite");
+    let out = root.join("out");
+    fs::create_dir_all(suite.join("crash")).unwrap();
+    fs::create_dir_all(&out).unwrap();
+    fs::write(suite.join("manifest.toml"), LIVE_MANIFEST).unwrap();
+    fs::write(suite.join("crash/server.py"), SERVER).unwrap();
+    // The first agent hangs until it is killed; the continued session sees
+    // the marker and finishes.
+    let script = root.join("script.jsonl");
+    Recording {
+        responses: vec![
+            bash_call(
+                "if [ ! -f killed ]; then sleep 30; fi; echo ok > done.txt",
+                Usage::default(),
+            ),
+            ScriptedResponse {
+                deltas: vec![Delta::Text {
+                    text: "Done.".into(),
+                }],
+                stop: StopReason::EndTurn,
+                usage: Usage::default(),
+            },
+        ],
+    }
+    .save(&script)
+    .unwrap();
+    let report = root.join("report.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_hame"))
+        .arg("--home")
+        .arg(root.join("home"))
+        .arg("eval")
+        .arg(&suite)
+        .args(["--set", "sandbox.mode=danger-full-access"])
+        .arg("--json")
+        .arg(&report)
+        .current_dir(&root)
+        .env("HAME_SCRIPT", &script)
+        .env("PILOT_TEST_OUT", &out)
+        .env_remove("HAME_TRACE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(&report).unwrap_or_else(|e| panic!("{e}\n{stderr}")),
+    )
+    .unwrap();
+    let record = &report["records"][0];
+    assert_eq!(record["outcome"], "pass", "{record:#}\n{stderr}");
+    assert_eq!(
+        record["human_interventions"], 1,
+        "the session was continued"
+    );
+    assert!(
+        record["note"].as_str().unwrap().contains("resumed"),
+        "{record:#}"
+    );
+    assert_eq!(record["network_profile"], "loopback");
+    assert!(out.join("teardown.ran").is_file(), "teardown ran");
+    assert!(
+        out.join("server.stopped").is_file(),
+        "the server was stopped"
+    );
 }
