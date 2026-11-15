@@ -1,0 +1,65 @@
+# Example deployment: hame-relay behind Caddy, which obtains and renews the
+# TLS certificate automatically. See docs/relay/DEPLOY.md.
+#
+#   cp docs/relay/docker-compose.example.yml deploy/docker-compose.yml
+#   cp docs/relay/Caddyfile.example deploy/Caddyfile
+#   cp docs/relay/relay.env.example deploy/relay.env   # then edit
+#   cd deploy && docker compose up -d --build
+
+services:
+  relay:
+    build:
+      context: ..            # the repository root
+      dockerfile: crates/hame-relay/Dockerfile
+    image: hame-relay:local
+    restart: unless-stopped
+    env_file: relay.env
+    environment:
+      RELAY_BIND: 0.0.0.0:8080
+      RELAY_DATABASE_PATH: /data/relay.db
+      # Caddy overwrites X-Forwarded-For with the client address.
+      RELAY_TRUST_PROXY: "true"
+      RELAY_SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      RELAY_GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      RELAY_APPLE_PRIVATE_KEY_FILE: /run/secrets/apple_key
+    secrets:
+      - smtp_password
+      - google_client_secret
+      - apple_key
+    volumes:
+      - relay-data:/data
+    # Not published: only Caddy reaches it.
+    expose:
+      - "8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+
+secrets:
+  smtp_password:
+    file: ./secrets/smtp_password
+  google_client_secret:
+    file: ./secrets/google_client_secret
+  apple_key:
+    file: ./secrets/apple_key.p8
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,21 @@
+# Replace relay.example.com with the relay's DNS name. Caddy obtains the
+# certificate on first start (ports 80 and 443 must reach this host).
+relay.example.com {
+	reverse_proxy relay:8080 {
+		# One address, the client's: the relay trusts the last entry.
+		header_up X-Forwarded-For {remote_host}
+	}
+	log {
+		output stdout
+		# Query strings carry OAuth codes: keep them out of access logs.
+		format filter {
+			request>uri query {
+				delete code
+				delete state
+			}
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+			request>headers>Sec-Websocket-Protocol delete
+		}
+	}
+}

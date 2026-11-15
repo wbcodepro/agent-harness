@@ -1,0 +1,12 @@
+# Used by BuildKit with `-f crates/hame-relay/Dockerfile` (build context:
+# the repository root).
+target
+**/target
+.git
+.claude
+**/node_modules
+**/.env
+**/.env.*
+*.db
+*.db-wal
+*.db-shm
