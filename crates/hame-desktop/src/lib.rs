@@ -449,7 +449,13 @@ pub struct DesktopTool {
     helper: tokio::sync::Mutex<Option<Arc<Helper>>>,
     state: Mutex<State>,
     cancel: Arc<CancelState>,
+    /// When a separate helper last looked whether Screen Recording has been
+    /// granted (see [`DesktopTool::probe_screen`]).
+    screen_probe: Mutex<Option<std::time::Instant>>,
 }
+
+/// How often a refused screenshot may start a helper to look again.
+const SCREEN_PROBE_EVERY: Duration = Duration::from_secs(10);
 
 impl DesktopTool {
     pub fn new(config: DesktopConfig) -> Self {
@@ -462,6 +468,7 @@ impl DesktopTool {
                 flag: AtomicBool::new(false),
                 helper: Mutex::new(Weak::new()),
             }),
+            screen_probe: Mutex::new(None),
         }
     }
 
@@ -494,6 +501,14 @@ impl DesktopTool {
         {
             return Ok(Arc::clone(helper));
         }
+        let helper = self.spawn_helper().await?;
+        *self.cancel.helper.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&helper);
+        *slot = Some(Arc::clone(&helper));
+        Ok(helper)
+    }
+
+    /// A new helper process, not yet the one requests go to.
+    async fn spawn_helper(&self) -> Result<Arc<Helper>, HelperError> {
         if !supported() {
             return Err(HelperError::new(
                 "unsupported",
@@ -524,9 +539,45 @@ impl DesktopTool {
             )
             .await?,
         );
-        *self.cancel.helper.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&helper);
-        *slot = Some(Arc::clone(&helper));
         Ok(helper)
+    }
+
+    /// Looks whether Screen Recording has been granted since `working`
+    /// started. macOS reads that permission once per process, so a
+    /// separate, short-lived helper is asked; it replaces `working` only
+    /// if it has access, otherwise it is closed and `working` stays (with
+    /// its observations, and the user's clipboard it may be keeping, which
+    /// a helper puts back when it exits). Never while `working` keeps a
+    /// saved clipboard, and at most once per [`SCREEN_PROBE_EVERY`].
+    async fn probe_screen(&self, working: &Arc<Helper>) -> Option<Arc<Helper>> {
+        {
+            let mut last = self.screen_probe.lock().unwrap_or_else(|e| e.into_inner());
+            if last.is_some_and(|at| at.elapsed() < SCREEN_PROBE_EVERY) {
+                return None;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let state = working
+            .request("permissions", json!({}), Duration::from_secs(5))
+            .await
+            .ok()?;
+        if state["clipboard_saved"].as_bool().unwrap_or(true) {
+            return None;
+        }
+        let probe = self.spawn_helper().await.ok()?;
+        if !probe.hello.screen_access {
+            return None;
+        }
+        let mut slot = self.helper.lock().await;
+        if !slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, working))
+        {
+            return None;
+        }
+        *self.cancel.helper.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&probe);
+        *slot = Some(Arc::clone(&probe));
+        Some(probe)
     }
 
     /// Window titles and element values of an application's windows, for
@@ -614,10 +665,7 @@ impl DesktopTool {
             // Screen Recording is read once per process: a grant made since
             // the helper started shows only in a new one.
             Permission::ScreenRecording => {
-                drop(helper);
-                self.helper.lock().await.take();
-                let fresh = self.helper().await?;
-                if fresh.hello.screen_access {
+                if let Some(fresh) = self.probe_screen(&helper).await {
                     return Ok(fresh);
                 }
             }
@@ -3419,6 +3467,11 @@ mod tests {
             pub async fn call(&self, input: Value) -> ToolOutput {
                 self.tool.call(&input, &self.ctx).await
             }
+
+            /// Helpers started from now on report Screen Recording granted.
+            pub fn grant_screen(&self) {
+                std::fs::write(self.dir.path().join("screen_granted"), "").unwrap();
+            }
         }
 
         pub fn window() -> Value {
@@ -3464,8 +3517,15 @@ mod tests {
                 "helper_protocol": protocol::HELPER_PROTOCOL,
                 "ax_trusted": ax_trusted, "screen_access": screen_access, "pid": 1,
             });
+            // A helper started after `grant_screen` reports Screen Recording.
+            let mut granted = hello.clone();
+            granted["screen_access"] = json!(true);
+            let flag = dir.path().join("screen_granted");
             let mut cases = format!(
-                "    hello) printf '{{\"id\":%s,\"ok\":true,\"result\":%s}}\\n' \"$id\" '{hello}' ;;\n"
+                "    hello) if [ -f '{flag}' ]; then \
+                 printf '{{\"id\":%s,\"ok\":true,\"result\":%s}}\\n' \"$id\" '{granted}'; \
+                 else printf '{{\"id\":%s,\"ok\":true,\"result\":%s}}\\n' \"$id\" '{hello}'; fi ;;\n",
+                flag = flag.display(),
             );
             for (op, result) in answers {
                 cases.push_str(&format!(
@@ -3959,17 +4019,22 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn without_screen_recording_a_screenshot_is_refused_after_a_fresh_helper_checks() {
+    async fn a_refused_screenshot_keeps_the_working_helper() {
         use scripted::*;
         let f = fixture_trusting(
             &[Capability::Observe],
             &[Capability::Screen],
-            &[("screenshot", json!({}))],
+            &[
+                (
+                    "permissions",
+                    json!({"ax_trusted": true, "screen_access": false, "clipboard_saved": false}),
+                ),
+                ("screenshot", json!({})),
+            ],
             true,
             false,
         );
-        // Straight to the helper request: the action itself first wants a
-        // place to keep the image.
+        let working = f.tool.helper().await.unwrap();
         let refused = f
             .tool
             .req("screenshot", json!({}), Duration::from_secs(5))
@@ -3982,8 +4047,76 @@ mod tests {
             refused.message
         );
         assert!(f.requests("screenshot").is_empty());
-        // The first helper and the one started to look again.
+        // A probe looked and was closed; the working helper (its
+        // observations, any saved clipboard) is the same process.
         assert_eq!(f.requests("hello").len(), 2);
+        assert!(Arc::ptr_eq(&working, &f.tool.helper().await.unwrap()));
+        // Within the probe interval nobody looks again.
+        let again = f
+            .tool
+            .req("screenshot", json!({}), Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert_eq!(again.code, "permission_denied");
+        assert_eq!(f.requests("hello").len(), 2);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_probe_that_has_screen_recording_takes_over() {
+        use scripted::*;
+        let f = fixture_trusting(
+            &[Capability::Observe],
+            &[Capability::Screen],
+            &[
+                (
+                    "permissions",
+                    json!({"ax_trusted": true, "screen_access": false, "clipboard_saved": false}),
+                ),
+                ("screenshot", json!({"taken": true})),
+            ],
+            true,
+            false,
+        );
+        let working = f.tool.helper().await.unwrap();
+        f.grant_screen();
+        let shot = f
+            .tool
+            .req("screenshot", json!({}), Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(shot["taken"], true);
+        assert_eq!(f.requests("hello").len(), 2);
+        assert_eq!(f.requests("screenshot").len(), 1);
+        let now = f.tool.helper().await.unwrap();
+        assert!(!Arc::ptr_eq(&working, &now), "the probe is the helper now");
+        assert!(now.hello.screen_access);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn no_probe_while_the_helper_keeps_the_users_clipboard() {
+        use scripted::*;
+        let f = fixture_trusting(
+            &[Capability::Observe],
+            &[Capability::Screen],
+            &[(
+                "permissions",
+                json!({"ax_trusted": true, "screen_access": false, "clipboard_saved": true}),
+            )],
+            true,
+            false,
+        );
+        let working = f.tool.helper().await.unwrap();
+        f.grant_screen();
+        let refused = f
+            .tool
+            .req("screenshot", json!({}), Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "permission_denied");
+        assert_eq!(f.requests("hello").len(), 1, "no second helper was started");
+        assert!(Arc::ptr_eq(&working, &f.tool.helper().await.unwrap()));
     }
 
     #[cfg(target_os = "macos")]

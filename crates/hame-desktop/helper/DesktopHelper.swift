@@ -2235,7 +2235,8 @@ func handle(_ req: [String: Any]) {
         case "script_document":
             result = try scriptDocument(req)
         case "permissions":
-            result = ["ax_trusted": axTrusted(), "screen_access": CGPreflightScreenCaptureAccess()]
+            result = ["ax_trusted": axTrusted(), "screen_access": CGPreflightScreenCaptureAccess(),
+                      "clipboard_saved": savedClipboard != nil]
         case "focus_context":
             // Only meaningful while the window would receive the input.
             try requireTrusted()
