@@ -285,6 +285,8 @@ pub struct RepoMap;
 struct RepoMapInput {
     path: Option<String>,
     max_chars: Option<usize>,
+    /// Show where this name is defined, what calls it and what it calls.
+    symbol: Option<String>,
 }
 
 const SOURCE_EXTENSIONS: &[&str] = &[
@@ -568,6 +570,163 @@ fn scopes(extension: &str, text: &str) -> Vec<Scope> {
     found
 }
 
+/// One call in a source file: the called name (the last segment of a path
+/// or method), its 1-based line.
+struct Call {
+    name: String,
+    line: usize,
+}
+
+/// The calls of a source file, from its syntax tree; empty without a
+/// grammar.
+fn calls(extension: &str, text: &str) -> Vec<Call> {
+    let mut found = Vec::new();
+    let Some(language) = grammar(extension) else {
+        return found;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&language).is_err() {
+        return found;
+    }
+    let Some(tree) = parser.parse(text, None) else {
+        return found;
+    };
+    let source = text.as_bytes();
+    // The name a call's function expression ends in: `f`, `a::f`,
+    // `x.f`, `self.f`, `pkg.F`.
+    fn last_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        let target = match node.kind() {
+            "identifier" | "field_identifier" | "property_identifier" => node,
+            "scoped_identifier"
+            | "field_expression"
+            | "member_expression"
+            | "attribute"
+            | "selector_expression" => node
+                .child_by_field_name("name")
+                .or_else(|| node.child_by_field_name("field"))
+                .or_else(|| node.child_by_field_name("property"))
+                .or_else(|| node.child_by_field_name("attribute"))?,
+            "generic_function" => return last_name(node.child_by_field_name("function")?, source),
+            _ => return None,
+        };
+        target.utf8_text(source).ok().map(str::to_string)
+    }
+    let mut cursor = tree.walk();
+    'walk: loop {
+        let node = cursor.node();
+        if matches!(node.kind(), "call_expression" | "call")
+            && let Some(function) = node.child_by_field_name("function")
+            && let Some(name) = last_name(function, source)
+        {
+            found.push(Call {
+                name,
+                line: node.start_position().row + 1,
+            });
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    found
+}
+
+/// `repo_map` with `symbol`: definitions, callers grouped by the
+/// definition they sit in, and the names called inside the definition.
+fn symbol_report(root: &Path, cwd: &Path, symbol: &str, budget: usize) -> String {
+    let mut defined: Vec<String> = Vec::new();
+    let mut callers: Vec<String> = Vec::new();
+    let mut callees: Vec<String> = Vec::new();
+    let mut seen_callers = HashSet::new();
+    let mut scanned = 0usize;
+    // Names the project defines: the callees worth listing (not `map`,
+    // `Ok` or `len` from the standard library).
+    let mut project: HashSet<String> = HashSet::new();
+    for path in walk(root) {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_string();
+        if grammar(&extension).is_none() {
+            continue;
+        }
+        let Some(text) = searchable_text(&path) else {
+            continue;
+        };
+        scanned += 1;
+        let shown = display_path(relative(&path, cwd));
+        let scopes = scopes(&extension, &text);
+        project.extend(scopes.iter().map(|s| s.name.clone()));
+        if let Some((definitions, _)) = outline(&extension, &text) {
+            project.extend(definitions.into_iter().map(|d| d.name));
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let calls = calls(&extension, &text);
+        for scope in scopes.iter().filter(|s| s.name == symbol) {
+            defined.push(format!(
+                "{shown}:{}  {}",
+                scope.start + 1,
+                signature_of(lines.get(scope.start).copied().unwrap_or(""))
+            ));
+            for call in &calls {
+                let row = call.line - 1;
+                let inside = scope.start <= row && row <= scope.end;
+                if inside && call.name != symbol && !callees.contains(&call.name) {
+                    callees.push(call.name.clone());
+                }
+            }
+        }
+        for call in calls.iter().filter(|c| c.name == symbol) {
+            let from = enclosing(&scopes, call.line - 1)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "(top level)".into());
+            if from == symbol {
+                continue;
+            }
+            if seen_callers.insert((from.clone(), shown.clone())) {
+                callers.push(format!("{from} ({shown}:{})", call.line));
+            }
+        }
+    }
+    let mut out = format!(
+        "Symbol {symbol}, matched by name in {scanned} files with a grammar (Rust, Python, \
+         JavaScript, TypeScript, Go); functions of the same name are not told apart.\n"
+    );
+    if defined.is_empty() {
+        out.push_str("Defined: nowhere in these files (it may be external, or a field).\n");
+    } else {
+        out.push_str(&format!("Defined ({}):\n", defined.len()));
+        for d in &defined {
+            out.push_str(&format!("  {d}\n"));
+        }
+    }
+    out.push_str(&format!("Called from ({}):\n", callers.len()));
+    for c in &callers {
+        if out.len() > budget {
+            out.push_str("  [more not shown; raise max_chars]\n");
+            break;
+        }
+        out.push_str(&format!("  {c}\n"));
+    }
+    if !defined.is_empty() {
+        callees.retain(|name| project.contains(name));
+        out.push_str(&format!(
+            "Calls, of what the project defines ({}): {}\n",
+            callees.len(),
+            callees.join(", ")
+        ));
+    }
+    out
+}
+
 /// How many uses of a changed definition are listed.
 const SHOWN_USES: usize = 8;
 /// Longer than this is not spent looking for uses after an edit.
@@ -812,13 +971,15 @@ impl Tool for RepoMap {
             description: "Get an overview of a codebase: source files ranked by how much the \
                           rest of the code refers to what they define, each with its main \
                           definitions and their line numbers. Use it first in an unfamiliar \
-                          repository, then read the files that matter."
+                          repository, then read the files that matter. With symbol it shows \
+                          where that name is defined, what calls it and what it calls."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Directory to map. Defaults to the working directory."},
-                    "max_chars": {"type": "integer", "minimum": 500, "description": "Size budget for the map. Default 6000."}
+                    "max_chars": {"type": "integer", "minimum": 500, "description": "Size budget for the map. Default 6000."},
+                    "symbol": {"type": "string", "description": "Instead of the map: where this function or type is defined, what calls it and what it calls."}
                 },
                 "additionalProperties": false
             }),
@@ -840,6 +1001,14 @@ impl Tool for RepoMap {
                 return ToolOutput::error(format!("{} is not a directory.", root.display()));
             }
             let budget = input.max_chars.unwrap_or(6000).max(500);
+            if let Some(symbol) = input
+                .symbol
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return ToolOutput::ok(symbol_report(&root, &ctx.cwd, symbol, budget));
+            }
 
             // Per file: what it defines and which identifiers it mentions.
             let mut files: Vec<(PathBuf, Vec<Definition>, HashSet<String>)> = Vec::new();
@@ -1115,6 +1284,51 @@ mod tests {
             ToolOutput::ok("No matches.")
         );
         assert!(Grep.call(&json!({"pattern": "("}), &ctx).await.is_error);
+    }
+
+    #[tokio::test]
+    async fn repo_map_shows_callers_and_callees_of_a_symbol() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("lib.rs"),
+            "pub fn check(x: u32) -> bool {\n    let y = normalize(x);\n    self::store::save(y)\n}\n\n\
+             fn normalize(x: u32) -> u32 { x }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("app.py"),
+            "from lib import check\n\ndef handle(req):\n    return check(req.n)\n\nclass View:\n    def post(self):\n        return self.check(1)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("ui.ts"),
+            "export function submit() {\n  api.check(1);\n}\n",
+        )
+        .unwrap();
+        let ctx = ToolContext::new(root);
+        let out = RepoMap.call(&json!({"symbol": "check"}), &ctx).await.text;
+        assert!(
+            out.contains("lib.rs:1  pub fn check(x: u32) -> bool"),
+            "{out}"
+        );
+        assert!(out.contains("Called from (3):"), "{out}");
+        for caller in ["handle (app.py:4)", "post (app.py:8)", "submit (ui.ts:2)"] {
+            assert!(out.contains(caller), "{caller} missing from {out}");
+        }
+        // `save` is not defined in these files, so it is not listed.
+        assert!(
+            out.contains("Calls, of what the project defines (1): normalize"),
+            "{out}"
+        );
+        let none = RepoMap
+            .call(&json!({"symbol": "nothing_here"}), &ctx)
+            .await
+            .text;
+        assert!(
+            none.contains("Defined: nowhere") && none.contains("Called from (0)"),
+            "{none}"
+        );
     }
 
     #[tokio::test]
