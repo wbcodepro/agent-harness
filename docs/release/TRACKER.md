@@ -48,8 +48,32 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 - [x] Security fix: `script` inner calls to non-host-side tools now go through the sandboxed runner (previously ran in the harness process).
 - [x] Budget guard (tokens, deadline) before every model request (`hame-verify/src/budget.rs`); cost budget waits for the tariff table (E).
 - [x] Task files (TOML) → `TaskContract` + task prompt (`hame-verify/src/task_file.rs`).
-- [ ] `hame task` CLI + app assembly (browser/desktop tools, OutcomeGate, BudgetGuard, trace wiring, profile overrides) — after wave 1 merges.
-- [ ] Browser/desktop/cross-app pilot tasks in the eval manifest; real-API end-to-end runs.
+- [x] `hame task` CLI + app assembly: `Computer` (browser/desktop from config + task grants, batch via pipeline, `ComputerProbe`), workflows offered when present, OutcomeGate for tasks, BudgetGuard, trace spans for turn and verification; plan mode drops Control tools (74efb91).
+- [x] `[model] vision`/`pdf` overrides wired; `[computer] browser_channel`.
+- [x] Browser `page_state` and desktop `app_state` for independent verification.
+- [x] Journal fsync only on `dispatched` (D measured 15–21 ms/action of syncs).
+- [x] Live: `hame task` Vietnamese file task, claude-haiku-5-5: verified, 3 requests, 4.6 s.
+- [ ] Pilot browser/desktop/cross-app/recovery tasks + injection suite + ablations with real API (wave 2, agent G2).
+- [ ] Docs, packaging, clean install (macOS + Linux Docker), licenses/SBOM, release notes (wave 2, agent F).
+- [ ] Independent review (wave 3).
+
+### C — merged (5930db4)
+- [x] `hame-browser`: persistent Playwright helper (Chrome channel), profiles, one `browser` tool with observe/act/wait/extract/screenshot/download/upload/dialog/tabs/batch; generation-scoped refs, stale/ambiguous/not_actionable errors; grants per capability; journalled receipts with idempotency keys; batch through pipeline.
+- [x] Fixture app + 13 browser tests (B01–B05, stale ref, hidden controls, dialog stops batch, crash-after-submit reconciliation, injection, Vietnamese, commit/screen grants, pipeline).
+- [x] ADR-4: direct Playwright chosen over agent-browser 0.41.0 (faster clicks but silent wrong fills and stale-ref retargeting). Evidence in EVIDENCE-browser.md.
+- Limits: verified on macOS arm64 only; JS-only posting buttons count as Interact unless `commit: true`; iframes/closed shadow roots not expanded.
+
+### D — merged (c070270, 4907090)
+- [x] `hame-desktop`: Swift AX helper compiled on first use; one `desktop` tool (apps, windows, observe, press, set_value, focus, menu, type, key, screenshot, click_at, clipboard, wait, batch); lease for physical input; interference/unexpected-dialog stops; cancellation; receipts.
+- [x] 21 unit tests + 11 GUI tests on TextEdit (D01, D04, stale window/ref, ambiguity, interference, cancel, unexpected sheet, screenshot+click_at transforms, clipboard, denied permission, latency).
+- [x] ADR-5: own helper chosen (agent-desktop 16× slower observe; HCU needs an extra privacy grant, not run).
+- Limits: macOS 14+; no scroll/drag/hover/text-range; US key layout; `wait` polls; only TextEdit tested.
+
+### E — merged (c0751d8)
+- [x] `hame-trace`: trace.v1.jsonl spans (all kinds), usage records (normalized + raw), TracedLlm (one span per attempt incl. retries), trace_layer, nested usage, dated Anthropic tariff, cost None when unknown.
+- [x] `hame eval`: setup/agent/verification/total timing, outcomes incl. timeout/false_success, §7 records, arms with interleaving and bootstrap CIs, forbidden-effect hashing; `evals/pilot` F01–F05 (+vi).
+- [x] Live F01–F05 claude-haiku-5-5: 5/5, $0.0106, p50 11.9 s; trace totals = per-request sums.
+- Follow-ups: false-success detection is phrase-based; no compaction spans.
 
 ## Test log
 
@@ -62,6 +86,10 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 | 2026-11-15 | `cargo test --workspace` after merging B | 259 passed, 0 failed, 5 ignored (4 live) |
 | 2026-11-15 | `HAME_LIVE_ANTHROPIC=1 cargo test -p hame-llm --test live_anthropic -- --ignored` (B) | 4/4 pass, claude-haiku-5-5 |
 | 2026-11-15 | `cargo test --workspace` after merging A | 274 passed, 0 failed, 5 ignored |
+| 2026-11-15 | `cargo test --workspace` after merging C and E | 315 passed, 0 failed, 5 ignored |
+| 2026-11-15 | `cargo test -p hame-desktop --test gui -- --ignored --test-threads=1` (D) | 11/11 pass, 58 s |
+| 2026-11-15 | `cargo test --workspace` after merging D + integration (74efb91) | 336 passed, 0 failed, 16 ignored (live + GUI) |
+| 2026-11-15 | `hame task t1.toml --provider anthropic --model claude-haiku-5-5` | verified; 3 requests, 10949 in / 7065 cached / 422 out |
 
 ### A — merged (c844fef, e3024b3, 2932957)
 - [x] Per-session ToolContext (artifacts, journal, session id) derived from `SessionWriter` each turn; `request.artifacts` set.

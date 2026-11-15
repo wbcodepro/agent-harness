@@ -22,7 +22,7 @@ Candidates: vercel-labs agent-browser and a direct Playwright adapter. Decided: 
 
 ## ADR-5 Desktop backend: native macOS accessibility helper (decided after comparison in workstream D)
 
-Candidates: vercel-labs agent-desktop, Microsoft HCU, and a small Swift helper over AX/CoreGraphics. Recorded result and evidence: see `docs/release/EVIDENCE.md` § desktop backend comparison.
+Candidates: vercel-labs agent-desktop, Microsoft HCU, and a small Swift helper over AX/CoreGraphics. Decided: the Swift helper (`crates/hame-desktop`) is the only default. On the same TextEdit window it observed in 8.5 ms median vs 137 ms for agent-desktop (which pays a process start per command) and reported `stale_window` for a closed window where agent-desktop reported `APP_UNRESPONSIVE` with a retry hint. HCU's provider needs its own Accessibility grant, which would have changed the user's privacy settings, so it was not run. Evidence: [EVIDENCE-desktop.md](EVIDENCE-desktop.md). Requires macOS 14+ (screenshot API).
 
 ## ADR-6 Vision is selective and typed; no default local model
 
