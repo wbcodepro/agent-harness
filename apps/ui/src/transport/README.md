@@ -123,11 +123,22 @@ device recomputes the hash from the arguments it shows (APPS-AND-SYNC.md
 The host connector calls the router in process (`hame_web::router`) and
 marks each request with `hame_web::RemoteCaller { device_id, label }`
 (`RemoteCaller::attach` or `hame_web::mark_remote`). Such requests need no
-token and get the remote policy of `[remote]` in the host's config.toml:
-no "Full access" mode and no "always" answers unless `allow_full_access =
-true`, and new sessions only in `roots` (default: folders that already
-have a session, and the folder `hame web` started in). Refusals are 403
-with the reason as text. Choosing "Full access" (local or remote) is
+token and get the remote policy of `[remote]` in the host's config.toml,
+on every route that acts on a session (prompt, steer, withdraw, approval,
+attachments, settings, grants, delete; viewing and stopping are always
+allowed):
+
+- the session's folder must be in `roots` (default: folders that already
+  have a session, and the folder `hame web` started in);
+- unless `allow_full_access = true`: no choosing "Full access", no
+  "always" answers, and no prompting, queueing, answering or uploading in a
+  session that runs without the sandbox and without asking (Full access,
+  or the default mode while `[sandbox] mode = "danger-full-access"`); a
+  device may still lower such a session's mode;
+- "always allow" grants given on the host do not answer questions in turns
+  a remote device started or queued into.
+
+Refusals are 403 with the reason as text. Choosing "Full access" (local or remote) is
 answered 428 `{"confirm": nonce, "message": …}` first; the same request
 again with `"confirm": nonce` applies it.
 
@@ -139,5 +150,6 @@ again with `"confirm": nonce` applies it.
 | 403 | missing or wrong token (local), or refused by the remote policy |
 | 404 | no such session or artifact |
 | 409 | a turn is running (prompt, settings, delete) or none is (steer), or a queued message was already delivered |
+| 423 | another hame process (a terminal, an editor) has the session open |
 | 413 | upload too large |
 | 428 | "Full access" needs the confirmation nonce in the body |

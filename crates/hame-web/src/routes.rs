@@ -21,7 +21,7 @@ use tokio::sync::broadcast;
 use crate::caller::Caller;
 use crate::meta::{Mode, SessionMeta};
 use crate::session::{Entry, Outgoing, TurnCancel, run_turns};
-use crate::{App, Failure, MAX_UPLOAD_BYTES, bad, conflict, failed, forbidden, not_found};
+use crate::{App, Failure, MAX_UPLOAD_BYTES, bad, conflict, failed, forbidden, locked, not_found};
 
 /// Where uploaded files that are not images go, inside the session's
 /// working folder.
@@ -183,9 +183,13 @@ pub(crate) async fn create(
         .transpose()?
         .unwrap_or_default();
     app.check_mode(&caller, mode)?;
-    if mode == Mode::FullAccess {
-        app.confirm("new", body.confirm.as_deref())?;
-    }
+    // A confirmation counts only for this folder, this mode and this caller.
+    let nonce = if mode == Mode::FullAccess {
+        let scope = format!("new:{}:{}:{}", cwd.display(), mode.name(), caller.by().0);
+        Some(app.confirm(&scope, body.confirm.as_deref())?)
+    } else {
+        None
+    };
     let mut session = hame_app::open_session(&app.store(), None, &cwd).map_err(failed)?;
     if mode != Mode::Default {
         session
@@ -202,6 +206,9 @@ pub(crate) async fn create(
         ..SessionMeta::default()
     };
     app.meta.update(&id, |_| Some(meta)).map_err(failed)?;
+    if let Some(nonce) = nonce {
+        app.consume(&nonce);
+    }
     Ok(Json(json!({ "id": id })))
 }
 
@@ -307,8 +314,13 @@ pub(crate) async fn rename(
 pub(crate) async fn delete_session(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
 ) -> Result<Json<Value>, Failure> {
     let session = session_id(&id)?;
+    if caller.is_remote() {
+        let entry = app.view(&id)?;
+        app.remote_may_act(&caller, &entry, false)?;
+    }
     if let Some(entry) = app.loaded(&id) {
         {
             // No turn may start while the session goes away.
@@ -333,12 +345,7 @@ pub(crate) async fn delete_session(
     match store.open(&session) {
         Ok((_, writer)) => drop(writer),
         Err(hame_session::SessionError::NotFound(_)) => return Err(not_found("no such session")),
-        Err(hame_session::SessionError::Locked(_)) => {
-            return Err(conflict(
-                "the session is open in another hame process (a terminal or an editor); close \
-                 it there first",
-            ));
-        }
+        Err(hame_session::SessionError::Locked(_)) => return Err(locked()),
         Err(e) => return Err(failed(e.to_string())),
     }
     std::fs::remove_dir_all(store.root().join(session.as_str()))
@@ -372,12 +379,16 @@ pub(crate) async fn settings(
     let mode = body.mode.as_deref().map(parse_mode).transpose()?;
     check_model(&body.provider, &body.model)?;
     let entry = app.view(&id)?;
+    // A remote device may lower a session's mode, but only in its roots.
+    app.remote_may_act(&caller, &entry, false)?;
     let mut meta = app.meta.get(&id);
     let previous = meta.mode;
+    let mut nonce = None;
     if let Some(mode) = mode {
         app.check_mode(&caller, mode)?;
         if mode == Mode::FullAccess && previous != Mode::FullAccess {
-            app.confirm(&id, body.confirm.as_deref())?;
+            let scope = format!("{id}:{}", caller.by().0);
+            nonce = Some(app.confirm(&scope, body.confirm.as_deref())?);
         }
     }
     if entry.busy.load(Ordering::SeqCst) {
@@ -418,16 +429,21 @@ pub(crate) async fn settings(
             model: model.clone(),
         });
     }
-    app.append(&entry, &mut slot, events)?;
-    drop(slot);
+    app.append(&entry, &mut slot, events).await?;
+    // Saved before the agent's slot is let go: a prompt waiting for it
+    // builds its agent from the new settings.
+    app.meta
+        .update(&id, |_| Some(meta.clone()))
+        .map_err(failed)?;
     if meta.mode != previous {
         *entry.channel.mode.lock().expect("mode") = meta.mode;
         entry.channel.always.lock().expect("always").clear();
         entry.channel.send_grants();
     }
-    app.meta
-        .update(&id, |_| Some(meta.clone()))
-        .map_err(failed)?;
+    drop(slot);
+    if let Some(nonce) = nonce {
+        app.consume(&nonce);
+    }
     entry.channel.send(json!({
         "kind": "settings",
         "mode": meta.mode,
@@ -442,8 +458,10 @@ pub(crate) async fn settings(
 pub(crate) async fn revoke_grant(
     State(app): State<Arc<App>>,
     Path((id, tool)): Path<(String, String)>,
+    caller: Caller,
 ) -> Result<Json<Value>, Failure> {
     let entry = app.view(&id)?;
+    app.remote_may_act(&caller, &entry, false)?;
     if !entry.channel.always.lock().expect("always").remove(&tool) {
         return Err(not_found("no such grant"));
     }
@@ -599,12 +617,14 @@ fn message(entry: &Entry, body: PromptBody) -> Result<Vec<Block>, Failure> {
 pub(crate) async fn prompt(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
     Json(body): Json<PromptBody>,
 ) -> Result<Json<Value>, Failure> {
     if body.text.trim().is_empty() && body.images.is_empty() && body.files.is_empty() {
         return Err(bad("the message is empty"));
     }
     let entry = app.view(&id)?;
+    app.remote_may_act(&caller, &entry, true)?;
     let content = message(&entry, body)?;
     // The stop handle exists before the run does, so a stop sent at once
     // is honoured.
@@ -619,11 +639,22 @@ pub(crate) async fn prompt(
         }
         *entry.cancel.lock().expect("cancel") = Some(Arc::clone(&cancel));
         *entry.last_error.lock().expect("last error") = None;
+        entry
+            .channel
+            .remote_run
+            .store(caller.is_remote(), Ordering::SeqCst);
     }
     let mut slot = Arc::clone(&entry.live).lock_owned().await;
-    if let Err(failure) = app.make_live(&entry, &mut slot).await {
+    // Settings cannot change while the slot is held: check the remote
+    // policy again against what the agent is about to be built from.
+    let ready = match app.remote_may_act(&caller, &entry, true) {
+        Ok(()) => app.make_live(&entry, &mut slot).await,
+        Err(failure) => Err(failure),
+    };
+    if let Err(failure) = ready {
         let _gate = entry.gate.lock().expect("gate");
         *entry.cancel.lock().expect("cancel") = None;
+        entry.channel.remote_run.store(false, Ordering::SeqCst);
         entry.busy.store(false, Ordering::SeqCst);
         return Err(failure);
     }
@@ -642,6 +673,7 @@ pub(crate) struct SteerBody {
 pub(crate) async fn steer(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
     Json(body): Json<SteerBody>,
 ) -> Result<Json<Value>, Failure> {
     let text = body.text.trim();
@@ -649,11 +681,16 @@ pub(crate) async fn steer(
         return Err(bad("the message is empty"));
     }
     let entry = app.view(&id)?;
+    app.remote_may_act(&caller, &entry, true)?;
     let queued = {
         let _gate = entry.gate.lock().expect("gate");
         if !entry.busy.load(Ordering::SeqCst) {
             None
         } else {
+            if caller.is_remote() {
+                // From here a remote device drives the run.
+                entry.channel.remote_run.store(true, Ordering::SeqCst);
+            }
             entry.steering.push(text);
             Some(entry.steering.pending())
         }
@@ -674,9 +711,11 @@ pub(crate) struct WithdrawBody {
 pub(crate) async fn withdraw(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
     Json(body): Json<WithdrawBody>,
 ) -> Result<Json<Value>, Failure> {
     let entry = app.view(&id)?;
+    app.remote_may_act(&caller, &entry, false)?;
     let withdrawn = entry.steering.withdraw(body.index, &body.text);
     entry.channel.send_steering(&entry.steering);
     if !withdrawn {
@@ -776,6 +815,7 @@ pub(crate) struct AttachQuery {
 pub(crate) async fn attach(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
     Query(query): Query<AttachQuery>,
     headers: HeaderMap,
     body: Bytes,
@@ -784,6 +824,7 @@ pub(crate) async fn attach(
         return Err(bad("the upload is empty"));
     }
     let entry = app.view(&id)?;
+    app.remote_may_act(&caller, &entry, true)?;
     let mime = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -950,6 +991,7 @@ pub(crate) async fn approval(
         ));
     }
     let entry = app.view(&id)?;
+    app.remote_may_act(&caller, &entry, true)?;
     let waiting = {
         let mut approvals = entry.channel.approvals.lock().expect("approvals");
         let Some(question) = approvals.get(&body.id) else {

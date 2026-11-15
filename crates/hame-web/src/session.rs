@@ -69,6 +69,10 @@ pub struct Channel {
     pub mode: Mutex<Mode>,
     /// The session's folder, which "Accept edits" keeps writes inside.
     pub cwd: PathBuf,
+    /// Set while a remote device drives the running turns (it started them
+    /// or queued a message into them): session-wide grants given on this
+    /// computer do not answer for it.
+    pub remote_run: AtomicBool,
 }
 
 impl Channel {
@@ -80,6 +84,7 @@ impl Channel {
             always: Mutex::new(BTreeSet::new()),
             mode: Mutex::new(mode),
             cwd,
+            remote_run: AtomicBool::new(false),
         }
     }
 
@@ -248,8 +253,16 @@ fn lexical(path: &Path) -> PathBuf {
 }
 
 /// Whether `path` (relative to `cwd`, or absolute) is inside `cwd` once
-/// links in the part that exists are followed.
+/// links in the part that exists are followed. A path with a `..`
+/// component never counts as inside: where `link/..` leads depends on the
+/// link, so such a write is asked about.
 pub fn inside(cwd: &Path, path: &str) -> bool {
+    if Path::new(path)
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return false;
+    }
     let Ok(root) = hame_kernel::real_path(cwd) else {
         return false;
     };
@@ -320,11 +333,12 @@ impl Prompter for PagePrompter {
                     return Some(true);
                 }
             }
-            if channel
-                .always
-                .lock()
-                .expect("always")
-                .contains(&request.name)
+            if !channel.remote_run.load(Ordering::SeqCst)
+                && channel
+                    .always
+                    .lock()
+                    .expect("always")
+                    .contains(&request.name)
             {
                 return Some(true);
             }
@@ -412,6 +426,7 @@ pub async fn run_turns(
         // handed to the next turn; it is never dropped.
         *entry.last_error.lock().expect("last error") = error.clone();
         *entry.cancel.lock().expect("cancel") = None;
+        entry.channel.remote_run.store(false, Ordering::SeqCst);
         entry.busy.store(false, Ordering::SeqCst);
         drop(gate);
         drop(live);
@@ -436,7 +451,10 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         assert!(inside(&work, "src/lib.rs"));
         assert!(inside(&work, "new/dir/file.txt"));
-        assert!(inside(&work, "./src/../README.md"));
+        assert!(
+            !inside(&work, "./src/../README.md"),
+            "`..` is always asked about"
+        );
         assert!(!inside(&work, "../outside/x"));
         assert!(!inside(&work, &outside.join("x").to_string_lossy()));
         #[cfg(unix)]
@@ -446,6 +464,10 @@ mod tests {
                 !inside(&work, "link/x"),
                 "a link out of the folder is outside"
             );
+            std::fs::create_dir_all(outside.join("sub")).unwrap();
+            std::os::unix::fs::symlink(outside.join("sub"), work.join("deep")).unwrap();
+            // Lexically inside, but the system follows the link first.
+            assert!(!inside(&work, "deep/../escaped.txt"));
         }
     }
 

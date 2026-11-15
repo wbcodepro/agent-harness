@@ -118,6 +118,17 @@ async fn remote_callers_get_the_remote_policy() {
         ),
     );
     assert_eq!(page.remote("POST", "/sessions", body).await.0, 200);
+    // With roots set, the start folder is outside them: the device may no
+    // longer act on the session there.
+    let (status, _) = page
+        .remote(
+            "PUT",
+            &format!("/sessions/{session}/settings"),
+            Some(json!({"mode": "ask"})),
+        )
+        .await;
+    assert_eq!(status, 403);
+    write_config(dir.path(), "");
 
     // No Full access for a remote device unless allowed.
     let settings = format!("/sessions/{session}/settings");

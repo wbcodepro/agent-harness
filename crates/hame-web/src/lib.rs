@@ -10,10 +10,12 @@
 //! `localhost`, against DNS rebinding); and remote devices, whose requests
 //! the relay connector passes to [`router`] in process marked with a
 //! [`RemoteCaller`]. Remote callers get a stricter policy (`[remote]` in
-//! config.toml): no "Full access" and no session-wide grants unless
-//! `allow_full_access = true`, and new sessions only in `roots` (by
-//! default only folders that already have a session, and the folder
-//! `hame web` started in).
+//! config.toml) on every route that acts on a session: its folder must be
+//! in `roots` (by default only folders that already have a session, and the
+//! folder `hame web` started in), and unless `allow_full_access = true`
+//! they cannot choose "Full access", give session-wide grants, or drive a
+//! session that runs without the sandbox and without asking; grants given
+//! on this computer do not answer for turns they drive.
 //!
 //! A session that is only being looked at is read from its log without its
 //! lock, so a terminal can resume it; its agent is built, and the lock
@@ -125,6 +127,17 @@ pub(crate) fn not_found(message: impl Into<String>) -> Failure {
 
 pub(crate) fn forbidden(message: impl Into<String>) -> Failure {
     failure(StatusCode::FORBIDDEN, message)
+}
+
+/// 423: another hame process (a terminal, an editor) has the session open.
+/// Distinct from 409 so a page does not mistake it for a turn that just
+/// started or ended.
+pub(crate) fn locked() -> Failure {
+    failure(
+        StatusCode::LOCKED,
+        "the session is open in another hame process (a terminal or an editor); close it \
+         there first",
+    )
 }
 
 pub(crate) struct App {
@@ -285,6 +298,24 @@ async fn guard(
     next.run(request).await
 }
 
+/// Runs `attempt` again for a moment while it fails with 423. A session's
+/// lock (a file lock) can stay held for an instant after it is let go, for
+/// example while a child process started elsewhere in this process still
+/// shares the lock's file until it runs its program; a lock another hame
+/// process holds is still reported after the retries.
+async fn retry_locked<T>(mut attempt: impl FnMut() -> Result<T, Failure>) -> Result<T, Failure> {
+    let mut tries = 0;
+    loop {
+        match attempt() {
+            Err(failure) if failure.status == StatusCode::LOCKED && tries < 10 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            done => return done,
+        }
+    }
+}
+
 /// `~/x` with the home folder.
 fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
@@ -365,12 +396,14 @@ impl App {
         if slot.is_some() {
             return Ok(());
         }
+        // The session's lock first: no agent is built for a session another
+        // process has open.
+        let session = self.open(entry).await?;
         let meta = self.meta.get(&entry.id);
         let options = self.options_for(&meta, entry);
         let runtime = hame_app::build(&self.home, &entry.cwd, &options)
             .await
             .map_err(failed)?;
-        let session = self.open(entry)?;
         *slot = Some(Live {
             session,
             runtime,
@@ -380,18 +413,19 @@ impl App {
     }
 
     /// Opens the session for writing, its records going to the pages.
-    fn open(&self, entry: &Entry) -> Result<Session, Failure> {
+    async fn open(&self, entry: &Entry) -> Result<Session, Failure> {
         let id = SessionId::parse(&entry.id).map_err(|e| bad(e.to_string()))?;
-        let mut session =
-            hame_app::open_session(&self.store(), Some(&id), &entry.cwd).map_err(|e| {
+        let store = self.store();
+        let mut session = retry_locked(|| {
+            hame_app::open_session(&store, Some(&id), &entry.cwd).map_err(|e| {
                 if e.contains("open in another process") {
-                    conflict(
-                        "the session is open in another hame process (a terminal or an editor)",
-                    )
+                    locked()
                 } else {
                     failed(e)
                 }
-            })?;
+            })
+        })
+        .await?;
         let channel = Arc::clone(&entry.channel);
         let steering = entry.steering.clone();
         session.observe(move |record: &Record| {
@@ -406,7 +440,7 @@ impl App {
 
     /// Appends `events` to the session's log: through the agent's session
     /// when it is live, otherwise under the lock taken just for this.
-    pub(crate) fn append(
+    pub(crate) async fn append(
         &self,
         entry: &Entry,
         slot: &mut Option<Live>,
@@ -419,7 +453,24 @@ impl App {
         let session = match slot {
             Some(live) => &mut live.session,
             None => {
-                brief = self.open(entry)?;
+                // A `mode/changed` record needs a log marked with the
+                // current format; an older build then calls the log newer
+                // rather than corrupt.
+                if events
+                    .iter()
+                    .any(|event| matches!(event, Event::ModeChanged { .. }))
+                {
+                    let id = SessionId::parse(&entry.id).map_err(|e| bad(e.to_string()))?;
+                    let store = self.store();
+                    retry_locked(|| {
+                        store.upgrade_format(&id).map_err(|e| match e {
+                            hame_session::SessionError::Locked(_) => locked(),
+                            e => failed(e.to_string()),
+                        })
+                    })
+                    .await?;
+                }
+                brief = self.open(entry).await?;
                 &mut brief
             }
         };
@@ -452,6 +503,49 @@ impl App {
             return Err(forbidden(
                 "a remote device cannot choose Full access; set [remote] allow_full_access = \
                  true in config.toml on this computer to allow it",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether turns in this session would run with no sandbox and no
+    /// questions: the Full access mode, or the default mode where the
+    /// sandbox is off (`[sandbox] mode = "danger-full-access"` or the
+    /// server's own options) or every question is answered yes.
+    pub(crate) fn effective_full_access(&self, meta: &SessionMeta) -> bool {
+        match meta.mode {
+            Mode::FullAccess => true,
+            Mode::Default => {
+                let configured = self.config().map(|config| config.sandbox.mode);
+                self.options.yes
+                    || self.options.sandbox.or(configured) == Some(SandboxMode::DangerFullAccess)
+            }
+            _ => false,
+        }
+    }
+
+    /// What a remote caller must pass to act on a session (prompt, queue,
+    /// answer, upload, change, delete): the session's folder within the
+    /// remote roots and, when `with_mode`, no effective Full access unless
+    /// remote Full access is allowed. Local callers always pass.
+    pub(crate) fn remote_may_act(
+        &self,
+        caller: &Caller,
+        entry: &Entry,
+        with_mode: bool,
+    ) -> Result<(), Failure> {
+        if !caller.is_remote() {
+            return Ok(());
+        }
+        self.check_folder(caller, &entry.cwd)?;
+        if with_mode
+            && self.effective_full_access(&self.meta.get(&entry.id))
+            && !self.remote_full_access()
+        {
+            return Err(forbidden(
+                "this session runs without the sandbox and without asking (Full access); a \
+                 remote device cannot drive it unless [remote] allow_full_access = true in \
+                 config.toml on this computer",
             ));
         }
         Ok(())
@@ -498,8 +592,9 @@ impl App {
     }
 
     /// Checks the one-time nonce for choosing "Full access" in `scope`, or
-    /// answers 428 with a new one to echo.
-    pub(crate) fn confirm(&self, scope: &str, given: Option<&str>) -> Result<(), Failure> {
+    /// answers 428 with a new one to echo. The nonce stays valid until
+    /// [`App::consume`] is called once the change has been made.
+    pub(crate) fn confirm(&self, scope: &str, given: Option<&str>) -> Result<String, Failure> {
         let mut nonces = self.confirmations.lock().expect("confirmations");
         nonces.retain(|_, (_, issued)| issued.elapsed() < CONFIRM_FOR);
         if let Some(given) = given
@@ -507,8 +602,7 @@ impl App {
                 .get(given)
                 .is_some_and(|(issued_for, _)| issued_for == scope)
         {
-            nonces.remove(given);
-            return Ok(());
+            return Ok(given.to_string());
         }
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         nonces.insert(nonce.clone(), (scope.to_string(), Instant::now()));
@@ -519,6 +613,14 @@ impl App {
             message: message.into(),
             body: Some(json!({"confirm": nonce, "message": message})),
         })
+    }
+
+    /// Uses up a confirmation nonce.
+    pub(crate) fn consume(&self, nonce: &str) {
+        self.confirmations
+            .lock()
+            .expect("confirmations")
+            .remove(nonce);
     }
 
     pub(crate) fn status(&self, id: &str, outcome: overview::Outcome) -> &'static str {
@@ -600,7 +702,16 @@ impl App {
                 live.runtime.computer.shutdown().await;
                 drop(live);
             }
-            let unused = slot.is_none()
+            drop(slot);
+        }
+        // Forget sessions nobody watches or uses. Under the sessions lock
+        // and only when the map holds the last reference, so a request that
+        // has just picked a session up keeps using the one that stays.
+        let mut sessions = self.sessions.lock().expect("sessions");
+        sessions.retain(|_, entry| {
+            let unused = Arc::strong_count(entry) == 1
+                && !entry.busy.load(Ordering::SeqCst)
+                && entry.live.try_lock().is_ok_and(|slot| slot.is_none())
                 && entry.channel.events.receiver_count() == 0
                 && entry
                     .channel
@@ -611,10 +722,7 @@ impl App {
                 && entry.steering.pending().is_empty()
                 && entry.uploads.lock().expect("uploads").images.is_empty()
                 && entry.uploads.lock().expect("uploads").files.is_empty();
-            drop(slot);
-            if unused && !entry.busy.load(Ordering::SeqCst) {
-                self.sessions.lock().expect("sessions").remove(&entry.id);
-            }
-        }
+            !unused
+        });
     }
 }

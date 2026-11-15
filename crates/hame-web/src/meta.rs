@@ -147,19 +147,21 @@ impl MetaStore {
         Ok(file)
     }
 
-    /// Reads the file. One that exists but cannot be read is moved aside
-    /// to a backup (once) and reported; the sessions then start from
-    /// defaults instead of the server refusing to work.
-    fn load(&self) -> All {
+    /// Reads the file. One that cannot be parsed is moved aside to a
+    /// backup and reported, and the sessions start from defaults. One that
+    /// cannot be read at all (permissions, an I/O error) is an error: it is
+    /// still there, and writing would replace it.
+    fn load(&self) -> Result<All, String> {
         let bytes = match std::fs::read(&self.path) {
             Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return All::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(All::new()),
             Err(e) => {
-                self.report(format!("cannot read {}: {e}", self.path.display()));
-                return All::new();
+                let problem = format!("cannot read {}: {e}", self.path.display());
+                self.report(problem.clone());
+                return Err(problem);
             }
         };
-        match serde_json::from_slice(&bytes) {
+        Ok(match serde_json::from_slice(&bytes) {
             Ok(all) => all,
             Err(e) => {
                 let backup = self
@@ -178,7 +180,7 @@ impl MetaStore {
                 ));
                 All::new()
             }
-        }
+        })
     }
 
     fn report(&self, warning: String) {
@@ -193,7 +195,8 @@ impl MetaStore {
     pub fn all(&self) -> All {
         let _guard = self.lock.lock().expect("meta lock");
         let _file = self.file_lock();
-        self.load()
+        // What cannot be read shows as defaults; it was reported.
+        self.load().unwrap_or_default()
     }
 
     /// Changes one session's entry; `None` from `change` removes it.
@@ -204,7 +207,8 @@ impl MetaStore {
     ) -> Result<SessionMeta, String> {
         let _guard = self.lock.lock().expect("meta lock");
         let _file = self.file_lock()?;
-        let mut all = self.load();
+        // Never write over a file that is there but could not be read.
+        let mut all = self.load()?;
         let current = all.remove(id).unwrap_or_default();
         let next = change(current);
         if let Some(next) = &next
@@ -216,7 +220,12 @@ impl MetaStore {
         let temp = self
             .path
             .with_extension(format!("json.{}-{}.tmp", std::process::id(), stamp()));
-        std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+        {
+            let mut file = File::create(&temp).map_err(|e| e.to_string())?;
+            std::io::Write::write_all(&mut file, &bytes).map_err(|e| e.to_string())?;
+            // On disk before it takes the old file's place.
+            file.sync_all().map_err(|e| e.to_string())?;
+        }
         std::fs::rename(&temp, &self.path).map_err(|e| {
             let _ = std::fs::remove_file(&temp);
             e.to_string()
@@ -284,6 +293,33 @@ mod tests {
             })
             .unwrap();
         assert!(store.get("a").pinned);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = MetaStore::new(dir.path());
+        store
+            .update("a", |mut meta| {
+                meta.mode = Mode::Ask;
+                Some(meta)
+            })
+            .unwrap();
+        let path = dir.path().join("web/sessions.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&path).is_ok() {
+            return; // running as a user who can read anything
+        }
+        let refused = store.update("b", |mut meta| {
+            meta.pinned = true;
+            Some(meta)
+        });
+        assert!(refused.is_err());
+        assert!(store.warning().unwrap().contains("cannot read"));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(store.get("a").mode, Mode::Ask, "nothing was lost");
     }
 
     #[test]
