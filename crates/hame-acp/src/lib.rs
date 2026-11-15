@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use base64::Engine as _;
 use hame_agent::{AgentError, Session, Steering, ToolRequest};
 use hame_app::{Options, Prompter, Runtime};
 use hame_kernel::BoxFuture;
-use hame_session::{Block, Delta, Event, Record, SessionId, TurnEndReason};
+use hame_session::{ArtifactStore, Block, Delta, Event, Record, SessionId, TurnEndReason};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -217,7 +218,24 @@ impl Server {
                 let store = hame_app::session_store(&self.home);
                 let cwd = hame_app::session_cwd(&store, &id).map_err(RpcError::invalid)?;
                 let (_, sandbox) = self.start(Some(&id), &cwd, false).await?;
-                Ok(json!({"modes": modes(false), "_meta": {"hame": {"sandbox": sandbox}}}))
+                // Images and files the session refers to that the store no
+                // longer has intact. The session works without them.
+                let missing: Vec<Value> = store
+                    .check_artifacts(&id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(artifact, error)| {
+                        json!({
+                            "sha256": artifact.sha256,
+                            "mimeType": artifact.mime,
+                            "error": error.to_string(),
+                        })
+                    })
+                    .collect();
+                Ok(json!({
+                    "modes": modes(false),
+                    "_meta": {"hame": {"sandbox": sandbox, "missingArtifacts": missing}},
+                }))
             }
             "session/prompt" => self.prompt(params).await,
             other => Err(RpcError {
@@ -322,6 +340,7 @@ impl Server {
             session_id: id.clone(),
             outbox: self.outbox.clone(),
             raw: self.raw_records.load(Ordering::Relaxed),
+            artifacts: session.artifacts().clone(),
         };
         if existing.is_some() {
             for record in session.records() {
@@ -396,6 +415,30 @@ struct Updates {
     outbox: Outbox,
     /// Send each record whole, as the `_hame/record` extension notification.
     raw: bool,
+    /// Where image bytes are read from to send them inline.
+    artifacts: ArtifactStore,
+}
+
+/// A content block in the protocol's shape: an image inline as base64, read
+/// from the artifact store, and anything else as its text rendering. An
+/// image that cannot be read is described in text instead.
+fn acp_content(block: &Block, artifacts: &ArtifactStore) -> Option<Value> {
+    if let Block::Image { artifact } = block {
+        return Some(match artifacts.get(artifact) {
+            Ok(bytes) => json!({
+                "type": "image",
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                "mimeType": artifact.mime,
+            }),
+            Err(e) => json!({
+                "type": "text",
+                "text": format!("{} ({e})", block.as_text().unwrap_or_default()),
+            }),
+        });
+    }
+    block
+        .as_text()
+        .map(|text| json!({"type": "text", "text": text}))
 }
 
 /// The modes a session can be in, in the protocol's shape.
@@ -461,15 +504,20 @@ impl Updates {
                 content,
                 is_error,
             } => {
-                let text = match content.first() {
-                    Some(Block::Text { text }) => text.as_str(),
-                    _ => "",
-                };
+                let mut blocks: Vec<Value> = content
+                    .iter()
+                    .filter_map(|block| acp_content(block, &self.artifacts))
+                    .map(|content| json!({"type": "content", "content": content}))
+                    .collect();
+                if blocks.is_empty() {
+                    blocks
+                        .push(json!({"type": "content", "content": {"type": "text", "text": ""}}));
+                }
                 self.send(json!({
                     "sessionUpdate": "tool_call_update",
                     "toolCallId": call_id,
                     "status": if *is_error { "failed" } else { "completed" },
-                    "content": [{"type": "content", "content": {"type": "text", "text": text}}],
+                    "content": blocks,
                 }));
                 true
             }
@@ -520,8 +568,14 @@ impl Updates {
             _ => return,
         };
         for block in content {
-            if let Block::Text { text } = block {
-                self.chunk(kind, text);
+            match block {
+                Block::Text { text } => self.chunk(kind, text),
+                Block::Image { .. } => {
+                    if let Some(content) = acp_content(block, &self.artifacts) {
+                        self.send(json!({"sessionUpdate": kind, "content": content}));
+                    }
+                }
+                _ => {}
             }
         }
     }

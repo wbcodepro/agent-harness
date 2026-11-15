@@ -65,8 +65,11 @@ enum Command {
         #[command(subcommand)]
         command: skill::McpCommand,
     },
-    /// List sessions.
-    Sessions,
+    /// List sessions, or manage their storage.
+    Sessions {
+        #[command(subcommand)]
+        command: Option<SessionsCommand>,
+    },
     /// Import a session recorded by another harness.
     Import {
         /// Where the session comes from. Supported: dsh (DeepSeek Harness).
@@ -113,6 +116,23 @@ enum Command {
         /// Last record to copy. Defaults to the whole session.
         #[arg(long)]
         at: Option<u64>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionsCommand {
+    /// List sessions (the default).
+    List,
+    /// Delete stored images and files no session refers to any more, and
+    /// leftovers of interrupted writes.
+    Gc {
+        /// Only delete what is at least this many hours old, so a session
+        /// running right now keeps what it has just stored.
+        #[arg(long, default_value_t = 24)]
+        older_than_hours: u64,
+        /// Say what would be deleted without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -237,11 +257,29 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Skill { command } => return skill::run(&home, command),
         Command::Plugin { command } => return skill::run_plugin(&home, command),
         Command::Mcp { command } => return skill::run_mcp(&home, command).await,
-        Command::Sessions => {
-            for header in store.list().map_err(display)? {
-                println!("{}\t{}", header.id, header.cwd);
+        Command::Sessions { command } => match command.unwrap_or(SessionsCommand::List) {
+            SessionsCommand::List => {
+                for header in store.list().map_err(display)? {
+                    println!("{}\t{}", header.id, header.cwd);
+                }
             }
-        }
+            SessionsCommand::Gc {
+                older_than_hours,
+                dry_run,
+            } => {
+                let min_age = std::time::Duration::from_secs(older_than_hours.saturating_mul(3600));
+                let (report, verb) = if dry_run {
+                    (store.gc_artifacts_dry_run(min_age), "would remove")
+                } else {
+                    (store.gc_artifacts(min_age), "removed")
+                };
+                let report = report.map_err(display)?;
+                println!(
+                    "{verb} {} unreferenced artifact(s) ({} bytes) and {} temporary file(s); kept {}",
+                    report.removed, report.bytes_freed, report.temp_removed, report.kept
+                );
+            }
+        },
         Command::Show { id, events } => {
             let records = store.read(&parse_id(&id)?).map_err(display)?;
             if events {
@@ -260,6 +298,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 0 => println!("{id}: nothing to recover"),
                 added => println!("{id}: closed with {added} recovery event(s)"),
             }
+            warn_missing_artifacts(&store, &id);
         }
         Command::Fork { id, at } => {
             let id = parse_id(&id)?;
@@ -329,6 +368,28 @@ fn cwd_of(records: &[Record]) -> String {
     match records.first().map(|record| &record.event) {
         Some(Event::Session(header)) => header.cwd.clone(),
         _ => String::new(),
+    }
+}
+
+/// Tells the user about images and files a session refers to that the
+/// store no longer has intact. The session still works: the model is told
+/// each is missing.
+pub(crate) fn warn_missing_artifacts(store: &SessionStore, id: &SessionId) {
+    let Ok(missing) = store.check_artifacts(id) else {
+        return;
+    };
+    for (artifact, error) in &missing {
+        eprintln!(
+            "hame: warning: session {id} refers to {} artifact {}: {error}",
+            artifact.mime,
+            artifact.short()
+        );
+    }
+    if !missing.is_empty() {
+        eprintln!(
+            "hame: warning: {} artifact(s) unavailable; the model will see a note in place of each",
+            missing.len()
+        );
     }
 }
 

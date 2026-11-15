@@ -43,6 +43,7 @@
   details.tool summary { padding: 7px 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   details.tool summary::before { content: "running  "; color: var(--warn); }
   details.tool.ok summary::before { content: "ok  "; color: var(--accent); }
+  details.tool img, .user img { display: block; max-width: 100%; margin-top: 8px; border-radius: 4px; }
   details.tool.failed summary::before { content: "failed  "; color: var(--bad); }
   details.tool pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); white-space: pre-wrap;
     overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
@@ -105,6 +106,33 @@ function textOf(content) {
   return (content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
 }
 
+// Images become <img>, other stored files links; the server only serves
+// artifacts the shown session refers to.
+function mediaOf(content) {
+  const nodes = [];
+  for (const block of content || []) {
+    if (block.type !== "image" && block.type !== "artifact") continue;
+    const artifact = block.artifact || {};
+    if (!/^[0-9a-f]{64}$/.test(artifact.sha256 || "")) continue;
+    const src = `/api/artifacts/${artifact.sha256}?session=${encodeURIComponent(current)}&token=${encodeURIComponent(token)}`;
+    const label = `${artifact.mime} ${artifact.width || "?"}x${artifact.height || "?"}, artifact ${artifact.sha256.slice(0, 12)}`;
+    let node;
+    if (block.type === "image") {
+      node = document.createElement("img");
+      node.src = src;
+      node.alt = "image " + label;
+      node.loading = "lazy";
+      node.onerror = () => { node.replaceWith(Object.assign(document.createElement("div"), {className: "notice", textContent: "image unavailable: " + label})); };
+    } else {
+      node = document.createElement("a");
+      node.href = src;
+      node.textContent = (artifact.name || "file") + " (" + artifact.mime + ", " + artifact.bytes + " bytes)";
+    }
+    nodes.push(node);
+  }
+  return nodes;
+}
+
 function show(record) {
   if (record.seq <= lastSeq) return;
   lastSeq = record.seq;
@@ -112,8 +140,9 @@ function show(record) {
   switch (record.type) {
     case "user/message": {
       const text = textOf(data.content);
-      add(text.startsWith("[hame verify]") ? "notice" : "user",
+      const node = add(text.startsWith("[hame verify]") ? "notice" : "user",
           text.startsWith("[hame verify]") ? "Checks failed; sent back to the model." : text);
+      node.append(...mediaOf(data.content));
       streaming = null;
       break;
     }
@@ -148,6 +177,9 @@ function show(record) {
       if (!node) break;
       node.classList.add(data.is_error ? "failed" : "ok");
       node.querySelector("pre").textContent = textOf(data.content);
+      const media = mediaOf(data.content);
+      node.append(...media);
+      if (media.length) node.open = true;
       break;
     }
     case "compaction": add("notice", "Earlier history was summarized."); break;
@@ -185,6 +217,7 @@ async function open(id) {
     const event = JSON.parse(message.data);
     if (event.kind === "record") show(event.record);
     else if (event.kind === "approval") { pending.push(event); askNext(); }
+    else if (event.kind === "warning") add("notice", event.text);
     else if (event.kind === "turn") {
       setBusy(event.state === "started");
       if (event.error) add("notice", "Error: " + event.error);

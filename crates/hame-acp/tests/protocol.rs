@@ -278,3 +278,102 @@ async fn a_turn_can_be_cancelled_and_the_session_loaded_again() {
     let (unknown, _) = client.until_response(9).await;
     assert_eq!(unknown["error"]["code"], -32601);
 }
+
+#[tokio::test]
+async fn tool_result_images_go_out_as_image_content_and_missing_ones_are_reported() {
+    use base64::Engine as _;
+    use hame_session::{Block, CreateOptions, Event, SessionStore, TurnEndReason};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (home, work) = (dir.path().join("home"), dir.path().join("work"));
+    std::fs::create_dir_all(&work).unwrap();
+    let work = hame_kernel::real_path(&work).unwrap();
+    let store = SessionStore::new(home.join("sessions"));
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0,
+        0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
+    ];
+    let present = store.artifacts().put(png, "image/png").unwrap();
+    let gone = store
+        .artifacts()
+        .put(b"GIF89a\x01\x00\x01\x00", "image/gif")
+        .unwrap();
+    std::fs::remove_file(store.artifacts().path_of(&gone.sha256).unwrap()).unwrap();
+
+    let mut writer = store
+        .create(CreateOptions {
+            id: None,
+            cwd: work.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+    let session = writer.id().to_string();
+    for event in [
+        Event::TurnStart { turn: 1 },
+        Event::UserMessage {
+            content: vec![Block::text("Look")],
+        },
+        Event::ToolCall {
+            call_id: "c1".into(),
+            name: "screenshot".into(),
+            input: json!({}),
+        },
+        Event::ToolResult {
+            call_id: "c1".into(),
+            content: vec![
+                Block::text("two shots"),
+                Block::Image {
+                    artifact: present.clone(),
+                },
+                Block::Image {
+                    artifact: gone.clone(),
+                },
+            ],
+            is_error: false,
+        },
+        Event::TurnEnd {
+            turn: 1,
+            reason: TurnEndReason::Completed,
+        },
+    ] {
+        writer.append(event).unwrap();
+    }
+    drop(writer);
+
+    let mut client = start(&home, vec![], 0);
+    client
+        .send(json!({"jsonrpc": "2.0", "id": 1, "method": "session/load",
+            "params": {"sessionId": session, "cwd": work, "mcpServers": []}}))
+        .await;
+    let (loaded, replayed) = client.until_response(1).await;
+    assert!(loaded.get("error").is_none(), "{loaded}");
+    let missing = loaded["result"]["_meta"]["hame"]["missingArtifacts"]
+        .as_array()
+        .unwrap();
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0]["sha256"], gone.sha256.as_str());
+
+    let update = replayed
+        .iter()
+        .map(|m| &m["params"]["update"])
+        .find(|u| u["sessionUpdate"] == "tool_call_update")
+        .expect("the tool result is replayed");
+    let content = update["content"].as_array().unwrap();
+    assert_eq!(
+        content[0]["content"],
+        json!({"type": "text", "text": "two shots"})
+    );
+    assert_eq!(content[1]["content"]["type"], "image");
+    assert_eq!(content[1]["content"]["mimeType"], "image/png");
+    let sent = base64::engine::general_purpose::STANDARD
+        .decode(content[1]["content"]["data"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(sent, png);
+    // The missing one falls back to text that says so.
+    assert_eq!(content[2]["content"]["type"], "text");
+    assert!(
+        content[2]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("missing")
+    );
+}
