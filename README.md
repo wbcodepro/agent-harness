@@ -2,7 +2,14 @@
 
 English · [Tiếng Việt](README.vi.md)
 
-`hame` is a coding-agent harness written in Rust: one binary that runs a language model as a coding agent in your terminal, in your editor (over ACP) or in a browser.
+`hame` is an agent harness written in Rust: one binary that runs a language model as an agent in your terminal, in your editor (over ACP) or in a browser. It began as a coding agent. Version 0.1 adds tasks whose outcome hame checks itself, and tools that operate a web browser and native macOS applications.
+
+How a task runs: **outcome → tools → verify → evidence**.
+
+1. **Outcome.** You state what must be true when the work is done (a task file: the outcome, acceptance conditions, the scope you grant, a budget).
+2. **Tools.** The agent works with files and the shell, and, where you granted it, a browser and desktop applications. It is told to prefer files, commands and APIs, then structured page and accessibility data, and screenshots last.
+3. **Verify.** hame checks the acceptance conditions against the real state (files, JSON, CSV, command exit codes, the open page, an application's window), not against the agent's report. Failing conditions send the agent back, at most twice.
+4. **Evidence.** The verification report, a receipt for every action on an application, the session log, stored screenshots and downloads, and optionally a trace of every model call and tool call. `hame task` exits 0 only when the outcome is verified.
 
 Three ideas shape the design:
 
@@ -21,12 +28,13 @@ What sets it apart from other harnesses:
 
 ## Install
 
-hame needs Rust 1.89 or later, and `git`.
+hame is built from source. It needs Rust 1.89 or later, and `git`. The browser tool also needs Python 3 with Playwright and Google Chrome; the desktop tool needs macOS 14 or later and the Swift compiler. [docs/release/INSTALL.md](docs/release/INSTALL.md) has the steps per platform and feature, and [docs/release/SUPPORT-MATRIX.md](docs/release/SUPPORT-MATRIX.md) what was tested where.
 
 ```sh
 cargo install --git https://github.com/wbcodepro/agent-harness hame-cli
 # or, from a clone:
-cargo build --release -p hame-cli      # builds target/release/hame
+cargo install --locked --path crates/hame-cli   # installs ~/.cargo/bin/hame
+cargo build --release -p hame-cli               # or just build target/release/hame
 ```
 
 Then run `hame setup`. It asks which provider to use and for an API key; the key is not shown on screen and is saved in `~/.hame/.env`, readable only by you. It then checks the key, the sandbox, `bash` and `git`, and can send one test request that costs a few tokens. `hame doctor` runs the same checks at any time (`--ping` sends the test request).
@@ -37,13 +45,25 @@ You can also put the key in the environment or in `~/.hame/.env` (or `.env` in t
 DEEPSEEK_API_KEY=...     # or ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API_KEY
 ```
 
+| Provider | Key variable | Default model |
+|---|---|---|
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
+| `anthropic` | `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY` | `claude-opus-5-5` |
+| `openai` | `OPENAI_API_KEY` | none: pass `--model` or set `[model] name` |
+| a compatible server (`provider = "openai"` with `base_url`) | `HAME_API_KEY` | none |
+
+`[model] api_key_env = "NAME"` reads the key from another variable. Without `--provider`, `HAME_PROVIDER` or `[model] provider`, hame takes the first of DeepSeek, Anthropic and OpenAI whose key it finds. The data directory is `~/.hame`; `--home` or `HAME_HOME` moves it.
+
 ## Use
 
 ```sh
 hame setup                            # choose a provider, save its key, check everything
-hame doctor [--ping]                  # check configuration, key, sandbox and required programs
+hame doctor [--ping]                  # check configuration, key, sandbox, programs, browser and desktop
 hame                                  # terminal interface
 hame run "fix the bug that makes test_stats.py fail"   # one turn, non-interactive
+hame task task.toml [--json]          # work until the task file's conditions hold; exit 0 only when verified
+hame run --trace session "..."        # also write a trace of model and tool calls beside the session log
+hame workflow list | show <name> | trust <name> | untrust <name>   # saved workflows and their trust
 hame run --session <id> "carry on"    # continue a session
 hame run --plan "..."                 # investigate and propose a plan; change nothing
 hame run --output json "..."          # one JSON object when done (stream-json: also one event per line)
@@ -94,9 +114,151 @@ Tested in Zed 1.28.1 on 2026-11-14 with the same five checks, all passed (stoppi
 
 The server is also tested automatically with the protocol's official client runtime (`agent-client-protocol`), including the permission flow.
 
+## Tasks with a verified outcome
+
+`hame task FILE` runs one task described in a TOML file, then checks its acceptance conditions itself:
+
+```toml
+# task.toml
+id = "ledger-summary"                       # letters, digits, - and _
+outcome = "Export the ledger for 10-20 January 2026 from the local app and write the total to out/summary.txt"
+constraints = ["Use the browser profile 'work'", "Do not change any other file"]
+
+[budget]
+max_steps = 40              # model requests
+max_tokens = 400000         # input + output tokens of the agent and its subagents
+deadline_ms = 600000        # wall-clock time
+
+[[acceptance]]              # every condition must hold
+kind = "csv_shape"
+path = "out/ledger.csv"
+rows = 11
+columns = ["date", "description", "amount"]
+
+[[acceptance]]
+kind = "file_contains"
+path = "out/summary.txt"
+text = "Total: 1,234.50"
+
+[[authorization.grants]]    # what the agent may do, and where
+channel = "browser"
+origin = "http://127.0.0.1:*"
+profile = "work"
+capabilities = ["observe", "interact", "file_write"]
+```
+
+```sh
+hame task task.toml                          # progress on stderr; the verdict and evidence at the end
+hame task task.toml --json                   # one JSON object: status, verified, each condition with its evidence, receipts, tokens, timings
+hame task task.toml --trace session          # also write trace.v1.jsonl beside the session log
+hame task task.toml --cwd ~/work/project --provider anthropic --model claude-haiku-5-5 --yes
+```
+
+Acceptance conditions (`kind`): `file_exists`, `file_absent` (`path`); `file_contains` (`path`, `text`, exact and Unicode-preserving); `file_sha256` (`path`, `sha256`); `json_value` (`path`, `pointer` as RFC 6901, `equals`); `csv_shape` (`path`, `rows` without the header, `columns`); `command` (`command`, `exit`, default 0; run by hame itself with `sh -c` in the working directory, **not** in the sandbox, with a 120-second limit, so only put commands you would run yourself in a task file); `browser_state` (`url_contains`, `text_contains`, `profile`; reads the live page); `desktop_state` (`app` bundle id, `window_title_contains`, `value_contains`; reads the live application). Paths are relative to the working directory. A task without acceptance conditions is refused: its completion could not be verified.
+
+The agent is told the conditions so it can aim at them; hame evaluates them afterwards against the real state. When the agent ends its turn with a condition failing, it is sent back with the failing evidence, at most twice. `hame task` exits 0 when every condition holds, 1 when one does not (or the turn failed), 130 when interrupted. The log records `task/start` (the contract) and `task/verified` (the report), and the action receipts. `max_steps`, `max_tokens` and `deadline_ms` are enforced before each model request; `max_cost_usd` is accepted but not enforced in this release.
+
+The grants in a task file add to those in `config.toml` for that run only, and turn on the browser or desktop tool when they name its channel.
+
+## Browser and desktop control
+
+Two host-side tools act outside the shell sandbox: `browser` (Chrome through Playwright, any platform where those run) and `desktop` (native macOS applications through the accessibility interface). Both are off until the configuration turns them on or a grant names their channel, and each action is checked against the grants before it is sent.
+
+```toml
+[computer]
+browser = true                  # offer the browser tool
+desktop = true                  # offer the desktop tool (macOS 14+)
+headless = true                 # browser without a window (default)
+browser_channel = "chrome"      # chrome (installed Google Chrome, default) | msedge | chromium
+# profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
+
+[[computer.grant]]              # read and use pages on local servers, profile "work" only
+channel = "browser"
+origin = "http://127.0.0.1:*"
+profile = "work"
+capabilities = ["observe", "interact"]
+
+[[computer.grant]]              # TextEdit: read, press, type, save files through its save panel
+channel = "desktop"
+app = "com.apple.TextEdit"
+capabilities = ["observe", "interact", "global_input", "file_write"]
+
+[[computer.grant]]              # TextEdit screenshots and clicks on screenshot pixels
+channel = "visual"
+app = "com.apple.TextEdit"
+capabilities = ["screen", "global_input"]
+```
+
+A grant has a `channel` (`browser`, `desktop`, or `visual` for screenshots and pixel clicks of native windows), optional `app` (bundle id), `origin` and `profile` patterns (`*` matches any run of characters, case-insensitive; an absent pattern matches anything), and `capabilities`:
+
+| Capability | Allows |
+|---|---|
+| `observe` | read pages, windows and accessibility trees; wait; extract |
+| `interact` | click, fill, select, press, set values, menus that only open something |
+| `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model) |
+| `file_write` | downloads into the workspace; confirming a save panel |
+| `clipboard` | read and set the clipboard (desktop; the previous contents are restored) |
+| `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease |
+| `screen` | screenshots (stored as artifacts) |
+
+Security model:
+
+- **Grants come only from you**: `[computer]` in `~/.hame/config.toml`, or a task file you pass to `hame task`. A project's `.hame/config.toml` cannot grant them (it may only set `[verify]`). Text in a page, a document, an accessibility label or a screenshot is marked untrusted, and the agent is told it can never widen its scope. A refused action says which capability on which target was missing.
+- **Desktop and browser authority is separate from the shell sandbox and is not confined by it.** The helpers run as your user, with your terminal's macOS privacy permissions (Accessibility, Screen Recording) and your browser profiles' cookies. Seatbelt, Landlock and the network allowlist apply to `bash` and other confined tools, not to these. Grant narrowly: an app or origin pattern, and only the capabilities the task needs.
+- The browser helper blocks top-level navigation to origins no grant covers, before the request leaves the machine. A page's own requests (scripts, images, API calls) are not filtered, and the browser does not go through hame's proxy.
+- Every acting operation is journalled (`not_started`, `dispatched`, then `completed`, `failed` or `outcome_unknown`) before and after it is sent. A commit carries an idempotency key; one that may already have taken effect is not repeated until the page or window has been observed again and the agent names the earlier operation (`reconciled`). After a crash, dispatched actions become `outcome_unknown` and the agent is told to check the state; hame never replays them.
+- Refs (`e12`, `o3:e7`) belong to one observation. A ref whose page navigated, whose element changed or was removed, or whose window closed is refused (`stale_ref`, `stale_window`), and two matching targets are refused as `ambiguous`; the tools never re-target a "similar" element. Physical input stops when focus moves (`interference`) or a dialog appears (`unexpected_dialog`) and reports exactly what was typed.
+- Commit detection is a heuristic over control names and form methods: a button that posts through JavaScript may count as `interact`. Do not rely on withholding `commit` as the only safeguard on a site where a click can do damage.
+
+Browser profiles are persistent directories (`~/.hame/browser-profiles/<name>`), so a profile you sign in to stays signed in; treat it like a browser profile of your own. Downloads go into the workspace. The desktop helper is a Swift program built on first use into `~/.hame/helpers/` (about 4 seconds). Details per tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
+
+## Workflows
+
+A workflow is a saved, parameterized sequence of tool calls with checks before and after, for a job that has been done before. Files live in `.hame/workflows/NAME.toml` in the project, or `~/.hame/workflows/NAME.toml`; the project's copy wins. When any exist, the agent gets a `workflow` tool listing them.
+
+```toml
+# .hame/workflows/export-ledger.toml
+name = "export-ledger"
+version = 1
+description = "Export the ledger for a date range as CSV"
+provenance = "written by hand after a manual run"
+tested_with = ["fixture app", "Chrome 157"]
+
+[params.from]
+pattern = '\d{4}-\d{2}-\d{2}'   # the whole value must match
+[params.to]
+pattern = '\d{4}-\d{2}-\d{2}'
+
+[[requires]]                     # grants it needs, checked before it runs
+channel = "browser"
+capability = "file_write"
+
+[[pre]]                          # checked against the live state first; failure = drift, nothing runs
+kind = "browser_state"
+url_contains = "/export"
+
+[[steps]]
+tool = "browser"
+input = { action = "fill", text = "From", value = "{{from}}" }
+[[steps]]
+tool = "browser"
+input = { action = "fill", text = "To", value = "{{to}}" }
+[[steps]]
+tool = "browser"
+input = { action = "download", text = "Export CSV", path = "out/ledger.csv" }
+note = "the server takes a second or two"
+
+[[post]]                         # at least one; the run fails if these do not hold
+kind = "csv_shape"
+path = "out/ledger.csv"
+columns = ["date", "description", "amount"]
+```
+
+A workflow runs only if you trusted that exact file: `hame workflow show NAME` prints what it needs, checks and does, and `hame workflow trust NAME` records its SHA-256 in `~/.hame/trusted-workflows.json` after you confirm. Editing the file revokes the trust; trust cannot be given from inside a session (the agent's tools cannot write hame's data directory). Each step still goes through permission rules, grants, approval and the action journal like a call the model made, and steps address elements by role, label or selector, never by recorded coordinates or refs. A run stops at the first failed step and reports the completed prefix; parameters that do not match their pattern are refused before anything runs.
+
 ## Built-in tools
 
-`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
+`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; `skill` when there are skills; `diagnostics`, `references` and `rename_symbol` when a language server is configured; `browser` and `desktop` when [enabled or granted](#browser-and-desktop-control); `workflow` when [workflows](#workflows) exist. With `edit_format = "apply-patch"`, `apply_patch` replaces `edit` and `write`.
 
 `write` refuses to overwrite an existing file the model has not read in the session (a file's content is usually what the task depends on); when a write shrinks a file by more than half, the result says the whole file was replaced. When `edit` cannot find the text to replace, it shows how far it matched and where it differs. `grep` names the function or class around each match. After every `edit`, `write` or `apply_patch`, if a valid source file has become syntactically invalid, the result points at the error (Python is checked with `python3` when present; Rust, JS, TS and Go with tree-sitter).
 
@@ -127,6 +289,8 @@ By default (`workspace-write`):
 - With `[secrets] substitute`, a secret never enters the sandbox: the tool's environment holds a stand-in, and the network proxy replaces it with the real secret in the request head (request line and headers, including `Authorization: Basic`) sent to the hosts you name. For HTTPS the proxy must read the request, so it terminates the tool's TLS connection for those hosts only, with a root certificate generated for this run, and opens its own verified TLS connection to the real host; other hosts are passed through untouched. Tools are pointed at that root certificate through `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` and `NODE_EXTRA_CA_CERTS`; programs that read none of them refuse to connect to that host. A request body is also substituted when it declares `Content-Length` and is at most 1 MiB (the length is corrected). Limits: chunked or larger bodies pass through untouched; over plain HTTP only the head is substituted; HTTP/1.1 only; one request per connection; a host you name that echoes headers back would return the secret in output (where it is masked like every secret). The certificate list given to tools is the operating system's store plus the proxy's certificate.
 
 `--sandbox read-only` forbids writes; `--sandbox danger-full-access` removes confinement, and then every tool that is not read-only needs your approval.
+
+The `browser` and `desktop` tools are the exception to "tools do not run inside the harness": they act on your browser profiles and applications from outside the sandbox, under the grants you give, as described in [Browser and desktop control](#browser-and-desktop-control). They are off unless configured or granted.
 
 Known limits:
 
@@ -239,6 +403,18 @@ claude_plugins = ["/path/to/plugin"]   # plugins packaged for Claude Code: load 
 [plugin.wc]                     # a WebAssembly plugin and what it may read
 path = "plugins/wordcount.wasm"
 read = ["docs"]
+
+[computer]                      # browser and desktop tools; see "Browser and desktop control"
+browser = false
+desktop = false
+headless = true
+browser_channel = "chrome"      # chrome | msedge | chromium
+# profiles_dir = "/path"        # default ~/.hame/browser-profiles
+
+[[computer.grant]]
+channel = "browser"             # browser | desktop | visual
+origin = "http://127.0.0.1:*"   # also: app = "com.apple.TextEdit", profile = "work"
+capabilities = ["observe", "interact"]
 ```
 
 When a tool call repeats exactly and returns the same result three times in a row, or the same call fails four times without ever succeeding, its result carries a note telling the model it is stuck (the note also counts toward escalation). From the fifth identical call in a row, the call is no longer run (polling commands repeated verbatim included). Three requests before a turn runs out of steps, the model is told so it can wrap up. Every model switch (escalation, and the return at the next turn) is logged.
@@ -257,28 +433,77 @@ A project can declare its own check commands in `.hame/config.toml` (the `[verif
 
 Example plugin and ABI description: `plugins/wordcount`.
 
-Sessions and artifacts: each session is a directory in `~/.hame/sessions/` holding its log and, for tools that act outside the sandbox (browser, desktop), an action journal. Images and files that tools return are stored once, by SHA-256, in `~/.hame/artifacts/`, shared by all sessions, forks and imports; logs hold only references. The model is shown the 3 most recent images from tool results; older ones become a note naming the artifact. Resuming a session warns about artifacts that are missing or damaged; the session still works and the model gets a note in their place. Nothing is deleted automatically: `hame sessions gc` removes artifacts no session log refers to that are older than 24 hours (`--older-than-hours N`, `--dry-run` to only report), and temporary files of interrupted writes. A crash between storing an image and logging it leaves such an unreferenced file. Deleting a session directory makes its artifacts collectable. There is no export command; to move a session, copy its directory together with `~/.hame/artifacts/`. After a crash, actions that were dispatched but never confirmed are recorded as `outcome_unknown` and the model is told to check the current state before retrying; hame never repeats them itself. A fork carries every settled action receipt of its source, since forking undoes nothing outside the workspace.
+## Sessions, artifacts and retention
+
+Each session is a directory in `~/.hame/sessions/` holding its log (format version 2) and, for tools that act outside the sandbox (browser, desktop), an action journal (`actions.v1.jsonl`). Images and files that tools return (screenshots, downloads, images from MCP servers) are stored once, by SHA-256, in `~/.hame/artifacts/`, shared by all sessions, forks and imports; logs hold only typed references. The terminal interface shows each as a one-line description, the web interface and ACP clients show the image. Images reach the model as images when it accepts them (see [Troubleshooting](#troubleshooting)). The model is shown at least the 3 most recent images from tool results; older ones become a note naming the artifact, dropped three at a time so the cached prompt prefix stays the same between steps. Resuming a session warns about artifacts that are missing or damaged; the session still works and the model gets a note in their place. Nothing is deleted automatically: `hame sessions gc` removes artifacts no session log refers to that are older than 24 hours (`--older-than-hours N`, `--dry-run` to only report), and temporary files of interrupted writes. A crash between storing an image and logging it leaves such an unreferenced file. Deleting a session directory makes its artifacts collectable. There is no export command; to move a session, copy its directory together with `~/.hame/artifacts/`. After a crash, actions that were dispatched but never confirmed are recorded as `outcome_unknown` and the model is told to check the current state before retrying; hame never repeats them itself. A fork carries every settled action receipt of its source, since forking undoes nothing outside the workspace.
+
+A log written by this version (format 2) is refused by builds before 0.1 ("session format version 2 is newer than this build supports"); older logs open unchanged.
+
+## Traces and evaluation
+
+`hame run --trace FILE` and `hame task --trace FILE` write a trace (`trace.v1.jsonl`): one span per turn, model attempt (retries and failed attempts included), tool call (including steps inside `script`, `batch` and workflows) and verification, with timings and status, and one usage record per attempt with the provider's token counts, normalized and raw. `--trace session` puts it beside the session log; `HAME_TRACE` sets it for `hame run`. A trace holds names, ids, sizes and timings, never raw tool input or provider error bodies, and never enters the prompt. Nothing is sent anywhere: hame has no telemetry that leaves your machine.
+
+`hame eval` reads those traces to report tokens, requests, request bytes and cost per run. Costs come from a dated tariff table (Anthropic models, 2026-11-15); a model not in the table has an unknown cost, never zero. To compare configurations on the same tasks:
+
+```sh
+hame eval evals/pilot --arm base --arm lean=lean.toml --runs 3 --json out/pilot.json
+hame eval evals/pilot --arm base --arm nodedupe --set nodedupe:context.dedupe_results=false
+```
+
+Arms run interleaved; each is compared with the first, task by task, with a bootstrap confidence interval (`--bootstrap 2000`, `--seed 1`). Each run is recorded with its outcome (`pass`, `fail`, `false_success` when the agent claimed success and the hidden check failed, `timeout`, `error`, `unsupported`), the agent's time, the checker's time and their sum. Task manifests are described in [evals/pilot/README.md](evals/pilot/README.md); measured results are in `docs/release/EVIDENCE.md`.
+
+## Troubleshooting
+
+Start with `hame doctor`: every line that is not `ok` says what to do.
+
+- **`browser`: "Playwright for Python is not importable by python3".** The browser helper runs `python3 -I` (isolated mode), which ignores `PYTHONPATH` and the per-user site directory, so `pip install --user playwright` and packages found only through `PYTHONPATH` are not seen. Install Playwright into the interpreter that is `python3` on hame's `PATH`. With a Homebrew or system Python that refuses `pip install` (PEP 668), use a virtual environment and put it first on `PATH` when you start hame:
+
+  ```sh
+  python3 -m venv ~/.hame/venv
+  ~/.hame/venv/bin/pip install playwright
+  export PATH="$HOME/.hame/venv/bin:$PATH"
+  python3 -I -c "import playwright.async_api" && echo ok   # what hame checks
+  ```
+- **`browser`: "Google Chrome is not installed".** Install Chrome, or set `browser_channel = "chromium"` under `[computer]` after `python3 -m playwright install chromium`.
+- **`desktop`: `permission_denied`, or doctor says Accessibility is not granted.** macOS grants Accessibility and Screen Recording to the app that started hame (Terminal, iTerm, your editor), not to hame. Add that app under System Settings > Privacy & Security > Accessibility (and Screen & System Audio Recording for screenshots), then quit and reopen it. A screenshot that comes back as one flat colour is refused as `blank_capture`; that is usually a missing or stale Screen Recording grant.
+- **`desktop`: the helper does not build.** Install the command line tools: `xcode-select --install`. The helper is cached in `~/.hame/helpers/` and rebuilt when hame's copy changes.
+- **`not_authorized: ... outside the granted scope`.** The action needs a capability no grant covers for that app, origin or profile. Add a grant to `[computer]` or to the task file; text on screen cannot grant it.
+- **The model does not see screenshots ("not sent, ...").** Images go to a model only when hame knows it accepts them: Claude models, OpenAI's gpt-4o, gpt-4.1, gpt-4.5, gpt-4-turbo, gpt-5, o1, o3 and o4 families, and, behind a compatible server, names starting with `gemini` or containing `-vl` or `vision`. Others, DeepSeek included, are treated as text-only and each image becomes a short note (the image is still stored). If your model takes images, set `vision = true` (and `pdf = true` for PDFs) under `[model]`; if it does not, choose a model that does or let the agent work from page structure and accessibility data.
+- **`Workflow ... is not trusted in this exact version`.** Review it with `hame workflow show NAME` and run `hame workflow trust NAME`. An edited file needs trusting again.
+- **"session format version N is newer than this build supports".** The log was written by a newer hame; use that version.
+
+## Limitations
+
+- **Desktop control is macOS only** (14 or later) and was tested on macOS 26.6.2 with TextEdit only. Not implemented: scrolling, drag, hover, text-range selection, choosing pop-up menu items by value, context menus. `key` assumes a US (ANSI) layout; secure text fields generally ignore synthesized input; windows on another Space or minimized cannot be captured.
+- **The browser tool** drives Chrome-family browsers through Playwright and was verified on macOS arm64 only. Iframes and closed shadow roots are not expanded; commit detection is heuristic (above); a page's own network requests are not filtered.
+- **Outcome checks** see what the predicates name: a task file without a check for some side effect does not verify it. `desktop_state` reads values cut at 300 characters; check long documents in the saved file. False-success detection in `hame eval` is phrase-based.
+- **Budgets**: `max_cost_usd` is not enforced; prices are known only for Anthropic models.
+- **Live provider tests** covered Anthropic (images in tool results and messages, missing-image notes, prompt cache) with claude-haiku-5-5. OpenAI image and PDF paths, and Anthropic PDFs, are tested against recorded fixtures only. See [docs/release/SUPPORT-MATRIX.md](docs/release/SUPPORT-MATRIX.md).
+- No installers or prebuilt binaries yet; build from source. hame has not had a security audit.
 
 ## Code layout
 
 | Crate | Job |
 |---|---|
 | `hame-kernel` | Service registry, event bus, middleware chain |
-| `hame-session` | Event schema, JSONL store, crash recovery, fork, projection |
-| `hame-llm` | Adapters for OpenAI Responses, Anthropic Messages and chat completions (DeepSeek, compatible servers) |
+| `hame-session` | Event schema, JSONL store, crash recovery, fork, projection; artifact store; task, grant, observation and receipt contracts; action journal |
+| `hame-llm` | Adapters for OpenAI Responses, Anthropic Messages and chat completions (DeepSeek, compatible servers); native images and PDFs; model profiles |
 | `hame-tools` | Built-in tools and the `Tool` trait |
 | `hame-agent` | Turn/step loop, hooks, checkpoints |
 | `hame-sandbox` | Policy, Seatbelt (macOS), Landlock (Linux), integrity levels (Windows), worker, egress proxy |
 | `hame-policy` | Configuration, permission rules, approval, secret masking |
 | `hame-checkpoint` | Workspace checkpoints in a separate git store |
 | `hame-context` | Output spilling, context compaction, project instructions |
-| `hame-verify` | Completion gate before a turn ends; loop detection; model escalation |
+| `hame-verify` | Completion gate before a turn ends; loop detection; model escalation; outcome predicates, task files, budgets, workflows |
+| `hame-browser` | The `browser` tool over a persistent Playwright helper |
+| `hame-desktop` | The `desktop` tool over a Swift accessibility helper (macOS) |
+| `hame-trace` | Run traces, usage accounting, dated tariff |
 | `hame-ext` | MCP, LSP (diagnostics, references, symbol rename), skills, hooks, WebAssembly plugins |
 | `hame-multi` | Subagents, worktrees, task board, shared budget |
 | `hame-app` | Assembles a complete agent from configuration; session import |
 | `hame-acp` | Agent Client Protocol server; the terminal interface is also a client of it |
 | `hame-tui`, `hame-web`, `hame-cli` | The interfaces |
-| `hame-eval` | Scripted model that replays recordings, for tests and evals |
+| `hame-eval` | Scripted model that replays recordings; task manifests, run records, arms and bootstrap comparison |
 
 ## Development
 
@@ -287,7 +512,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Plugin tests need `rustup target add wasm32-unknown-unknown`; some tests need `python3` and `git`. Set `HAME_SCRIPT=<file.jsonl>` to make `hame` replay recorded responses instead of calling a provider. See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
+Plugin tests need `rustup target add wasm32-unknown-unknown`; some tests need `python3` and `git`. Set `HAME_SCRIPT=<file.jsonl>` to make `hame` replay recorded responses instead of calling a provider. Browser tests skip themselves without Playwright and Chrome; the desktop GUI tests are opt-in (`--ignored`). Release tooling (`scripts/docker-clean-install.sh`, `scripts/license-report.py`, `scripts/release-check.sh`) and the release documents are in [docs/release/](docs/release/). See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

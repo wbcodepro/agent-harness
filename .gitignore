@@ -1,4 +1,13 @@
 target/
 .env
+.env.*
+!.env.example
 .claude/worktrees/
+.claude/settings.local.json
 .solutions/
+# hame's data directory, if HAME_HOME points into the tree
+.hame-home/
+# release artifacts from scripts/release-check.sh
+dist/
+*.profraw
+.DS_Store

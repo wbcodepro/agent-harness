@@ -4,7 +4,45 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+## 0.1.0-rc.1 — 2026-11-15
+
+Release candidate. Details, breaking changes and verification: [docs/release/RELEASE-NOTES.md](docs/release/RELEASE-NOTES.md).
+
+### Breaking
+
+- Session logs are format version 2 (typed image, artifact, data and unsupported blocks; `task/start`, `action/receipt` and `task/verified` events). Version 1 logs still open; 0.0.1 refuses version 2 logs.
+- Embedding API: `ToolOutput.parts`, `ToolContext.artifacts`/`journal`/`session_id`, `Effect::Control`, new `Block` and `Event` variants, `Completion.meta` and `Request.artifacts`.
+
 ### Added
+
+- `hame task FILE`: a TOML task file (outcome, constraints, acceptance conditions, grants, budget); acceptance conditions are checked against the real state (files, SHA-256, JSON pointer, CSV shape, command exit, live browser page, live application window); failing conditions send the agent back at most twice; exit 0 only when verified; `--json` and `--trace`.
+- Token, step and time budgets enforced before every model request of a task.
+- `browser` tool: Chrome (or Edge, or Playwright's Chromium) through a persistent Playwright helper; observation-scoped refs, `stale_ref`/`ambiguous` refusals, read-back fills, profiles, tabs, waits, extraction, uploads, downloads, dialogs, screenshots, batches.
+- `desktop` tool (macOS 14+): a Swift accessibility helper compiled on first use; observe, press, set value, focus, menus, chunked Unicode typing with interference detection, keys, window screenshots and pixel clicks with recorded transforms, clipboard with restore, waits, batches; a cross-process lease for physical input.
+- `[computer]` configuration and task-file grants: channel × app/origin/profile × capability, checked before every action; observed content cannot grant.
+- Action journal with receipts and idempotency keys; crash reconciliation marks dispatched actions `outcome_unknown` and never replays them.
+- Content-addressed artifact store (`~/.hame/artifacts`) for images and files from tools and MCP servers; `hame sessions gc`; resume warns about missing artifacts; forks keep receipts.
+- Native images and PDFs for Anthropic, OpenAI Responses and chat completions; model profiles with `[model] vision` and `pdf` overrides; explicit notes for images a model cannot take.
+- MCP results keep images, resources, links and structured content.
+- Images shown in the web interface and ACP clients, described in the terminal interface.
+- Workflows (`.hame/workflows/*.toml`) with parameters, required grants, pre- and postconditions, trusted per file hash; `hame workflow list | show | trust | untrust`.
+- `--trace` and `HAME_TRACE`: `trace.v1.jsonl` with spans and per-attempt usage; `hame eval` timing split, outcomes including `false_success`, dated tariff costs, `--arm`/`--set` comparisons with bootstrap intervals; `evals/pilot`.
+- `hame doctor` checks that the artifact store is writable, the browser tool's Python, Playwright and browser, and (macOS) builds the desktop helper and reports its Accessibility and Screen Recording permissions.
+- Release tooling: `scripts/docker-clean-install.sh`, `scripts/license-report.py` (third-party license report and CycloneDX SBOM), `scripts/release-check.sh`; `docs/release/` install guide, support matrix, release notes and instructions.
+
+### Changed
+
+- Old images leave the prompt three at a time (at least the newest three stay), so the cached prefix survives between steps.
+- The action journal syncs to disk only on `dispatched`.
+- Workspace version 0.1.0-rc.1.
+
+### Fixed
+
+- Inner calls of the `script` tool to tools that are not host-side run in the sandbox; they ran in the harness process before.
+
+### Also since 0.0.1 (onboarding and reliability)
+
+Added:
 
 - `hame setup`: choose a provider, save its key to `~/.hame/.env` (hidden input, owner-only file), and check that everything works.
 - `hame doctor [--ping]`: check configuration, model and key, sandbox, `bash`, `git` and `python`, and optionally send one test request.
@@ -14,7 +52,7 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 - When the summary model is the main model, compaction reuses the conversation's cached prefix.
 - English README, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md` and issue templates.
 
-### Changed
+Changed:
 
 - The message for a missing API key names every provider's key, where to put it, and `hame setup`.
 

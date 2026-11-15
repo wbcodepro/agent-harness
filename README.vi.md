@@ -2,7 +2,14 @@
 
 [English](README.md) · Tiếng Việt
 
-`hame` là một agent harness viết bằng Rust: một binary duy nhất chạy mô hình ngôn ngữ như một agent lập trình trong terminal, trong editor (ACP) hoặc trong trình duyệt.
+`hame` là một agent harness viết bằng Rust: một binary duy nhất chạy mô hình ngôn ngữ như một agent trong terminal, trong editor (ACP) hoặc trong trình duyệt. Ban đầu nó là agent lập trình; bản 0.1 thêm các tác vụ mà hame tự kiểm chứng kết quả, và các tool điều khiển trình duyệt web và ứng dụng macOS.
+
+Một tác vụ chạy theo trình tự **kết quả → tool → kiểm chứng → bằng chứng**:
+
+1. **Kết quả.** Bạn nêu điều phải đúng khi xong việc (một file tác vụ: kết quả cần đạt, điều kiện nghiệm thu, phạm vi được cấp quyền, ngân sách).
+2. **Tool.** Agent làm việc với file và shell, và nếu bạn cấp quyền thì với trình duyệt và ứng dụng desktop. Nó được dặn ưu tiên file, lệnh và API, rồi đến dữ liệu cấu trúc của trang và của accessibility, ảnh chụp màn hình sau cùng.
+3. **Kiểm chứng.** hame tự kiểm các điều kiện nghiệm thu trên trạng thái thật (file, JSON, CSV, mã thoát của lệnh, trang đang mở, cửa sổ ứng dụng), không dựa vào lời báo cáo của agent. Điều kiện nào chưa đạt thì agent bị gửi lại làm tiếp, tối đa hai lần.
+4. **Bằng chứng.** Báo cáo kiểm chứng, biên nhận cho mọi thao tác trên ứng dụng, log session, ảnh chụp và file tải về được lưu lại, và tùy chọn một trace của mọi lần gọi model và gọi tool. `hame task` chỉ thoát với mã 0 khi kết quả đã được kiểm chứng.
 
 Ba ý chính của thiết kế:
 
@@ -12,10 +19,11 @@ Ba ý chính của thiết kế:
 
 ## Cài đặt
 
-Cần Rust 1.89 trở lên và `git`.
+hame được build từ mã nguồn. Cần Rust 1.89 trở lên và `git`. Tool trình duyệt cần thêm Python 3 có Playwright và Google Chrome; tool desktop cần macOS 14 trở lên và trình biên dịch Swift. Các bước theo từng nền tảng và tính năng ở [docs/release/INSTALL.md](docs/release/INSTALL.md), những gì đã được kiểm ở đâu ở [docs/release/SUPPORT-MATRIX.md](docs/release/SUPPORT-MATRIX.md) (tiếng Anh).
 
 ```sh
-cargo build --release -p hame-cli      # tạo target/release/hame
+cargo install --locked --path crates/hame-cli   # cài vào ~/.cargo/bin/hame
+cargo build --release -p hame-cli               # hoặc chỉ build target/release/hame
 ```
 
 Rồi chạy `hame setup`: chọn nhà cung cấp, dán API key (không hiện lên màn hình, lưu vào `~/.hame/.env` chỉ bạn đọc được), và hame tự kiểm tra key, sandbox, `bash`, `git`, kèm một request thử tốn vài token. `hame doctor` chạy lại các bước kiểm tra đó bất cứ lúc nào (`--ping` để gửi request thử).
@@ -26,13 +34,26 @@ Cũng có thể tự đặt key vào biến môi trường hoặc file `~/.hame/
 DEEPSEEK_API_KEY=...     # hoặc ANTHROPIC_API_KEY / CLAUDE_API_KEY, OPENAI_API_KEY
 ```
 
+| Nhà cung cấp | Biến chứa key | Model mặc định |
+|---|---|---|
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
+| `anthropic` | `ANTHROPIC_API_KEY` hoặc `CLAUDE_API_KEY` | `claude-opus-5-5` |
+| `openai` | `OPENAI_API_KEY` | không có: truyền `--model` hoặc đặt `[model] name` |
+| máy chủ tương thích (`provider = "openai"` cùng `base_url`) | `HAME_API_KEY` | không có |
+
+`[model] api_key_env = "TÊN"` đọc key từ một biến khác. Khi không có `--provider`, `HAME_PROVIDER` hay `[model] provider`, hame lấy nhà cung cấp đầu tiên trong DeepSeek, Anthropic, OpenAI mà nó tìm thấy key. Thư mục dữ liệu là `~/.hame`; đổi bằng `--home` hoặc `HAME_HOME`.
+
 ## Dùng
 
 ```sh
 hame setup                            # chọn nhà cung cấp, lưu key, kiểm tra mọi thứ
-hame doctor [--ping]                  # kiểm tra cấu hình, key, sandbox và công cụ cần thiết
+hame doctor [--ping]                  # kiểm tra cấu hình, key, sandbox, chương trình cần thiết, trình duyệt và desktop
 hame                                  # giao diện terminal
 hame run "sửa lỗi làm test_stats.py thất bại"     # một lượt, không tương tác
+hame task task.toml [--json]          # làm tới khi các điều kiện của file tác vụ đạt; chỉ thoát 0 khi đã kiểm chứng
+hame run --trace session "..."        # ghi thêm trace các lần gọi model và tool cạnh log session
+hame workflow list | show <tên> | trust <tên> | untrust <tên>   # workflow đã lưu và việc tin dùng chúng
+hame sessions gc [--older-than-hours 24] [--dry-run]   # xóa ảnh và file đã lưu mà không session nào còn dùng
 hame run --session <id> "tiếp tục"    # nối tiếp một session
 hame run --plan "..."                 # chỉ khảo sát và đề xuất kế hoạch, không sửa gì
 hame run --output json "..."          # một đối tượng JSON khi xong (stream-json: thêm từng sự kiện một dòng)
@@ -81,9 +102,113 @@ Trong giao diện terminal: `/plan`, `/rewind`, `/new`, `/quit`; Esc dừng lư�
 
 Máy chủ cũng được kiểm thử tự động bằng runtime client chính thức của giao thức (`agent-client-protocol`), gồm cả luồng xin phép.
 
+## Tác vụ có kết quả được kiểm chứng
+
+`hame task FILE` chạy một tác vụ mô tả trong file TOML, rồi tự kiểm các điều kiện nghiệm thu:
+
+```toml
+# task.toml
+id = "ledger-summary"                       # chữ, số, - và _
+outcome = "Xuất sổ cái từ 10 đến 20/01/2026 từ ứng dụng cục bộ và ghi tổng vào out/summary.txt"
+constraints = ["Dùng hồ sơ trình duyệt 'work'", "Không sửa file nào khác"]
+
+[budget]
+max_steps = 40              # số request tới model
+max_tokens = 400000         # token vào + ra của agent và các subagent
+deadline_ms = 600000        # thời gian thực
+
+[[acceptance]]              # mọi điều kiện đều phải đạt
+kind = "csv_shape"
+path = "out/ledger.csv"
+rows = 11
+columns = ["date", "description", "amount"]
+
+[[acceptance]]
+kind = "file_contains"
+path = "out/summary.txt"
+text = "Tổng: 1.234,50"
+
+[[authorization.grants]]    # agent được làm gì, ở đâu
+channel = "browser"
+origin = "http://127.0.0.1:*"
+profile = "work"
+capabilities = ["observe", "interact", "file_write"]
+```
+
+```sh
+hame task task.toml                          # tiến trình in ra stderr; cuối cùng là kết luận và bằng chứng
+hame task task.toml --json                   # một đối tượng JSON: trạng thái, verified, từng điều kiện kèm bằng chứng, biên nhận, token, thời gian
+hame task task.toml --trace session          # ghi thêm trace.v1.jsonl cạnh log session
+hame task task.toml --cwd ~/work/project --provider anthropic --model claude-haiku-5-5 --yes
+```
+
+Các loại điều kiện (`kind`): `file_exists`, `file_absent` (`path`); `file_contains` (`path`, `text`, khớp chính xác, giữ nguyên Unicode); `file_sha256` (`path`, `sha256`); `json_value` (`path`, `pointer` theo RFC 6901, `equals`); `csv_shape` (`path`, `rows` không tính dòng tiêu đề, `columns`); `command` (`command`, `exit`, mặc định 0; do chính hame chạy bằng `sh -c` trong thư mục làm việc, **không** nằm trong sandbox, giới hạn 120 giây, nên chỉ đặt vào file tác vụ những lệnh bạn sẵn sàng tự chạy); `browser_state` (`url_contains`, `text_contains`, `profile`; đọc trang đang mở); `desktop_state` (`app` là bundle id, `window_title_contains`, `value_contains`; đọc ứng dụng đang chạy). Đường dẫn tính từ thư mục làm việc. File tác vụ không có điều kiện nghiệm thu bị từ chối, vì không thể kiểm chứng nó đã xong.
+
+Agent được cho biết các điều kiện để nhắm tới; hame tự đánh giá chúng sau đó trên trạng thái thật. Khi agent kết thúc lượt mà còn điều kiện chưa đạt, nó bị gửi lại cùng bằng chứng của điều kiện hỏng, tối đa hai lần. `hame task` thoát 0 khi mọi điều kiện đạt, 1 khi có điều kiện không đạt (hoặc lượt bị lỗi), 130 khi bị ngắt. Log ghi `task/start` (hợp đồng tác vụ), `task/verified` (báo cáo) và các biên nhận thao tác. `max_steps`, `max_tokens` và `deadline_ms` được kiểm trước mỗi request tới model; `max_cost_usd` được chấp nhận nhưng chưa được áp dụng trong bản này.
+
+Quyền cấp trong file tác vụ được cộng thêm vào quyền trong `config.toml`, chỉ cho lần chạy đó, và bật tool trình duyệt hay desktop khi chúng nêu kênh tương ứng.
+
+## Điều khiển trình duyệt và desktop
+
+Hai tool chạy phía host, ngoài sandbox của shell: `browser` (Chrome qua Playwright, trên nền tảng nào chạy được hai thứ đó) và `desktop` (ứng dụng macOS qua giao diện accessibility). Cả hai đều tắt cho tới khi cấu hình bật lên hoặc có quyền cấp nêu kênh của chúng, và mỗi thao tác được đối chiếu với quyền cấp trước khi gửi đi.
+
+```toml
+[computer]
+browser = true                  # cung cấp tool browser
+desktop = true                  # cung cấp tool desktop (macOS 14+)
+headless = true                 # trình duyệt không có cửa sổ (mặc định)
+browser_channel = "chrome"      # chrome (Google Chrome đã cài, mặc định) | msedge | chromium
+# profiles_dir = "/đường/dẫn"   # hồ sơ trình duyệt lâu dài; mặc định ~/.hame/browser-profiles
+
+[[computer.grant]]              # đọc và dùng trang của máy chủ cục bộ, chỉ hồ sơ "work"
+channel = "browser"
+origin = "http://127.0.0.1:*"
+profile = "work"
+capabilities = ["observe", "interact"]
+
+[[computer.grant]]              # TextEdit: đọc, bấm, gõ, lưu file qua hộp thoại Save
+channel = "desktop"
+app = "com.apple.TextEdit"
+capabilities = ["observe", "interact", "global_input", "file_write"]
+
+[[computer.grant]]              # chụp cửa sổ TextEdit và bấm vào điểm ảnh của ảnh chụp
+channel = "visual"
+app = "com.apple.TextEdit"
+capabilities = ["screen", "global_input"]
+```
+
+Một quyền cấp có `channel` (`browser`, `desktop`, hoặc `visual` cho ảnh chụp và cú bấm theo điểm ảnh của cửa sổ ứng dụng), các mẫu tùy chọn `app` (bundle id), `origin` và `profile` (`*` khớp mọi chuỗi ký tự, không phân biệt hoa thường; bỏ trống là khớp tất cả), và `capabilities`:
+
+| Năng lực | Cho phép |
+|---|---|
+| `observe` | đọc trang, cửa sổ và cây accessibility; chờ; trích dữ liệu |
+| `interact` | bấm, điền, chọn, nhấn phím trên phần tử, đặt giá trị, mục menu chỉ mở thêm thứ gì đó |
+| `commit` | thao tác gửi, lưu, xóa, thanh toán, mua (nhận ra theo tên nút, phương thức của form, hoặc model khai `commit: true`) |
+| `file_write` | tải file về workspace; xác nhận hộp thoại lưu file |
+| `clipboard` | đọc và đặt clipboard (desktop; nội dung cũ được khôi phục) |
+| `global_input` | sự kiện bàn phím, tổ hợp phím và cú bấm theo điểm ảnh; cần cửa sổ đích ở trên cùng và giữ một khóa liên tiến trình |
+| `screen` | ảnh chụp màn hình (lưu thành artifact) |
+
+Mô hình an toàn:
+
+- **Quyền chỉ đến từ bạn**: `[computer]` trong `~/.hame/config.toml`, hoặc file tác vụ bạn đưa cho `hame task`. `.hame/config.toml` của dự án không cấp được quyền (nó chỉ được đặt `[verify]`).
+- **Quyền điều khiển desktop và trình duyệt tách biệt với sandbox của shell và không bị sandbox giam.** Các helper chạy dưới tài khoản của bạn, với quyền riêng tư macOS (Accessibility, Screen Recording) của terminal và cookie trong hồ sơ trình duyệt. Seatbelt, Landlock và danh sách mạng cho phép áp dụng cho `bash` và các tool bị giam khác, không cho hai tool này. Hãy cấp hẹp: mẫu app hoặc origin, và chỉ những năng lực tác vụ cần.
+- Helper trình duyệt chặn điều hướng cấp trang tới origin không có quyền, trước khi request rời máy. Các request của chính trang (script, ảnh, gọi API) không bị lọc, và trình duyệt không đi qua proxy của hame.
+- Mọi thao tác có tác động đều được ghi nhật ký (`not_started`, `dispatched`, rồi `completed`, `failed` hoặc `outcome_unknown`) trước và sau khi gửi. Thao tác commit mang khóa idempotency; một thao tác có thể đã có hiệu lực sẽ không được lặp lại cho tới khi trang hay cửa sổ được quan sát lại và agent nêu thao tác trước đó (`reconciled`). Sau crash, các thao tác đã gửi đi thành `outcome_unknown` và agent được dặn kiểm tra trạng thái; hame không bao giờ tự làm lại chúng.
+- Ref (`e12`, `o3:e7`) thuộc về một lần quan sát. Ref mà trang đã chuyển đi, phần tử đã đổi hoặc bị xóa, hay cửa sổ đã đóng đều bị từ chối (`stale_ref`, `stale_window`), hai đích cùng khớp bị từ chối là `ambiguous`; tool không bao giờ tự nhắm sang một phần tử "giống giống". Nhập liệu vật lý dừng khi focus chuyển đi (`interference`) hoặc có hộp thoại bật lên (`unexpected_dialog`) và báo chính xác đã gõ được gì.
+- Việc nhận ra commit là heuristic theo tên nút và phương thức form: một nút gửi dữ liệu bằng JavaScript có thể bị tính là `interact`. Đừng chỉ dựa vào việc không cấp `commit` để bảo vệ một trang mà một cú bấm có thể gây hại.
+
+Hồ sơ trình duyệt là thư mục lâu dài (`~/.hame/browser-profiles/<tên>`), nên hồ sơ đã đăng nhập sẽ giữ đăng nhập; hãy coi nó như hồ sơ trình duyệt của chính bạn. File tải về nằm trong workspace. Helper desktop là một chương trình Swift được biên dịch ở lần dùng đầu vào `~/.hame/helpers/` (khoảng 4 giây). Chi tiết từng tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
+
+## Workflow
+
+Workflow là một chuỗi lời gọi tool đã lưu, có tham số, có kiểm tra trước và sau, cho việc đã từng làm. File đặt ở `.hame/workflows/TÊN.toml` trong dự án, hoặc `~/.hame/workflows/TÊN.toml`; bản của dự án được ưu tiên. Khi có workflow, agent có thêm tool `workflow` liệt kê chúng. Ví dụ đầy đủ (định dạng file) ở [README tiếng Anh](README.md#workflows).
+
+Workflow chỉ chạy nếu bạn đã tin dùng đúng file đó: `hame workflow show TÊN` in ra nó cần gì, kiểm gì và làm gì, và `hame workflow trust TÊN` ghi SHA-256 của nó vào `~/.hame/trusted-workflows.json` sau khi bạn xác nhận (trong script thì dùng `--yes`). Sửa file là mất tin dùng; không thể tin dùng từ bên trong một session (tool của agent không ghi được thư mục dữ liệu của hame). Mỗi bước vẫn đi qua luật quyền, quyền cấp, hỏi phép và nhật ký thao tác như lời gọi của model, và nhắm phần tử theo vai trò, nhãn hoặc selector, không bao giờ theo tọa độ hay ref đã ghi. Điều kiện trước không đạt (ứng dụng đã khác đi) thì không bước nào chạy; một lần chạy dừng ở bước hỏng đầu tiên và báo phần đã xong; tham số không khớp mẫu bị từ chối trước khi chạy.
+
 ## Tool có sẵn
 
-`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill; khi có cấu hình language server thì thêm `diagnostics`, `references` và `rename_symbol`. Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
+`read`, `write`, `edit`, `bash`, `job_output`, `glob`, `grep`, `repo_map`, `subagent`, `task_create` / `task_update` / `task_list`; thêm `skill` khi có skill; khi có cấu hình language server thì thêm `diagnostics`, `references` và `rename_symbol`. Có `browser` và `desktop` khi được [bật hoặc cấp quyền](#điều-khiển-trình-duyệt-và-desktop); có `workflow` khi có [workflow](#workflow). Với `edit_format = "apply-patch"`, tool `apply_patch` thay cho `edit` và `write`.
 
 `write` từ chối ghi đè một file đã tồn tại mà model chưa đọc trong phiên (nó phải đọc trước, vì nội dung file thường là thứ đề bài phụ thuộc vào); khi ghi làm file nhỏ đi quá nửa, kết quả nói rõ là cả file đã bị thay. `edit` không tìm thấy đoạn cần thay thì chỉ ra khớp tới dòng nào và khác ở đâu. `grep` ghi kèm tên hàm hoặc lớp bao quanh mỗi dòng khớp. Sau mỗi lần `edit`, `write` hay `apply_patch`, nếu file nguồn đang hợp lệ trở nên sai cú pháp thì kết quả báo ngay dòng lỗi (Python được kiểm bằng `python3` khi có; Rust, JS, TS, Go bằng tree-sitter).
 
@@ -115,6 +240,8 @@ Mặc định (`workspace-write`):
 - Với `[secrets] substitute`, secret không vào sandbox: biến môi trường của tool chứa một giá trị giả, và proxy mạng thay nó bằng secret thật trong phần đầu của request (dòng request và header, kể cả `Authorization: Basic`) gửi tới đúng các host bạn nêu. Với HTTPS, proxy phải đọc được request nên nó tự kết thúc kết nối TLS của tool cho riêng các host đó, bằng một chứng chỉ gốc sinh ra cho lần chạy này, rồi mở kết nối TLS đã xác thực của nó tới host thật; các host khác vẫn được chuyển tiếp nguyên vẹn. Tool được trỏ tới chứng chỉ gốc ấy qua `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` và `NODE_EXTRA_CA_CERTS`; chương trình không đọc các biến này sẽ từ chối kết nối tới host đó. Thân request cũng được thay khi nó khai báo `Content-Length` và không quá 1 MiB (độ dài được sửa lại cho khớp). Giới hạn: thân gửi kiểu chunked hoặc lớn hơn thì đi qua nguyên vẹn; với HTTP không mã hóa chỉ phần đầu được thay; chỉ HTTP/1.1; mỗi kết nối một request; một host bạn nêu mà lại gửi trả header thì secret sẽ quay về đầu ra (và bị che như mọi secret). Danh sách chứng chỉ trao cho tool được lấy từ kho chứng chỉ của hệ điều hành, cộng thêm chứng chỉ của proxy.
 
 `--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
+
+Tool `browser` và `desktop` là ngoại lệ của nguyên tắc "tool không chạy trong tiến trình của harness": chúng thao tác trên hồ sơ trình duyệt và ứng dụng của bạn từ ngoài sandbox, trong phạm vi quyền bạn cấp, như mô tả ở [Điều khiển trình duyệt và desktop](#điều-khiển-trình-duyệt-và-desktop). Chúng tắt nếu không được cấu hình hay cấp quyền.
 
 Giới hạn cần biết:
 
@@ -218,7 +345,20 @@ claude_plugins = ["/đường/dẫn/tới/plugin"]   # plugin đóng gói cho Cl
 [plugin.wc]                     # plugin WebAssembly và nơi nó được đọc
 path = "plugins/wordcount.wasm"
 read = ["docs"]
+
+[computer]                      # tool trình duyệt và desktop; xem "Điều khiển trình duyệt và desktop"
+browser = false
+desktop = false
+headless = true
+browser_channel = "chrome"      # chrome | msedge | chromium
+
+[[computer.grant]]
+channel = "browser"             # browser | desktop | visual
+origin = "http://127.0.0.1:*"   # hoặc: app = "com.apple.TextEdit", profile = "work"
+capabilities = ["observe", "interact"]
 ```
+
+Trong `[model]`, `vision = true` / `pdf = true` khẳng định model nhận ảnh / PDF (mặc định theo hiểu biết của hame: model Claude và OpenAI đã biết thì có, các model khác coi là chỉ nhận văn bản).
 
 Khi một lời gọi tool lặp lại y hệt và trả về y hệt ba lần liên tiếp, hoặc cùng một lời gọi thất bại bốn lần mà chưa lần nào đạt, kết quả kèm một ghi chú báo cho model biết nó đang kẹt (ghi chú này cũng được tính khi quyết định leo thang). Từ lần thứ năm liên tiếp giống hệt, lời gọi không được chạy nữa (kể cả lệnh thăm dò trạng thái lặp lại y nguyên). Ba request trước khi lượt hết số bước, model được báo để kịp tổng kết. Mỗi lần đổi model (leo thang, rồi trả lại ở lượt sau) được ghi vào log.
 
@@ -236,26 +376,77 @@ Dự án có thể tự khai báo lệnh kiểm tra trong `.hame/config.toml` (c
 
 Plugin mẫu và mô tả ABI: `plugins/wordcount`.
 
+## Session, artifact và lưu giữ
+
+Mỗi session là một thư mục trong `~/.hame/sessions/` chứa log (định dạng phiên bản 2) và, với các tool thao tác ngoài sandbox (trình duyệt, desktop), một nhật ký thao tác (`actions.v1.jsonl`). Ảnh và file mà tool trả về (ảnh chụp, file tải về, ảnh từ server MCP) được lưu một lần theo SHA-256 trong `~/.hame/artifacts/`, dùng chung cho mọi session, fork và session nhập vào; log chỉ giữ tham chiếu có kiểu. Giao diện terminal hiện mỗi thứ thành một dòng mô tả, giao diện web và client ACP hiện ảnh. Model được xem ít nhất 3 ảnh mới nhất trong kết quả tool; ảnh cũ hơn thành một ghi chú nêu tên artifact, và bị bỏ ba ảnh một lần để phần đầu prompt đã cache giữ nguyên giữa các bước. Khi mở lại một session, hame cảnh báo artifact bị thiếu hay hỏng; session vẫn chạy và model nhận một ghi chú thay vào chỗ đó. Không có gì bị xóa tự động: `hame sessions gc` xóa artifact không còn log nào tham chiếu và cũ hơn 24 giờ (`--older-than-hours N`, `--dry-run` để chỉ báo), cùng file tạm của những lần ghi bị gián đoạn. Xóa một thư mục session thì artifact của nó trở thành thu dọn được. Chưa có lệnh xuất; muốn chuyển session thì chép thư mục của nó cùng `~/.hame/artifacts/`. Sau crash, thao tác đã gửi mà chưa được xác nhận được ghi là `outcome_unknown` và model được dặn kiểm tra trạng thái trước khi thử lại; hame không tự lặp lại chúng. Fork mang theo mọi biên nhận đã chốt của session gốc, vì fork không hoàn tác được gì ngoài workspace.
+
+Log do bản này ghi (định dạng 2) bị các bản trước 0.1 từ chối ("session format version 2 is newer than this build supports"); log cũ mở bình thường.
+
+## Trace và đánh giá
+
+`hame run --trace FILE` và `hame task --trace FILE` ghi một trace (`trace.v1.jsonl`): mỗi lượt, mỗi lần gọi model (kể cả lần thử lại và lần hỏng), mỗi lời gọi tool (kể cả các bước bên trong `script`, `batch` và workflow) và bước kiểm chứng là một span có thời gian và trạng thái, cùng một bản ghi usage cho mỗi lần gọi với số token của nhà cung cấp, đã chuẩn hóa và nguyên bản. `--trace session` đặt nó cạnh log session; `HAME_TRACE` đặt cho `hame run`. Trace chỉ chứa tên, mã, kích thước và thời gian, không bao giờ chứa đầu vào thô của tool hay nội dung lỗi của nhà cung cấp, và không bao giờ vào prompt. Không có gì được gửi đi: hame không có telemetry rời khỏi máy bạn.
+
+`hame eval` đọc các trace đó để báo token, số request, số byte request và chi phí mỗi lần chạy. Chi phí lấy từ bảng giá có ghi ngày (model Anthropic, 2026-11-15); model không có trong bảng thì chi phí là không rõ, không bao giờ là 0. So sánh các cấu hình trên cùng tác vụ:
+
+```sh
+hame eval evals/pilot --arm base --arm lean=lean.toml --runs 3 --json out/pilot.json
+hame eval evals/pilot --arm base --arm nodedupe --set nodedupe:context.dedupe_results=false
+```
+
+Các nhánh chạy xen kẽ; mỗi nhánh được so với nhánh đầu, từng tác vụ, kèm khoảng tin cậy bootstrap (`--bootstrap 2000`, `--seed 1`). Mỗi lần chạy ghi kết quả (`pass`, `fail`, `false_success` khi agent báo xong mà bộ chấm ẩn không đạt, `timeout`, `error`, `unsupported`), thời gian của agent, của bộ chấm và tổng. Định dạng manifest ở [evals/pilot/README.md](evals/pilot/README.md); số liệu đo được ở `docs/release/EVIDENCE.md`.
+
+## Xử lý sự cố
+
+Bắt đầu bằng `hame doctor`: mỗi dòng không phải `ok` đều nói cần làm gì.
+
+- **`browser`: "Playwright for Python is not importable by python3".** Helper trình duyệt chạy `python3 -I` (chế độ cô lập), bỏ qua `PYTHONPATH` và thư mục site của người dùng, nên `pip install --user playwright` hay gói chỉ thấy qua `PYTHONPATH` đều không dùng được. Hãy cài Playwright vào chính trình thông dịch là `python3` trên `PATH` của hame. Với Python của Homebrew hay của hệ thống từ chối `pip install` (PEP 668), dùng môi trường ảo và đặt nó đầu `PATH` khi khởi động hame:
+
+  ```sh
+  python3 -m venv ~/.hame/venv
+  ~/.hame/venv/bin/pip install playwright
+  export PATH="$HOME/.hame/venv/bin:$PATH"
+  python3 -I -c "import playwright.async_api" && echo ok   # đúng phép kiểm của hame
+  ```
+- **`browser`: "Google Chrome is not installed".** Cài Chrome, hoặc đặt `browser_channel = "chromium"` trong `[computer]` sau khi chạy `python3 -m playwright install chromium`.
+- **`desktop`: `permission_denied`, hoặc doctor báo chưa cấp Accessibility.** macOS cấp Accessibility và Screen Recording cho ứng dụng đã khởi động hame (Terminal, iTerm, editor của bạn), không phải cho hame. Thêm ứng dụng đó vào System Settings > Privacy & Security > Accessibility (và Screen & System Audio Recording để chụp màn hình), rồi thoát hẳn và mở lại nó. Ảnh chụp chỉ có một màu bị từ chối là `blank_capture`; thường là do thiếu hoặc quyền Screen Recording đã cũ.
+- **`desktop`: helper không build được.** Cài bộ công cụ dòng lệnh: `xcode-select --install`. Helper được lưu sẵn trong `~/.hame/helpers/` và build lại khi bản trong hame thay đổi.
+- **`not_authorized: ... outside the granted scope`.** Thao tác cần một năng lực mà không quyền cấp nào phủ cho app, origin hay hồ sơ đó. Thêm quyền vào `[computer]` hoặc file tác vụ; chữ trên màn hình không cấp được quyền.
+- **Model không thấy ảnh chụp ("not sent, ...").** Ảnh chỉ được gửi khi hame biết model nhận ảnh: model Claude, các họ gpt-4o, gpt-4.1, gpt-4.5, gpt-4-turbo, gpt-5, o1, o3, o4 của OpenAI, và qua máy chủ tương thích là các tên bắt đầu bằng `gemini` hoặc chứa `-vl`, `vision`. Các model khác, kể cả DeepSeek, bị coi là chỉ nhận văn bản và mỗi ảnh thành một ghi chú ngắn (ảnh vẫn được lưu). Nếu model của bạn nhận ảnh, đặt `vision = true` (và `pdf = true` cho PDF) trong `[model]`; nếu không, chọn model có thị giác hoặc để agent làm việc từ cấu trúc trang và dữ liệu accessibility.
+- **`Workflow ... is not trusted in this exact version`.** Xem lại bằng `hame workflow show TÊN` rồi chạy `hame workflow trust TÊN`. File đã sửa phải tin dùng lại.
+- **"session format version N is newer than this build supports".** Log được ghi bởi bản hame mới hơn; hãy dùng bản đó.
+
+## Giới hạn
+
+- **Điều khiển desktop chỉ có trên macOS** (14 trở lên) và mới được kiểm trên macOS 26.6.2 với TextEdit. Chưa có: cuộn, kéo thả, rê chuột, chọn một đoạn văn bản, chọn mục trong menu bật lên theo giá trị, menu ngữ cảnh. `key` giả định bàn phím Mỹ (ANSI); ô nhập mật khẩu thường bỏ qua phím giả lập; không chụp được cửa sổ ở Space khác hay đang thu nhỏ.
+- **Tool trình duyệt** điều khiển trình duyệt họ Chrome qua Playwright và mới được kiểm trên macOS arm64. Iframe và shadow root đóng không được mở ra; việc nhận ra commit là heuristic; request riêng của trang không bị lọc.
+- **Kiểm chứng kết quả** chỉ thấy những gì điều kiện nêu ra: file tác vụ không kiểm một tác động phụ thì nó không được kiểm chứng. `desktop_state` đọc giá trị bị cắt ở 300 ký tự; tài liệu dài hãy kiểm trong file đã lưu. Việc nhận ra báo cáo thành công sai trong `hame eval` dựa vào cụm từ.
+- **Ngân sách**: `max_cost_usd` chưa được áp dụng; chỉ có bảng giá cho model Anthropic.
+- **Kiểm thử với nhà cung cấp thật** mới làm với Anthropic (ảnh trong kết quả tool và trong tin nhắn, ghi chú khi thiếu ảnh, cache prompt) bằng claude-haiku-5-5. Đường gửi ảnh và PDF của OpenAI, và PDF của Anthropic, mới được kiểm bằng dữ liệu mẫu đã ghi. Xem [docs/release/SUPPORT-MATRIX.md](docs/release/SUPPORT-MATRIX.md).
+- Chưa có bộ cài hay binary dựng sẵn; hãy build từ mã nguồn. hame chưa qua kiểm toán bảo mật.
+
 ## Cấu trúc mã
 
 | Crate | Việc |
 |---|---|
 | `hame-kernel` | Registry service, bus sự kiện, chuỗi middleware |
-| `hame-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection |
-| `hame-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích) |
+| `hame-session` | Schema sự kiện, kho JSONL, khôi phục sau crash, fork, projection; kho artifact; hợp đồng tác vụ, quyền cấp, quan sát và biên nhận; nhật ký thao tác |
+| `hame-llm` | Adapter OpenAI Responses, Anthropic Messages và chat-completions (DeepSeek, máy chủ tương thích); gửi ảnh và PDF gốc; hồ sơ năng lực model |
 | `hame-tools` | Tool có sẵn và trait `Tool` |
 | `hame-agent` | Vòng turn/step, hook, checkpoint |
 | `hame-sandbox` | Chính sách, Seatbelt (macOS), Landlock (Linux), mức toàn vẹn (Windows), worker, proxy egress |
 | `hame-policy` | Cấu hình, luật quyền, hỏi phép, che secret |
 | `hame-checkpoint` | Checkpoint workspace bằng kho git riêng |
 | `hame-context` | Tràn đầu ra ra file, nén ngữ cảnh, nạp chỉ dẫn dự án |
-| `hame-verify` | Cổng kiểm chứng trước khi kết thúc lượt; phát hiện lặp; leo thang model |
+| `hame-verify` | Cổng kiểm chứng trước khi kết thúc lượt; phát hiện lặp; leo thang model; điều kiện nghiệm thu, file tác vụ, ngân sách, workflow |
+| `hame-browser` | Tool `browser` qua một helper Playwright chạy lâu dài |
+| `hame-desktop` | Tool `desktop` qua một helper accessibility viết bằng Swift (macOS) |
+| `hame-trace` | Trace lần chạy, tính usage, bảng giá có ghi ngày |
 | `hame-ext` | MCP, LSP (chẩn đoán, tìm nơi dùng, đổi tên symbol), skills, hooks, plugin WebAssembly |
 | `hame-multi` | Subagent, worktree, bảng việc, ngân sách chung |
 | `hame-app` | Lắp một agent hoàn chỉnh từ cấu hình; nhập session |
 | `hame-acp` | Máy chủ Agent Client Protocol; giao diện terminal cũng là một client của nó |
 | `hame-tui`, `hame-web`, `hame-cli` | Các giao diện |
-| `hame-eval` | Model giả phát lại bản ghi, cho test và eval |
+| `hame-eval` | Model giả phát lại bản ghi; manifest tác vụ, bản ghi lần chạy, so sánh nhánh và bootstrap |
 
 ## Phát triển
 
@@ -264,4 +455,4 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Test của plugin cần `rustup target add wasm32-unknown-unknown`; một số test cần `python3` và `git`. Đặt `HAME_SCRIPT=<file.jsonl>` để `hame` phát lại phản hồi đã ghi thay vì gọi nhà cung cấp.
+Test của plugin cần `rustup target add wasm32-unknown-unknown`; một số test cần `python3` và `git`. Đặt `HAME_SCRIPT=<file.jsonl>` để `hame` phát lại phản hồi đã ghi thay vì gọi nhà cung cấp. Test trình duyệt tự bỏ qua khi thiếu Playwright và Chrome; test giao diện desktop phải bật riêng (`--ignored`). Công cụ phát hành (`scripts/docker-clean-install.sh`, `scripts/license-report.py`, `scripts/release-check.sh`) và tài liệu phát hành nằm trong [docs/release/](docs/release/).
