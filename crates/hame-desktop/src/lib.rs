@@ -23,6 +23,7 @@
 pub mod caps;
 pub mod keys;
 pub mod lease;
+pub mod permission;
 pub mod protocol;
 pub mod render;
 pub mod visual;
@@ -518,6 +519,7 @@ impl DesktopTool {
                 json!({
                     "first_observation": first,
                     "simulate_untrusted": self.config.simulate_untrusted,
+                    "host": permission::host(),
                 }),
             )
             .await?,
@@ -565,8 +567,63 @@ impl DesktopTool {
     }
 
     async fn req(&self, op: &str, params: Value, limit: Duration) -> Result<Value, HelperError> {
+        let mut helper = self.helper().await?;
+        let needed = permission::needed_for(op);
+        if let Some(needed) = needed {
+            helper = self.check_permission(helper, needed).await?;
+        }
+        let result = helper.request(op, params, limit).await;
+        if let (Err(e), Some(needed)) = (&result, needed)
+            && e.code == "permission_denied"
+        {
+            permission::report(needed);
+        }
+        result
+    }
+
+    /// Refuses at once when `needed` is missing (see [`Self::check_permission`]).
+    async fn ensure_permission(&self, needed: permission::Permission) -> Result<(), HelperError> {
         let helper = self.helper().await?;
-        helper.request(op, params, limit).await
+        self.check_permission(helper, needed).await.map(|_| ())
+    }
+
+    /// The helper to send an operation needing `needed` to, or the refusal
+    /// when the permission is missing; then nothing is sent.
+    async fn check_permission(
+        &self,
+        helper: Arc<Helper>,
+        needed: permission::Permission,
+    ) -> Result<Arc<Helper>, HelperError> {
+        use permission::Permission;
+        match needed {
+            Permission::Accessibility if helper.hello.ax_trusted => return Ok(helper),
+            Permission::ScreenRecording if helper.hello.screen_access => return Ok(helper),
+            // A grant of Accessibility takes effect in the running helper:
+            // ask it again.
+            Permission::Accessibility => {
+                let now = helper
+                    .request("permissions", json!({}), Duration::from_secs(5))
+                    .await
+                    .ok()
+                    .and_then(|answer| answer["ax_trusted"].as_bool())
+                    .unwrap_or(false);
+                if now {
+                    return Ok(helper);
+                }
+            }
+            // Screen Recording is read once per process: a grant made since
+            // the helper started shows only in a new one.
+            Permission::ScreenRecording => {
+                drop(helper);
+                self.helper.lock().await.take();
+                let fresh = self.helper().await?;
+                if fresh.hello.screen_access {
+                    return Ok(fresh);
+                }
+            }
+        }
+        permission::report(needed);
+        Err(permission::denied(needed))
     }
 
     async fn req_quick(&self, op: &str, params: Value) -> Result<Value, HelperError> {
@@ -792,6 +849,11 @@ impl DesktopTool {
             .as_str()
             .filter(|a| !a.trim().is_empty())
             .ok_or_else(|| invalid("name the application with app (bundle id or name)."))?;
+        // The document's window is found through accessibility: refuse
+        // before a file is made or an Apple event is sent.
+        self.ensure_permission(permission::Permission::Accessibility)
+            .await
+            .map_err(|e| fail(&e))?;
         let info = self
             .req_quick("app_info", json!({"app": app}))
             .await
@@ -3382,13 +3444,25 @@ mod tests {
             visual: &[Capability],
             answers: &[(&str, Value)],
         ) -> Fixture {
+            fixture_trusting(caps, visual, answers, true, true)
+        }
+
+        /// Like `fixture`, with the helper reporting Accessibility and
+        /// Screen Recording as given in its handshake.
+        pub fn fixture_trusting(
+            caps: &[Capability],
+            visual: &[Capability],
+            answers: &[(&str, Value)],
+            ax_trusted: bool,
+            screen_access: bool,
+        ) -> Fixture {
             let dir = tempfile::tempdir().unwrap();
             let hello = json!({
                 "manifest": {"name": "scripted", "version": "0", "protocol": CONTRACT_VERSION,
                              "channel": "desktop", "operations": [], "platforms": ["macos"],
                              "cancellable": true, "nested_usage": "none"},
                 "helper_protocol": protocol::HELPER_PROTOCOL,
-                "ax_trusted": true, "screen_access": true, "pid": 1,
+                "ax_trusted": ax_trusted, "screen_access": screen_access, "pid": 1,
             });
             let mut cases = format!(
                 "    hello) printf '{{\"id\":%s,\"ok\":true,\"result\":%s}}\\n' \"$id\" '{hello}' ;;\n"
@@ -3801,6 +3875,115 @@ mod tests {
             )
             .await;
         assert!(!out.is_error, "{}", out.text);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn without_accessibility_nothing_is_sent_and_the_refusal_names_the_host() {
+        use scripted::*;
+        let f = fixture_trusting(
+            &[
+                Capability::Observe,
+                Capability::Interact,
+                Capability::Commit,
+            ],
+            &[],
+            &[
+                (
+                    "permissions",
+                    json!({"ax_trusted": false, "screen_access": false}),
+                ),
+                (
+                    "app_info",
+                    json!({"pid": 42, "bundle_id": APP, "app": "TextEdit"}),
+                ),
+                ("observe", json!({"nodes": []})),
+                ("script_document", json!({"window": window()})),
+            ],
+            false,
+            true,
+        );
+        for input in [
+            json!({"action": "observe", "app": APP}),
+            json!({"action": "new_document", "app": APP}),
+        ] {
+            let out = f.call(input).await;
+            assert!(out.is_error, "{}", out.text);
+            assert!(out.text.starts_with("permission_denied"), "{}", out.text);
+            assert!(out.text.contains(permission::host()), "{}", out.text);
+            assert!(
+                out.text.contains("Privacy & Security > Accessibility"),
+                "{}",
+                out.text
+            );
+        }
+        assert!(f.requests("observe").is_empty(), "nothing was observed");
+        assert!(
+            f.requests("app_info").is_empty(),
+            "new_document stopped before looking up the app"
+        );
+        assert!(
+            f.requests("script_document").is_empty(),
+            "no Apple event was sent"
+        );
+        assert!(
+            !f.requests("permissions").is_empty(),
+            "the helper was asked again"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn accessibility_granted_while_the_helper_runs_is_seen() {
+        use scripted::*;
+        let f = fixture_trusting(
+            &[Capability::Observe],
+            &[],
+            &[
+                (
+                    "permissions",
+                    json!({"ax_trusted": true, "screen_access": false}),
+                ),
+                (
+                    "observe",
+                    json!({"observation": "o1", "window": window(), "nodes": [], "complete": true}),
+                ),
+            ],
+            false,
+            false,
+        );
+        let out = f.call(json!({"action": "observe", "app": APP})).await;
+        assert!(!out.text.starts_with("permission_denied"), "{}", out.text);
+        assert_eq!(f.requests("observe").len(), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn without_screen_recording_a_screenshot_is_refused_after_a_fresh_helper_checks() {
+        use scripted::*;
+        let f = fixture_trusting(
+            &[Capability::Observe],
+            &[Capability::Screen],
+            &[("screenshot", json!({}))],
+            true,
+            false,
+        );
+        // Straight to the helper request: the action itself first wants a
+        // place to keep the image.
+        let refused = f
+            .tool
+            .req("screenshot", json!({}), Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "permission_denied");
+        assert!(
+            refused.message.contains("Screen & System Audio Recording"),
+            "{}",
+            refused.message
+        );
+        assert!(f.requests("screenshot").is_empty());
+        // The first helper and the one started to look again.
+        assert_eq!(f.requests("hello").len(), 2);
     }
 
     #[cfg(target_os = "macos")]

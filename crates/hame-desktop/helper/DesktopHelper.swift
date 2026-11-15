@@ -58,6 +58,10 @@ func fail(_ code: String, _ message: String, _ details: [String: Any] = [:]) -> 
 let stateLock = NSLock()
 var cancelled = Set<Int>()
 var simulateUntrusted = false
+/// Who macOS charges for this helper's permissions, as the user knows it:
+/// the terminal (or editor) that runs hame, or the hame desktop app. Set by
+/// the handshake.
+var hostName = "the terminal or app that runs hame"
 var nextObservation = 1
 var savedClipboard: [[(NSPasteboard.PasteboardType, Data)]]? = nil
 
@@ -110,7 +114,7 @@ func axTrusted() -> Bool {
 func requireTrusted() throws {
     if !axTrusted() {
         throw fail("permission_denied",
-                   "Accessibility permission is not granted to this process. Grant it in System Settings > Privacy & Security > Accessibility to the terminal or app that runs hame, then restart hame.",
+                   "Accessibility permission is not granted to \(hostName). Grant it in System Settings > Privacy & Security > Accessibility, then try again.",
                    ["permission": "accessibility"])
     }
 }
@@ -1279,6 +1283,9 @@ func appleScriptString(_ s: String) -> String {
 /// Creates a new document, or opens a file, through the app's scripting
 /// dictionary, without activating the app; returns the window it shows.
 func scriptDocument(_ req: [String: Any]) throws -> [String: Any] {
+    // The new window is found through accessibility; without it the
+    // document would be made and then reported as missing.
+    try requireTrusted()
     guard let bundle = req["bundle_id"] as? String, let pidValue = req["pid"] as? Int,
           let mode = req["mode"] as? String else {
         throw fail("invalid", "script_document needs bundle_id, pid and mode.")
@@ -1971,7 +1978,7 @@ func png(_ image: CGImage) throws -> Data {
 func screenshot(_ req: [String: Any]) throws -> [String: Any] {
     if !CGPreflightScreenCaptureAccess() || req["simulate_no_screen"] as? Bool == true {
         throw fail("permission_denied",
-                   "Screen Recording permission is not granted to this process. Grant it in System Settings > Privacy & Security > Screen & System Audio Recording to the terminal or app that runs hame, then restart hame.",
+                   "Screen Recording permission is not granted to \(hostName). Grant it in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.",
                    ["permission": "screen_recording"])
     }
     let maxEdge = (req["max_edge"] as? Int) ?? 0
@@ -2082,6 +2089,8 @@ func restoreClipboard() -> Bool {
 // MARK: - Waiting
 
 func wait(_ req: [String: Any], id: Int) throws -> [String: Any] {
+    // Every condition reads windows or elements through accessibility.
+    try requireTrusted()
     let until = req["until"] as? String ?? ""
     let timeout = Double(max(0, min((req["timeout_ms"] as? Int) ?? 5000, 60000))) / 1000.0
     let start = Date()
@@ -2169,7 +2178,7 @@ func wait(_ req: [String: Any], id: Int) throws -> [String: Any] {
 
 // MARK: - Dispatch
 
-let OPERATIONS = ["apps", "windows", "observe", "resolve", "focus_context", "hit_test", "press", "set_value", "focus", "select", "menu", "type",
+let OPERATIONS = ["apps", "permissions", "windows", "observe", "resolve", "focus_context", "hit_test", "press", "set_value", "focus", "select", "menu", "type",
                   "key", "screenshot", "click_at", "clipboard", "wait", "window_state", "cancel", "shutdown"]
 
 func handle(_ req: [String: Any]) {
@@ -2183,6 +2192,7 @@ func handle(_ req: [String: Any]) {
                 stateLock.lock(); nextObservation = max(1, first); stateLock.unlock()
             }
             if req["simulate_untrusted"] as? Bool == true { simulateUntrusted = true }
+            if let host = req["host"] as? String, !host.isEmpty { hostName = host }
             result = [
                 "manifest": [
                     "name": "hame-desktop-helper",
@@ -2224,8 +2234,11 @@ func handle(_ req: [String: Any]) {
                       "app": app.localizedName ?? ""]
         case "script_document":
             result = try scriptDocument(req)
+        case "permissions":
+            result = ["ax_trusted": axTrusted(), "screen_access": CGPreflightScreenCaptureAccess()]
         case "focus_context":
             // Only meaningful while the window would receive the input.
+            try requireTrusted()
             let (app, appEl, window, wid) = try resolveWindow(req)
             let t = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid,
                                            background: req["background"] as? Bool ?? false)
@@ -2234,6 +2247,7 @@ func handle(_ req: [String: Any]) {
             guard let x = req["x"] as? Double, let y = req["y"] as? Double else {
                 throw fail("invalid", "hit_test needs x and y in screen points.")
             }
+            try requireTrusted()
             let (_, appEl, window, _) = try resolveWindow(req)
             result = hitTest(appEl: appEl, window: window, point: CGPoint(x: x, y: y))
         case "display_names":
