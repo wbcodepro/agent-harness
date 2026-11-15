@@ -344,7 +344,11 @@ impl Decoder {
 
     fn finish(self) -> Result<Completion, LlmError> {
         self.outcome
-            .map(|(stop, usage)| Completion { stop, usage })
+            .map(|(stop, usage)| Completion {
+                stop,
+                usage,
+                meta: crate::CallMeta::default(),
+            })
             .ok_or_else(|| {
                 LlmError::Protocol("the stream ended before the response was complete".into())
             })
@@ -459,6 +463,7 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             Completion {
+                meta: Default::default(),
                 stop: StopReason::ToolUse,
                 usage: Usage {
                     input_tokens: 20,

@@ -539,6 +539,7 @@ impl Llm for DropsOnce {
             })
             .map_err(LlmError::Sink)?;
             Ok(Completion {
+                meta: Default::default(),
                 stop: StopReason::EndTurn,
                 usage: Usage::default(),
             })
@@ -594,6 +595,7 @@ impl Llm for TooLongOnce {
             })
             .map_err(LlmError::Sink)?;
             Ok(Completion {
+                meta: Default::default(),
                 stop: StopReason::EndTurn,
                 usage: Usage::default(),
             })

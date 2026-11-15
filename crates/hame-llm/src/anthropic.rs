@@ -517,6 +517,7 @@ impl Decoder {
             (true, Some(stop)) => Ok(Completion {
                 stop,
                 usage: self.usage,
+                meta: crate::CallMeta::default(),
             }),
             _ => Err(LlmError::Protocol(
                 "the stream ended before the message was complete".into(),
@@ -677,6 +678,7 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             Completion {
+                meta: Default::default(),
                 stop: StopReason::ToolUse,
                 usage: Usage {
                     input_tokens: 12,

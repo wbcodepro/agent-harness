@@ -48,10 +48,33 @@ impl From<History> for Request {
 }
 
 /// How a response ended, once its stream is complete.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Completion {
     pub stop: StopReason,
     pub usage: Usage,
+    /// Measurements of the call itself, for telemetry. Fields an adapter
+    /// cannot observe stay `None`: unknown, not zero.
+    pub meta: CallMeta,
+}
+
+/// What one model call cost on the wire, as the client observed it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CallMeta {
+    /// The model the provider says answered, when it says.
+    pub model: Option<String>,
+    /// Bytes of the HTTP request body actually sent.
+    pub request_bytes: Option<u64>,
+    /// Bytes of the response body received.
+    pub response_bytes: Option<u64>,
+    /// Images included in the request, and their encoded bytes before
+    /// base64.
+    pub images: Option<u32>,
+    pub image_bytes: Option<u64>,
+    /// Milliseconds from sending the request to the first streamed delta.
+    pub ttft_ms: Option<u64>,
+    /// The provider's usage object exactly as received, so normalized
+    /// fields can be audited against the provider's own definitions.
+    pub raw_usage: Option<serde_json::Value>,
 }
 
 pub type SinkError = Box<dyn std::error::Error + Send + Sync>;

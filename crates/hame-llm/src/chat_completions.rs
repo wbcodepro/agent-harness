@@ -382,6 +382,7 @@ impl Decoder {
         Ok(Completion {
             stop,
             usage: self.usage,
+            meta: crate::CallMeta::default(),
         })
     }
 }
@@ -517,6 +518,7 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             Completion {
+                meta: Default::default(),
                 stop: StopReason::ToolUse,
                 usage: Usage {
                     input_tokens: 40,

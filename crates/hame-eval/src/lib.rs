@@ -243,6 +243,7 @@ impl Llm for ScriptedLlm {
                 sink.delta(delta).map_err(LlmError::Sink)?;
             }
             Ok(Completion {
+                meta: Default::default(),
                 stop: response.stop,
                 usage: response.usage,
             })

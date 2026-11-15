@@ -37,6 +37,10 @@ pub enum Effect {
     Write,
     /// Runs arbitrary programs.
     Execute,
+    /// Acts on applications, browsers or the desktop outside the shell
+    /// sandbox. Governed by explicit grants rather than the sandbox; see
+    /// `hame_session::contract::Authorization`.
+    Control,
 }
 
 /// The model-facing outcome of a tool call. A tool reports its own failures
