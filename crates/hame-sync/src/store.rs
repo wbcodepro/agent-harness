@@ -245,10 +245,24 @@ impl HostStore {
         }
         check_private(&path)?;
         let text = std::fs::read_to_string(&path).map_err(|e| SyncError::io(&path, e))?;
-        Ok(text
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect())
+        // A damaged line is an error, never skipped: skipping it would
+        // silently un-revoke a device.
+        let mut entries = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry = serde_json::from_str(line).map_err(|_| {
+                SyncError::Store(format!(
+                    "{} line {} is damaged; repair it (it names a revoked device) or remove it \
+                     and revoke that device again",
+                    path.display(),
+                    n + 1
+                ))
+            })?;
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 
     fn append_revocations(&self, entries: &[RevokedKey]) -> Result<(), SyncError> {
@@ -256,10 +270,15 @@ impl HostStore {
             return Ok(());
         }
         let path = self.dir.join("revocations.log");
+        // A torn last line (a crash during an append) must not swallow the
+        // next entry: start on a new line.
+        let torn = std::fs::read(&path)
+            .map(|bytes| bytes.last().is_some_and(|b| *b != b'\n'))
+            .unwrap_or(false);
         let mut file = private_options(true)
             .open(&path)
             .map_err(|e| SyncError::io(&path, e))?;
-        let mut text = String::new();
+        let mut text = String::from(if torn { "\n" } else { "" });
         for entry in entries {
             text.push_str(&serde_json::to_string(entry).expect("serialises"));
             text.push('\n');
@@ -326,6 +345,24 @@ impl HostStore {
                 Some((metadata.modified().ok()?, metadata.len()))
             })
             .collect()
+    }
+
+    /// Makes this process the only `hame connect` for this home until the
+    /// returned lock is dropped (a second one would fight over the relay
+    /// connection and the counters).
+    pub fn lock_instance(&self) -> Result<StoreLock, SyncError> {
+        self.ensure_dir()?;
+        let path = self.dir.join("connect.lock");
+        let file = private_options(false)
+            .open(&path)
+            .map_err(|e| SyncError::io(&path, e))?;
+        match file.try_lock() {
+            Ok(()) => Ok(StoreLock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(SyncError::Store(
+                "another hame connect is running for this hame home".into(),
+            )),
+            Err(std::fs::TryLockError::Error(e)) => Err(SyncError::io(&path, e)),
+        }
     }
 
     pub fn relay(&self) -> Result<Option<RelayConfig>, SyncError> {
@@ -465,6 +502,51 @@ mod tests {
         assert!(!list.revoke("phone"));
         assert!(list.get("phone").is_none());
         assert!(list.add("phone2", "Phone", &phone, 5).is_err());
+    }
+
+    #[test]
+    fn a_torn_revocation_line_is_never_skipped_and_never_swallows_the_next() {
+        let home = tempfile::tempdir().unwrap();
+        let store = HostStore::new(home.path());
+        let phone = Identity::generate().public();
+        let tablet = Identity::generate().public();
+        store
+            .update_allowlist(|list| {
+                list.add("phone", "Phone", &phone, 1)?;
+                list.add("tablet", "Tablet", &tablet, 1)
+            })
+            .unwrap();
+        store
+            .update_allowlist(|list| Ok(list.revoke("phone")))
+            .unwrap();
+        // A crash in the middle of the next append.
+        let log = store.dir().join("revocations.log");
+        let mut text = std::fs::read_to_string(&log).unwrap();
+        text.push_str("{\"device\":\"tab");
+        std::fs::write(&log, &text).unwrap();
+        assert!(matches!(store.allowlist(), Err(SyncError::Store(_))));
+        // Repaired by hand (the torn line removed): the next append starts
+        // on its own line even after a torn one.
+        std::fs::write(&log, text.trim_end_matches("{\"device\":\"tab")).unwrap();
+        let mut unterminated = std::fs::read_to_string(&log).unwrap();
+        unterminated.pop();
+        std::fs::write(&log, unterminated).unwrap();
+        store
+            .update_allowlist(|list| Ok(list.revoke("tablet")))
+            .unwrap();
+        let revoked = store.revocations().unwrap();
+        assert_eq!(revoked.len(), 2);
+        assert!(store.allowlist().unwrap().devices.is_empty());
+    }
+
+    #[test]
+    fn one_connector_per_home() {
+        let home = tempfile::tempdir().unwrap();
+        let store = HostStore::new(home.path());
+        let first = store.lock_instance().unwrap();
+        assert!(store.lock_instance().is_err());
+        drop(first);
+        assert!(store.lock_instance().is_ok());
     }
 
     #[test]

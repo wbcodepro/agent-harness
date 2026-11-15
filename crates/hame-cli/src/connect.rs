@@ -61,7 +61,16 @@ fn display(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+/// Runs `hame connect`. Errors can carry text from the relay (its answers,
+/// JSON bodies), so they leave without control or bidirectional formatting
+/// characters.
 pub async fn connect(home: &Path, args: ConnectArgs) -> Result<ExitCode, String> {
+    connect_unchecked(home, args)
+        .await
+        .map_err(|message| printable(&message))
+}
+
+async fn connect_unchecked(home: &Path, args: ConnectArgs) -> Result<ExitCode, String> {
     let store = HostStore::new(home);
     match args.command {
         Some(ConnectCommand::Devices) => {
@@ -98,6 +107,9 @@ pub async fn connect(home: &Path, args: ConnectArgs) -> Result<ExitCode, String>
     }
 
     let sandbox = check_remote_policy(home)?;
+    // One connector per home: a second would fight over the relay
+    // connection and the counters.
+    let _instance = store.lock_instance().map_err(display)?;
     // The keys first: this refuses to go on with readable key files.
     let identity = store.identity().map_err(display)?;
     let name = args.name.clone().unwrap_or_else(host_name);
@@ -477,6 +489,28 @@ mod tests {
         let drawn = render_qr("hame-pair:v1?relay=https%3A%2F%2Fr&host=h&exp=1");
         assert!(drawn.lines().count() > 10);
         assert!(drawn.contains('█') || drawn.contains('▀') || drawn.contains('▄'));
+    }
+
+    #[tokio::test]
+    async fn errors_from_the_relay_reach_the_terminal_cleaned() {
+        let home = tempfile::tempdir().unwrap();
+        let args = ConnectArgs {
+            command: Some(ConnectCommand::Revoke {
+                device: "dev\u{202e}\u{9b}x".into(),
+            }),
+            relay: None,
+            pair: false,
+            show_uri: false,
+            publish_labels: false,
+            name: None,
+        };
+        // Rejected as an id; the point is the cleaned error path.
+        let message = connect(home.path(), args).await.unwrap_err();
+        assert!(!message.chars().any(|c| c.is_control() || c == '\u{202e}'));
+        assert_eq!(
+            printable("relay: 400 {\"error\":\"x\u{202e}\u{85}\u{1b}[2J\"}"),
+            "relay: 400 {\"error\":\"x[2J\"}"
+        );
     }
 
     #[test]
