@@ -1202,7 +1202,8 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
         }
         Thread.sleep(forTimeInterval: 0.1)
         let selected = elementsAttr(table, "AXSelectedCells").compactMap(cellAddress)
-        return ["selected_cells": selected, "requested": cells.count, "table": nameOf(table), "window": windowState(r)]
+        return ["selected_cells": selected, "requested": cells.count, "table": nameOf(table), "window": windowState(r),
+                "in_front": !(req["background"] as? Bool ?? false)]
     }
     guard let text = req["text"] as? String, !text.isEmpty else {
         throw fail("invalid", "select needs cell (on a table or cell) or text (on a text element).")

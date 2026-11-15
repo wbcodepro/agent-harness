@@ -99,6 +99,12 @@ pub struct ComputerConfig {
     /// `needs_foreground` (a background app does not carry them out).
     /// Off by default.
     pub desktop_background: bool,
+    /// A command that starts the desktop helper on another machine and
+    /// connects its standard input and output, e.g.
+    /// `["ssh", "-T", "mac-vm", "/opt/hame/hame-desktop-helper"]` for a
+    /// macOS virtual machine, so the agent uses that machine's screen and
+    /// input. Empty (the default) runs the helper here.
+    pub desktop_helper: Vec<String>,
 }
 
 /// How the browser tool shows pages to the model; see
@@ -127,6 +133,7 @@ impl Default for ComputerConfig {
             batch: true,
             observation: Observation::Semantic,
             desktop_background: false,
+            desktop_helper: Vec::new(),
         }
     }
 }
