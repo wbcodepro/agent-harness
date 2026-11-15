@@ -2941,6 +2941,7 @@ mod tests {
         assert!(!out.is_error, "{}", out.text);
     }
 
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn return_in_a_save_panel_needs_file_write_and_is_journalled_as_a_commit() {
         use scripted::*;
