@@ -29,11 +29,7 @@ pub fn run(home: &Path, command: SkillCommand) -> Result<ExitCode, String> {
     match command {
         SkillCommand::List => {
             let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-            let skills = hame_ext::skills::discover(&[
-                cwd.join(".hame/skills"),
-                cwd.join(".claude/skills"),
-                home.join("skills"),
-            ]);
+            let skills = hame_ext::skills::discover(&hame_ext::skills::default_roots(&cwd, home));
             for skill in skills {
                 println!(
                     "{}\t{}\t{}",

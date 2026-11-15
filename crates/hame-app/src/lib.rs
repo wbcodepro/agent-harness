@@ -681,11 +681,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
 
     // Extensions. One that fails to load is reported and left out; the
     // rest of the agent still works.
-    let mut skill_roots = vec![
-        cwd.join(".hame/skills"),
-        cwd.join(".claude/skills"),
-        home.join("skills"),
-    ];
+    let mut skill_roots = hame_ext::skills::default_roots(cwd, home);
     skill_roots.extend(claude_plugins.iter().map(|plugin| plugin.skills_root()));
     let skills = hame_ext::skills::discover(&skill_roots);
     if !skills.is_empty() && config.model.tools == ToolProfile::Full {
@@ -1094,7 +1090,7 @@ fn rename_guard(rules: Vec<hame_policy::Rule>) -> hame_ext::lsp::PathGuard {
 
 /// hame's own tools beyond files, search and the shell. A `minimal` tool
 /// profile leaves them out.
-const OPTIONAL_TOOLS: [&str; 9] = [
+const OPTIONAL_TOOLS: [&str; 10] = [
     "repo_map",
     "subagent",
     "skill",
@@ -1104,6 +1100,7 @@ const OPTIONAL_TOOLS: [&str; 9] = [
     "task_create",
     "task_update",
     "task_list",
+    "task_claim",
 ];
 
 struct Models {

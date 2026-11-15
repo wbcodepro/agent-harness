@@ -15,6 +15,9 @@ pub struct Skill {
     pub description: String,
     pub dir: PathBuf,
     body: String,
+    /// `disable-model-invocation: true` in the front matter: the skill runs
+    /// only when the user asks for it, so the model is not told about it.
+    pub model_invocable: bool,
 }
 
 fn parse(dir: &Path, text: &str) -> Option<Skill> {
@@ -32,6 +35,7 @@ fn parse(dir: &Path, text: &str) -> Option<Skill> {
         description: field("description")?,
         dir: dir.to_path_buf(),
         body: body.trim_start_matches('\n').trim_end().to_string(),
+        model_invocable: field("disable-model-invocation").is_none_or(|v| v != "true"),
     })
 }
 
@@ -43,6 +47,23 @@ pub fn parse_skill(dir: &Path, text: &str) -> Option<Skill> {
 
 /// Finds skills under each root (`<root>/<name>/SKILL.md`). Earlier roots
 /// win when two skills share a name.
+/// Where skills are looked for, first match of a name winning: the
+/// project's `.hame/skills`, `.claude/skills` and `.agents/skills` (where
+/// the `skills` installer used by many agents puts them), then hame's own
+/// `<home>/skills` and the user's `~/.agents/skills`.
+pub fn default_roots(cwd: &std::path::Path, home: &std::path::Path) -> Vec<PathBuf> {
+    let mut roots = vec![
+        cwd.join(".hame/skills"),
+        cwd.join(".claude/skills"),
+        cwd.join(".agents/skills"),
+        home.join("skills"),
+    ];
+    if let Some(user) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(user).join(".agents/skills"));
+    }
+    roots
+}
+
 pub fn discover(roots: &[PathBuf]) -> Vec<Skill> {
     let mut skills: Vec<Skill> = Vec::new();
     for root in roots {
@@ -75,7 +96,11 @@ pub fn prompt_section(skills: &[Skill]) -> String {
         "\n\n# Skills\n\nThese skills hold instructions for specific kinds of task. When a task \
          matches one, call the skill tool with its name before starting, and follow what it says.\n",
     );
-    for skill in skills {
+    let listed: Vec<&Skill> = skills.iter().filter(|s| s.model_invocable).collect();
+    if listed.is_empty() {
+        return String::new();
+    }
+    for skill in listed {
         out.push_str(&format!("- {}: {}\n", skill.name, skill.description));
     }
     out
@@ -142,6 +167,46 @@ impl Tool for SkillTool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_skill_reserved_for_the_user_is_not_offered_to_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let only_user = parse(
+            dir.path(),
+            "---\nname: deploy\ndescription: Deploy.\ndisable-model-invocation: true\n---\nGo.",
+        )
+        .unwrap();
+        let open = parse(
+            dir.path(),
+            "---\nname: tdd\ndescription: Test first.\n---\nGo.",
+        )
+        .unwrap();
+        assert!(!only_user.model_invocable && open.model_invocable);
+        let section = prompt_section(&[only_user.clone(), open]);
+        assert!(
+            section.contains("tdd") && !section.contains("deploy"),
+            "{section}"
+        );
+        assert_eq!(prompt_section(&[only_user]), "");
+    }
+
+    #[test]
+    fn skills_installed_for_every_agent_are_found_too() {
+        let cwd = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let roots = default_roots(cwd.path(), home.path());
+        assert_eq!(roots[0], cwd.path().join(".hame/skills"));
+        assert!(roots.contains(&cwd.path().join(".agents/skills")));
+        let dir = cwd.path().join(".agents/skills/grill-me");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: grill-me\ndescription: Interview the user about a plan.\n---\nAsk.\n",
+        )
+        .unwrap();
+        let found = discover(&roots);
+        assert!(found.iter().any(|s| s.name == "grill-me"), "{found:?}");
+    }
     use super::*;
     use std::fs;
 
