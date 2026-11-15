@@ -7,16 +7,18 @@
 
 mod anthropic;
 mod chat_completions;
+mod media;
 mod responses;
 #[cfg(test)]
 mod testing;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use anthropic::Anthropic;
 pub use chat_completions::ChatCompletions;
 pub use hame_kernel::BoxFuture;
 use hame_session::{ArtifactSource, Delta, History, Message, StopReason, ToolSpec, Usage};
+pub use media::{MAX_PDF_BYTES, ModelProfile, Provider};
 pub use responses::Responses;
 
 /// Everything one model call is built from.
@@ -75,6 +77,59 @@ pub struct CallMeta {
     /// The provider's usage object exactly as received, so normalized
     /// fields can be audited against the provider's own definitions.
     pub raw_usage: Option<serde_json::Value>,
+}
+
+/// What the adapter measured around one call, applied to the completion
+/// once the stream has ended.
+pub(crate) struct Measure {
+    pub request_bytes: u64,
+    pub images: u32,
+    pub image_bytes: u64,
+    pub response_bytes: u64,
+    /// When the request that got the answer was sent.
+    pub sent: Instant,
+    pub first_delta: Option<Duration>,
+}
+
+impl Measure {
+    pub fn new(request_bytes: usize, images: u32, image_bytes: u64, sent: Instant) -> Self {
+        Self {
+            request_bytes: request_bytes as u64,
+            images,
+            image_bytes,
+            response_bytes: 0,
+            sent,
+            first_delta: None,
+        }
+    }
+
+    pub fn apply(self, mut completion: Completion) -> Completion {
+        let meta = &mut completion.meta;
+        meta.request_bytes = Some(self.request_bytes);
+        meta.response_bytes = Some(self.response_bytes);
+        meta.images = Some(self.images);
+        meta.image_bytes = Some(self.image_bytes);
+        meta.ttft_ms = self
+            .first_delta
+            .map(|wait| u64::try_from(wait.as_millis()).unwrap_or(u64::MAX));
+        completion
+    }
+}
+
+/// Passes deltas on and notes when the first one arrived.
+pub(crate) struct Timed<'a> {
+    pub inner: &'a mut dyn DeltaSink,
+    pub sent: Instant,
+    pub first: Option<Duration>,
+}
+
+impl DeltaSink for Timed<'_> {
+    fn delta(&mut self, delta: Delta) -> Result<(), SinkError> {
+        if self.first.is_none() {
+            self.first = Some(self.sent.elapsed());
+        }
+        self.inner.delta(delta)
+    }
 }
 
 pub type SinkError = Box<dyn std::error::Error + Send + Sync>;
