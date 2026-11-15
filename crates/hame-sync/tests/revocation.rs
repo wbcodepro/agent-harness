@@ -58,7 +58,9 @@ async fn start_host(
     let work = home.join("work");
     std::fs::create_dir_all(&work).unwrap();
     let options = Options {
-        sandbox: Some(SandboxMode::DangerFullAccess),
+        // As `hame connect` builds remote sessions.
+        sandbox: Some(SandboxMode::WorkspaceWrite),
+        ask_before_changes: true,
         max_steps: 10,
         llm: Some(Arc::new(ScriptedLlm::new(Recording { responses }))),
         runner: Some(Arc::new(InProcess)),
@@ -254,7 +256,9 @@ async fn a_revoked_device_loses_its_streams_and_its_running_turn_at_once() {
     std::fs::create_dir_all(&work).unwrap();
     // A slow turn, so it is still running when the device is revoked.
     let options = Options {
-        sandbox: Some(SandboxMode::DangerFullAccess),
+        // As `hame connect` builds remote sessions.
+        sandbox: Some(SandboxMode::WorkspaceWrite),
+        ask_before_changes: true,
         max_steps: 10,
         llm: Some(Arc::new(
             ScriptedLlm::new(Recording {

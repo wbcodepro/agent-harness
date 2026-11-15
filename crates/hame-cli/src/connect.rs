@@ -1,13 +1,15 @@
 //! `hame connect`: makes this computer a host that signed-in apps can reach
 //! through the relay, end-to-end encrypted (docs/design/APPS-AND-SYNC.md).
 //!
-//! Remote policy, until hame-web enforces its own for requests marked with
-//! `RemoteCaller`: every session the connector's router builds asks before
+//! Remote policy: hame web applies its `[remote]` policy to every request
+//! the connector marks with `RemoteCaller` (session folders, no "Full
+//! access", no session-wide grants, approval answers bound to the call).
+//! On top of that, every session the connector's router builds asks before
 //! each call that is not read-only (`Options::ask_before_changes`: no `yes`,
-//! no reviewer model, no `[approval] default`, no allow rules), whatever the
-//! configuration says when the session is built; the sandbox mode is pinned
-//! at startup and the host refuses to start with full access; remote
-//! requests asking for full access are refused by the connector.
+//! no reviewer model, no `[approval] default`, no allow rules; a mode that
+//! denies still denies), whatever the configuration or the session's mode
+//! says; the sandbox mode is pinned at startup, and full access is refused
+//! unless `[remote] allow_full_access = true`.
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -134,10 +136,13 @@ async fn connect_unchecked(home: &Path, args: ConnectArgs) -> Result<ExitCode, S
 /// refused (interim, see the module documentation).
 fn check_remote_policy(home: &Path) -> Result<hame_app::SandboxMode, String> {
     let config = hame_app::load_config(home)?;
-    if config.sandbox.mode == hame_app::SandboxMode::DangerFullAccess {
+    if config.sandbox.mode == hame_app::SandboxMode::DangerFullAccess
+        && !config.remote.allow_full_access
+    {
         return Err(
             "the sandbox is configured for full access; hame connect does not give remote \
-             devices full access. Choose a confined sandbox mode to connect."
+             devices full access unless [remote] allow_full_access = true. Choose a confined \
+             sandbox mode to connect."
                 .into(),
         );
     }

@@ -103,32 +103,31 @@ message):
   allowlist; on `409 stale_version` the host publishes again above the
   relay's). Labels are left out unless `hame connect --publish-labels`.
 
-**Approvals**: the hame web API's approval event carries `tool_call_id`,
-`tool` and the exact `arguments`; the connector adds `args_sha256`, the
-sha256 of the arguments' canonical JSON (RFC 8785, `jcs` module; sync-js
-`canonicalJson`/`argsSha256`, shared vectors). The device shows the
-arguments and recomputes the hash (`approvalAnswer`). A remote answer must
-be `{id, allow, tool_call_id, args_sha256}` naming the question the
-connector relayed; anything else is answered 409 and never reaches the
-agent. A path that might reach the approval route in another form (query
-string variants are normalised; percent-encoded or otherwise odd forms) is
-refused.
+**Approvals**: hame web's approval event carries `tool_call_id`, `tool`,
+the exact `arguments` and `args_sha256`, the sha256 of the arguments'
+canonical JSON (RFC 8785). The canonical form has one implementation,
+`hame_web::jcs` (re-exported as `hame_sync::jcs`; sync-js
+`canonicalJson`/`argsSha256`; both vector suites run against it). The
+device shows the arguments and recomputes the hash (`approvalAnswer`).
+hame web's approval route requires `{id, allow, tool_call_id,
+args_sha256}` naming the question and refuses anything else, including a
+session-wide `always` from a remote device; the connector relays the
+event and the answer unchanged.
 
-**Interim remote policy** (until hame-web enforces its own for requests
-carrying `RemoteCaller`): `hame connect` builds every session of its
-router with `hame_app::Options::ask_before_changes`, so each call that is
-not read-only asks the user, whatever the configuration says when the
-session is built (`yes`, the reviewer model, `[approval] default` and
-allow rules are ignored; ask and deny rules apply); the sandbox mode is
-pinned at startup and full access is refused; the connector refuses any
-remote request whose body asks for full access (403) and limits each
-device to 32 running requests, 8 subscriptions, 2 artifact downloads and
-10 new sessions a minute. (hame-web still reads an artifact whole, at most
-64 MiB, before answering; streaming it with a cap belongs to its artifact
-route, which WP A owns. Loaded sessions are bounded by WP A's idle
-eviction after the rebase; until then by the per-minute limit.) When hame-web's policy lands, replace the `RemoteCaller` struct in
-`connector.rs` with its type (or convert in `mark_remote`) and move this
-policy to its `[remote]` settings, keeping the stricter default.
+**Remote policy**: hame web applies its `[remote]` policy to every request
+carrying `RemoteCaller` (session folders within `[remote] roots`, no "Full
+access", no session-wide grants, bound approval answers). On top of it,
+`hame connect` builds every session of its router with
+`hame_app::Options::ask_before_changes`, so each call that is not
+read-only asks the user, whatever the configuration or the session's mode
+says when the session is built (`yes`, the reviewer model, `[approval]
+default` and allow rules are ignored; ask and deny rules, and a mode that
+denies, apply). The sandbox mode is pinned at startup and full access is
+refused unless `[remote] allow_full_access = true`. The connector limits
+each device to 32 running requests, 8 subscriptions, 2 artifact downloads
+(read from hame web's streamed artifact route chunk by chunk, never
+buffered whole) and 10 new sessions a minute; loaded sessions are released
+by hame web's idle eviction (`[web] idle_seconds`).
 
 ## What the host connector exposes
 
@@ -142,11 +141,9 @@ chunks streamed as they are read (never buffered whole by the connector),
 hash-checked by the device against the content-addressed id. Plus two control frames for enrolled
 devices: `devices` and `revoke`. No shell, file or generic RPC.
 
-Every request the connector passes to the router carries a request
-extension `RemoteCaller { device_id, label }` (`connector::mark_remote`),
-which HTTP clients cannot set, so the web layer can apply a remote policy.
-Until hame-web exposes its own type, `RemoteCaller` is defined here; switch
-`mark_remote` to the hame-web type when it lands.
+Every request the connector passes to the router carries hame web's
+`RemoteCaller { device_id, label }` extension (`hame_web::mark_remote`,
+re-exported by `connector`), which HTTP clients cannot set.
 
 ## Files
 

@@ -31,7 +31,6 @@ use tokio::task::AbortHandle;
 use tower::ServiceExt;
 
 use crate::SyncError;
-use crate::approval::{PendingApprovals, approval_session, events_session, looks_like_approval};
 use crate::envelope::{Counter, Header, MAX_PLAINTEXT, Sealed, seal};
 use crate::frames::{BLOB_CHUNK, Frame};
 use crate::keys::{Identity, PublicIdentity, b64, hex, random32, unb64, unb64_32};
@@ -152,7 +151,6 @@ struct Inner {
     offer: Mutex<Option<PairingOffer>>,
     /// The offer used last, to refuse a second device answering it.
     spent: Mutex<Option<PairingOffer>>,
-    approvals: PendingApprovals,
     /// Artifact requests running, per device.
     artifacts: Mutex<HashMap<String, usize>>,
     prompt_limit: Mutex<Duration>,
@@ -194,7 +192,6 @@ impl Connector {
                 publish_labels: options.publish_labels,
                 offer: Mutex::new(None),
                 spent: Mutex::new(None),
-                approvals: PendingApprovals::default(),
                 artifacts: Mutex::new(HashMap::new()),
                 prompt_limit: Mutex::new(PAIRING_PROMPT_LIMIT),
                 tasks: Mutex::new(HashMap::new()),
@@ -326,27 +323,12 @@ pub fn clean_label(label: &str) -> String {
     }
 }
 
-/// Who a remote request comes from, attached to every request the
-/// connector passes to the hame web router as a request extension. It never
-/// comes from HTTP headers, so only the connector can set it; the web layer
-/// applies its remote policy to requests that carry it.
-///
-/// Integration point: when hame-web exposes its own `RemoteCaller` type,
-/// replace this struct with a re-export of it (or convert in
-/// [`mark_remote`]); nothing else changes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteCaller {
-    pub device_id: String,
-    pub label: String,
-}
-
-/// Marks a request as coming from an enrolled remote device.
-pub fn mark_remote(request: &mut Request<Body>, device_id: &str, label: &str) {
-    request.extensions_mut().insert(RemoteCaller {
-        device_id: device_id.into(),
-        label: label.into(),
-    });
-}
+/// Every request the connector passes to the router carries hame web's
+/// [`RemoteCaller`] extension ([`mark_remote`]), which HTTP cannot set; hame
+/// web applies its remote policy (`[remote]` in config.toml) to it:
+/// session folders, no "Full access", no session-wide grants, approval
+/// answers bound to the tool call and the canonical hash of its arguments.
+pub use hame_web::{RemoteCaller, mark_remote};
 
 /// A path the connector passes to the hame web API: under `/api/`, no
 /// traversal, no fragments, printable ASCII.
@@ -358,21 +340,6 @@ pub fn allowed_path(path: &str) -> bool {
         && !path.contains('\\')
         && !path.contains('#')
         && path.bytes().all(|b| b.is_ascii_graphic())
-}
-
-/// Whether a request body asks for full access anywhere (a mode change).
-/// Interim remote policy until hame-web enforces its own for
-/// [`RemoteCaller`]s: such requests are refused.
-pub fn asks_for_full_access(body: &Value) -> bool {
-    match body {
-        Value::String(s) => {
-            let s = s.to_ascii_lowercase().replace('_', "-");
-            s == "danger-full-access" || s == "full-access" || s == "yolo"
-        }
-        Value::Array(items) => items.iter().any(asks_for_full_access),
-        Value::Object(map) => map.values().any(asks_for_full_access),
-        _ => false,
-    }
 }
 
 impl Inner {
@@ -979,22 +946,9 @@ impl Inner {
         path: &str,
         body: Option<&Value>,
     ) -> Result<(), (u16, String)> {
-        match approval_session(path) {
-            Some(session) => {
-                let answer = body.cloned().unwrap_or(Value::Null);
-                self.approvals
-                    .take_matching(session, &answer)
-                    .map_err(|reason| (409, reason))?;
-            }
-            // Never let an approval through in a form not checked above.
-            None if looks_like_approval(path) => {
-                return Err((409, "this path is not served remotely".into()));
-            }
-            None => {}
-        }
-        if body.is_some_and(asks_for_full_access) {
-            return Err((403, "full access cannot be turned on remotely".into()));
-        }
+        // Approval answers, modes, grants and folders are hame web's to
+        // judge for a RemoteCaller; the connector limits only volume.
+        let _ = body;
         if method.eq_ignore_ascii_case("POST") && path.split('?').next() == Some("/api/sessions") {
             let mut created = self.created.lock().expect("created");
             let recent = created.entry(device.to_string()).or_default();
@@ -1274,7 +1228,6 @@ impl Inner {
                 .unwrap_or_default();
             return Err(format!("{}: {text}", status.as_u16()));
         }
-        let session = events_session(path).map(str::to_string);
         let mut body = response.into_body().into_data_stream();
         let mut buffer = String::new();
         let mut last_seq: i64 = -1;
@@ -1292,15 +1245,12 @@ impl Inner {
                     continue;
                 }
                 let data = data.join("\n");
-                let mut data: Value = serde_json::from_str(&data).unwrap_or(Value::String(data));
+                let data: Value = serde_json::from_str(&data).unwrap_or(Value::String(data));
                 if let Some(seq) = data["record"]["seq"].as_i64() {
                     last_seq = last_seq.max(seq);
                     if seq <= after {
                         continue;
                     }
-                }
-                if let Some(session) = &session {
-                    self.approvals.observe(session, &mut data);
                 }
                 self.send(
                     device,
@@ -1378,17 +1328,6 @@ mod tests {
         ] {
             assert!(!allowed_path(bad), "{bad}");
         }
-    }
-
-    #[test]
-    fn full_access_requests_are_recognised() {
-        assert!(asks_for_full_access(
-            &json!({"sandbox": "danger-full-access"})
-        ));
-        assert!(asks_for_full_access(&json!({"mode": ["x", "Full_Access"]})));
-        assert!(!asks_for_full_access(
-            &json!({"text": "please give full access to the docs"})
-        ));
     }
 
     #[tokio::test]

@@ -104,6 +104,7 @@ async fn turn(ask_before_changes: bool) -> (Vec<String>, bool) {
     .await;
     let mut kinds = Vec::new();
     let mut buffer = String::new();
+    let mut started = false;
     'outer: loop {
         let chunk = tokio::time::timeout(Duration::from_secs(20), stream.next())
             .await
@@ -118,7 +119,13 @@ async fn turn(ask_before_changes: bool) -> (Vec<String>, bool) {
             };
             let event: Value = serde_json::from_str(data).unwrap();
             let kind = event["kind"].as_str().unwrap_or("").to_string();
-            let ended = kind == "approval" || (kind == "turn" && event["state"] == "ended");
+            // The stream opens with the session's state; only an end after
+            // this turn started counts.
+            if kind == "turn" && event["state"] == "started" {
+                started = true;
+            }
+            let ended =
+                kind == "approval" || (started && kind == "turn" && event["state"] == "ended");
             kinds.push(kind);
             if ended {
                 break 'outer;

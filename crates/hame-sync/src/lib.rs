@@ -21,7 +21,7 @@ pub mod client;
 pub mod connector;
 pub mod envelope;
 pub mod frames;
-pub mod jcs;
+pub use hame_web::jcs;
 pub mod keys;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;

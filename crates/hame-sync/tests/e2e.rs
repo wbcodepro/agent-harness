@@ -76,7 +76,9 @@ async fn start_host(
     let work = home.join("work");
     std::fs::create_dir_all(&work).unwrap();
     let options = Options {
-        sandbox: Some(SandboxMode::DangerFullAccess),
+        // As `hame connect` builds remote sessions.
+        sandbox: Some(SandboxMode::WorkspaceWrite),
+        ask_before_changes: true,
         max_steps: 10,
         llm: Some(Arc::new(ScriptedLlm::new(Recording { responses }))),
         runner: Some(Arc::new(InProcess)),
@@ -260,15 +262,26 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
     assert_eq!(question["args_sha256"], hash.as_str());
     assert!(!dir.path().join("work/a.txt").exists());
 
-    // An answer naming other arguments, another call or nothing is refused.
+    // hame web sees the connector's requests as remote (RemoteCaller): an
+    // answer naming other arguments, another call or no hash is refused,
+    // and so is a session-wide "always allow".
     let approval = format!("/api/sessions/{session}/approval");
     for wrong in [
         json!({"id": question["id"], "allow": true, "tool_call_id": "c1", "args_sha256": "0".repeat(64)}),
         json!({"id": question["id"], "allow": true, "tool_call_id": "c2", "args_sha256": hash}),
-        json!({"id": question["id"], "allow": true}),
+        json!({"id": question["id"], "allow": true, "tool_call_id": "c1"}),
+        json!({"id": question["id"], "allow": true, "tool_call_id": "c1", "args_sha256": hash, "always": true}),
     ] {
-        let refused = phone.request("POST", &approval, Some(wrong)).await.unwrap();
-        assert_eq!(refused.status, 409, "{:?}", refused.body);
+        let refused = phone
+            .request("POST", &approval, Some(wrong.clone()))
+            .await
+            .unwrap();
+        assert!(
+            (400..500).contains(&refused.status),
+            "{wrong}: {} {:?}",
+            refused.status,
+            refused.body
+        );
     }
     assert!(!dir.path().join("work/a.txt").exists());
     // Nor can the check be dodged with a query string or an encoded path.
@@ -280,11 +293,15 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
             .request(
                 "POST",
                 &path,
-                Some(json!({"id": question["id"], "allow": true})),
+                Some(json!({"id": question["id"], "allow": true, "tool_call_id": "c1"})),
             )
             .await
             .unwrap();
-        assert_eq!(dodged.status, 409, "{path}: {:?}", dodged.body);
+        assert!(
+            (400..500).contains(&dodged.status),
+            "{path}: {:?}",
+            dodged.body
+        );
     }
     assert!(!dir.path().join("work/a.txt").exists());
     let answered = phone
@@ -314,16 +331,22 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
     assert_eq!(types.last(), Some(&"turn/end"));
     let last_seq = rest.iter().map(|(seq, _)| *seq).max().unwrap();
 
-    // Interim remote policy: no full access, a limit on new sessions.
+    // hame web's remote policy: no "Full access", no session outside the
+    // remote roots; the connector adds a limit on new sessions.
     let full = phone
         .request(
             "POST",
             "/api/sessions",
-            Some(json!({"sandbox": "danger-full-access"})),
+            Some(json!({"mode": "full-access"})),
         )
         .await
         .unwrap();
     assert_eq!(full.status, 403, "{:?}", full.body);
+    let outside = phone
+        .request("POST", "/api/sessions", Some(json!({"cwd": "/"})))
+        .await
+        .unwrap();
+    assert_eq!(outside.status, 403, "{:?}", outside.body);
     let mut limited = false;
     for _ in 0..hame_sync::connector::SESSIONS_PER_MINUTE {
         let created = phone
