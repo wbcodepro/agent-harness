@@ -73,6 +73,7 @@ impl Computer {
             let mut browser = BrowserConfig::for_home(home, authorization.clone());
             browser.headless = config.computer.headless;
             browser.batch = config.computer.batch;
+            browser.screenshot_observations = config.computer.observation == "screenshot";
             if let Some(dir) = &config.computer.profiles_dir {
                 browser.profile_root = dir.clone();
             }

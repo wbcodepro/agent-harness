@@ -5,7 +5,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.environ["HAME_SUITE_DIR"], "fixture"))
-from pilot import fail, ok, plain_text  # noqa: E402
+from pilot import fail, ok, plain_text, strays  # noqa: E402
+
+if strays():
+    fail(f"saved outside the requested folder: {strays()}")
 
 folder = os.path.join(os.environ["HAME_OUTBOX"], "notes")
 files = sorted(os.listdir(folder))

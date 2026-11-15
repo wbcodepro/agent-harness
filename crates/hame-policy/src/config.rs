@@ -81,6 +81,12 @@ pub struct ComputerConfig {
     /// known steps without a model round trip. On by default; turning it
     /// off is for measuring what batching saves.
     pub batch: bool,
+    /// How browser observations reach the model: `semantic` (the
+    /// accessibility tree as text, the default) or `screenshot` (a viewport
+    /// screenshot with only actionable elements listed, and no `extract`),
+    /// for measuring what vision costs. `screenshot` needs the Screen
+    /// capability in a browser grant.
+    pub observation: String,
 }
 
 impl Default for ComputerConfig {
@@ -93,6 +99,7 @@ impl Default for ComputerConfig {
             browser_channel: None,
             grants: Vec::new(),
             batch: true,
+            observation: "semantic".into(),
         }
     }
 }
@@ -680,5 +687,8 @@ mod computer_tests {
         assert!(config.computer.batch, "batching is on unless turned off");
         let off = Config::parse("[computer]\nbatch = false").unwrap();
         assert!(!off.computer.batch);
+        assert_eq!(config.computer.observation, "semantic");
+        let visual = Config::parse("[computer]\nobservation = \"screenshot\"").unwrap();
+        assert_eq!(visual.computer.observation, "screenshot");
     }
 }

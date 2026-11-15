@@ -46,6 +46,23 @@ pub(crate) fn spec_without_batch() -> ToolSpec {
     spec
 }
 
+/// Takes `extract` out of a declaration: with screenshot observations the
+/// page is read from images, not pulled out as text.
+pub(crate) fn without_extract(spec: &mut ToolSpec) {
+    let schema = &mut spec.input_schema["properties"];
+    if let Some(actions) = schema["action"]["enum"].as_array_mut() {
+        actions.retain(|a| a != "extract");
+    }
+    if let Some(text) = schema["action"]["description"].as_str() {
+        schema["action"]["description"] = text
+            .replace(
+                " | extract(ref or selector; next+max_pages to follow pagination)",
+                "",
+            )
+            .into();
+    }
+}
+
 pub(crate) fn spec() -> ToolSpec {
     ToolSpec {
         name: BROWSER_TOOL.into(),

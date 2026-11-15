@@ -5,7 +5,10 @@ import sys
 import unicodedata
 
 sys.path.insert(0, os.path.join(os.environ["HAME_SUITE_DIR"], "fixture"))
-from pilot import fail, ok, plain_text  # noqa: E402
+from pilot import fail, ok, plain_text, strays  # noqa: E402
+
+if strays():
+    fail(f"saved outside the requested folder: {strays()}")
 
 WANT = "Biên bản họp ngày 15/11: Đã thống nhất kế hoạch quý IV; người phụ trách: Nguyễn Thị Hằng."
 folder = os.path.join(os.environ["HAME_OUTBOX"], "vi")

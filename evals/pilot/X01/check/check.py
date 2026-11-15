@@ -8,7 +8,10 @@ from collections import defaultdict
 from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.environ["HAME_SUITE_DIR"], "fixture"))
-from pilot import fail, ok, plain_text, run_file, state, textedit_windows  # noqa: E402
+from pilot import fail, ok, plain_text, run_file, state, strays, textedit_windows  # noqa: E402
+
+if strays():
+    fail(f"saved outside the requested folder: {strays()}")
 
 s = state()
 report = s["report"]

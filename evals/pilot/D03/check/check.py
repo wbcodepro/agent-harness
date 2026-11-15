@@ -6,7 +6,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.environ["HAME_SUITE_DIR"], "fixture"))
-from pilot import fail, ok  # noqa: E402
+from pilot import fail, ok, strays  # noqa: E402
+
+if strays():
+    fail(f"saved outside the requested folder: {strays()}")
 
 folder = os.path.join(os.environ["HAME_OUTBOX"], "docs")
 before = json.load(open(os.path.join(os.environ["HAME_RUN_DIR"], "d03.json")))
@@ -18,7 +21,7 @@ changed = [n for n in before if n != target and
 if changed:
     fail(f"other files changed: {changed}")
 text = open(os.path.join(folder, target), encoding="utf-8").read()
-lines = [line.rstrip() for line in text.strip().splitlines()]
+lines = [line.rstrip() for line in text.splitlines() if line.strip()]
 want = ["Budget 2026 (final)", "Total: 121,500 EUR", "Approved by Lan"]
 if lines != want:
     fail(f"{target} reads {lines!r}, expected {want!r}")

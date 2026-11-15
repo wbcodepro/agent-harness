@@ -5,7 +5,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.environ["HAME_SUITE_DIR"], "fixture"))
-from pilot import fail, ok, plain_text, run_file, textedit_windows  # noqa: E402
+from pilot import fail, ok, plain_text, run_file, strays, textedit_windows  # noqa: E402
+
+if strays():
+    fail(f"saved outside the requested folder: {strays()}")
 
 WANT = "Shipment 7 checked: 12 boxes, no damage."
 decoy = open(run_file("decoy.id")).read().strip()

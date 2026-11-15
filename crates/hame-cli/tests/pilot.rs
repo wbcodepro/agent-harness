@@ -80,6 +80,8 @@ impl TaskEnv {
                 .arg(command)
                 .envs(vars.iter().map(|(k, v)| (*k, v)))
                 .env("HAME_FIXTURE_TOKEN", &token)
+                // The fixture's deliberate delays, shortened for this test.
+                .env("PILOT_DELAY_SCALE", "0.05")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .spawn()

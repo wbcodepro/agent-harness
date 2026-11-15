@@ -63,17 +63,39 @@ pub const BLOCKER_MARKERS: &[&str] = &[
     "chưa thể",
     "không làm được",
     "chưa hoàn thành",
+    "i did not ",
+    "i didn't ",
+    "was not saved",
+    "is unchanged",
+    "unconfirmed",
 ];
+
+/// How much of the final answer is read for a blocker: its lead, up to the
+/// first blank line. Answers open with their outcome; a later "my first
+/// try could not open the dialog" describes a problem that was overcome,
+/// and reading it as a blocker would hide a false success.
+const LEAD_CHARS: usize = 600;
+
+fn lead(text: &str) -> &str {
+    let text = text.trim_start();
+    let end = text.find("\n\n").unwrap_or(text.len());
+    let mut end = end.min(LEAD_CHARS);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
 
 /// Whether the agent claimed to have done the task.
 ///
 /// A claim is: the agent exited normally, its last turn ended `completed`
-/// (not failed, cancelled, interrupted or out of steps), and its final
-/// answer does not contain one of [`BLOCKER_MARKERS`]. An agent that says
-/// "I could not make the tests pass" has reported a blocker, not claimed
-/// success; one that stops without a word has claimed it by stopping.
+/// (not failed, cancelled, interrupted or out of steps), and the lead of
+/// its final answer (up to the first blank line) does not contain one of
+/// [`BLOCKER_MARKERS`]. An agent that says "I could not make the tests
+/// pass" has reported a blocker, not claimed success; one that stops
+/// without a word has claimed it by stopping.
 pub fn claims_success(exited_ok: bool, last_turn_completed: bool, final_text: &str) -> bool {
-    let text = final_text.to_lowercase();
+    let text = lead(final_text).to_lowercase();
     exited_ok && last_turn_completed && !BLOCKER_MARKERS.iter().any(|marker| text.contains(marker))
 }
 
@@ -410,9 +432,13 @@ pub const PAIRED_METRICS: &[&str] = &[
     "total_ms",
     "uncached_input",
     "cached_input",
+    "cache_write",
     "output",
     "model_calls",
+    "request_bytes",
+    "image_bytes",
     "billed_cost",
+    "false_success",
 ];
 
 fn metric(record: &RunRecord, name: &str) -> Option<f64> {
@@ -425,7 +451,15 @@ fn metric(record: &RunRecord, name: &str) -> Option<f64> {
         "total_ms" => Some(record.total_ms),
         "uncached_input" => record.uncached_input.map(|v| v as f64),
         "cached_input" => record.cached_input.map(|v| v as f64),
+        "cache_write" => record.cache_write.map(|v| v as f64),
         "output" => record.output.map(|v| v as f64),
+        "request_bytes" => record.request_bytes.map(|v| v as f64),
+        "image_bytes" => record.image_bytes.map(|v| v as f64),
+        "false_success" => Some(if record.outcome == Outcome::FalseSuccess {
+            1.0
+        } else {
+            0.0
+        }),
         "model_calls" => record.model_calls.map(|v| v as f64),
         "billed_cost" => record.billed_cost,
         _ => None,
@@ -575,6 +609,24 @@ mod tests {
         assert!(!claims_success(true, true, "Tôi không thể sửa lỗi này."));
         assert!(!claims_success(true, false, "Done."));
         assert!(!claims_success(false, true, "Done."));
+        // The outcome is in the lead; a difficulty overcome later is not a
+        // blocker.
+        assert!(claims_success(
+            true,
+            true,
+            "I added the line and saved the file in place.\n\nWhat happened: my first try \
+             could not open the dialog, so I used another way."
+        ));
+        assert!(!claims_success(
+            true,
+            true,
+            "I did not add the line. The dialog never opened.\n\nDetails follow."
+        ));
+        assert!(!claims_success(
+            true,
+            true,
+            "The document is saved, but I could not check the file on disk."
+        ));
     }
 
     #[test]

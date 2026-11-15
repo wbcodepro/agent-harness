@@ -6,6 +6,8 @@
 //   axtool press-sheet <bundle> <button> press a button in the first sheet that has it
 //   axtool close <bundle> <window-id>    close a window, discarding changes
 //   axtool raise <bundle> <window-id>    bring a window and its app to the front
+//   axtool press <bundle> <window-id> <button>  press a button in a window
+//   axtool menu <bundle> <menu> <item>   choose a menu bar item, e.g. File New
 //   axtool frontmost                     bundle id of the frontmost app
 //   axtool quit <bundle>                 ask the app to quit; force it after 5 s
 //
@@ -25,6 +27,8 @@ func attr(_ e: AXUIElement, _ name: String) -> CFTypeRef? {
 
 func str(_ e: AXUIElement, _ name: String) -> String? {
     if let v = attr(e, name) {
+        // AXDocument is a file URL string.
+        if let s = v as? String, s.hasPrefix("file://"), let url = URL(string: s) { return url.path }
         if let s = v as? String { return s }
         if let u = v as? URL { return u.path }
     }
@@ -126,8 +130,11 @@ case "close":
         if let s = sheets(w).first {
             for name in ["Delete", "Don’t Save", "Don't Save", "Revert Changes", "Cancel"]
             where pressButton(in: s, named: name) { break }
-        } else if let close = attr(w, kAXCloseButtonAttribute) {
-            _ = AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString)
+        } else if let close = attr(w, kAXCloseButtonAttribute),
+                  AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString) == .success {
+        } else {
+            // Panels such as Open have no close button, only Cancel.
+            _ = pressButton(in: w, named: "Cancel")
         }
         usleep(400_000)
     }
@@ -141,6 +148,18 @@ case "raise":
     _ = AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
     running.activate(options: [])
     exit(0)
+case "press":
+    let (bundle, target, name) = (args[2], CGWindowID(args[3]) ?? 0, args[4])
+    guard let (_, w) = windows(bundle).first(where: { $0.0 == target }) else { exit(1) }
+    exit(pressButton(in: w, named: name) ? 0 : 1)
+case "menu":
+    guard let running = app(args[2]) else { exit(1) }
+    let root = AXUIElementCreateApplication(running.processIdentifier)
+    guard let bar = attr(root, kAXMenuBarAttribute) else { exit(1) }
+    let barItem = children(bar as! AXUIElement).first { str($0, kAXTitleAttribute) == args[3] }
+    guard let menu = barItem.flatMap({ children($0).first }) else { exit(1) }
+    guard let item = children(menu).first(where: { str($0, kAXTitleAttribute) == args[4] }) else { exit(1) }
+    exit(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success ? 0 : 1)
 case "frontmost":
     print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
 case "quit":
@@ -151,6 +170,7 @@ case "quit":
         usleep(100_000)
     }
     running.forceTerminate()
+    for _ in 0..<30 where !running.isTerminated { usleep(100_000) }
     exit(0)
 default:
     print("unknown command \(args[1])")
