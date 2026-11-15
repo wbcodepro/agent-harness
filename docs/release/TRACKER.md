@@ -89,7 +89,7 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 ### F — merged
 - [x] `hame workflow list|show|trust|untrust`, doctor checks; README/README.vi, CHANGELOG, SECURITY, CONTRIBUTING; INSTALL, SUPPORT-MATRIX, RELEASE-NOTES, RELEASE-INSTRUCTIONS, THIRD-PARTY-LICENSES, `sbom.cdx.json`, `scripts/license-report.py`, `scripts/release-check.sh`, `scripts/docker-clean-install.sh`, manual `release.yml` (never run). Version 0.1.0-rc.1.
 - [x] Clean install: macOS (340 pass), Linux arm64 Docker (339 pass). 432 crates; MPL-2.0 im-rc/bitmaps/sized-chunks (unmodified), WTFPL terminfo.
-- Unverified: Linux x86_64, macOS x86_64, Windows, MSRV 1.89, ACP image display in editors, OpenAI/PDF live paths. `command` predicate runs `sh -c` outside the sandbox (documented).
+- Unverified: Linux x86_64, macOS x86_64, Windows, MSRV 1.89, ACP image display in editors, OpenAI/PDF live paths.
 
 ## Test log
 

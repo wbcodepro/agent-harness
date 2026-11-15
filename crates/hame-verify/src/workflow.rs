@@ -105,6 +105,13 @@ impl Workflow {
         if workflow.postconditions.is_empty() {
             return Err("a workflow needs at least one postcondition".into());
         }
+        for predicate in workflow
+            .preconditions
+            .iter()
+            .chain(&workflow.postconditions)
+        {
+            predicate.validate()?;
+        }
         for (name, spec) in &workflow.params {
             if let Some(pattern) = &spec.pattern {
                 regex::Regex::new(pattern).map_err(|e| format!("param {name}: {e}"))?;
@@ -191,9 +198,27 @@ fn substitute_predicates(
         .iter()
         .map(|p| {
             let value = serde_json::to_value(p).map_err(|e| e.to_string())?;
-            serde_json::from_value(substitute(&value, params)?).map_err(|e| e.to_string())
+            // A parameter spliced into a shell command is one word, whatever
+            // it contains: the model supplies parameters.
+            let value = if matches!(p, Predicate::Command { .. }) {
+                let quoted: BTreeMap<String, String> = params
+                    .iter()
+                    .map(|(k, v)| (k.clone(), shell_quote(v)))
+                    .collect();
+                substitute(&value, &quoted)?
+            } else {
+                substitute(&value, params)?
+            };
+            let predicate: Predicate = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            predicate.validate()?;
+            Ok(predicate)
         })
         .collect()
+}
+
+/// `text` as a single POSIX shell word.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// The set of workflow file hashes the user has reviewed and trusted.
@@ -297,6 +322,8 @@ pub struct WorkflowTool {
     pub tools: ToolSet,
     pub pipeline: Arc<ToolPipeline>,
     pub probe: Option<Arc<dyn StateProbe>>,
+    /// Confines `command` pre- and postconditions.
+    pub confine: Option<crate::outcome::Confinement>,
     pub authorization: hame_session::contract::Authorization,
     /// Runs steps whose tool is not host-side, so they are confined as the
     /// model's own calls are. `None` runs them in this process.
@@ -353,7 +380,13 @@ impl WorkflowTool {
         };
         let pre = substitute_predicates(&workflow.preconditions, &params)?;
         if !pre.is_empty() {
-            let check = verify(&contract("pre", pre), &ctx.cwd, self.probe.as_deref()).await;
+            let check = verify(
+                &contract("pre", pre),
+                &ctx.cwd,
+                self.probe.as_deref(),
+                self.confine.as_ref(),
+            )
+            .await;
             if !check.passed {
                 report.stopped_at = "precondition".into();
                 report.text.push_str(&format!(
@@ -419,7 +452,13 @@ impl WorkflowTool {
             report.completed_steps += 1;
         }
         let post = substitute_predicates(&workflow.postconditions, &params)?;
-        let check = verify(&contract("post", post), &ctx.cwd, self.probe.as_deref()).await;
+        let check = verify(
+            &contract("post", post),
+            &ctx.cwd,
+            self.probe.as_deref(),
+            self.confine.as_ref(),
+        )
+        .await;
         report.passed = check.passed;
         if !check.passed {
             report.stopped_at = "postcondition".into();
@@ -534,8 +573,43 @@ text = "Xin chào {{who}}"
             tools,
             pipeline: Arc::new(ToolPipeline::new()),
             probe: None,
+            confine: None,
             authorization: Default::default(),
             runner: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn parameters_in_command_checks_stay_one_word() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let post = vec![Predicate::Command {
+            command: "test -s {{file}}".into(),
+            exit: 0,
+        }];
+        let hostile = format!("x; touch '{}'", marker.display());
+        let bound = substitute_predicates(&post, &params(&[("file", &hostile)])).unwrap();
+        let check = verify(&contract_of(bound), dir.path(), None, None).await;
+        assert!(!marker.exists(), "the parameter ran as a command");
+        assert!(!check.passed, "test -s on a missing file passed");
+        // Quotes inside the value do not end the word either.
+        let bound = substitute_predicates(&post, &params(&[("file", "a'; touch b; '")])).unwrap();
+        let _ = verify(&contract_of(bound), dir.path(), None, None).await;
+        assert!(!dir.path().join("b").exists());
+        // An empty condition in a workflow file is refused when it is read.
+        let vacuous = FLOW.replace("text = \"Xin chào {{who}}\"", "text = \"\"");
+        assert!(Workflow::parse(&vacuous).unwrap_err().contains("empty"));
+    }
+
+    fn contract_of(acceptance: Vec<Predicate>) -> hame_session::contract::TaskContract {
+        hame_session::contract::TaskContract {
+            version: 1,
+            id: "t".into(),
+            outcome: "t".into(),
+            constraints: vec![],
+            acceptance,
+            authorization: Default::default(),
+            budget: Default::default(),
         }
     }
 

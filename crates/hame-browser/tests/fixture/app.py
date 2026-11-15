@@ -210,6 +210,16 @@ def promo_page():
 <p><a href="/form">Back to the order form</a></p>""")
 
 
+DOWNLOADS = [("Plain", "report.txt"), ("Parent", "../escape.txt"), ("Hidden", ".envrc"),
+             ("Nested", "a/b.txt"), ("Backslash", "..\\win.txt")]
+
+
+def files_page():
+    links = "".join(f'<li><a href="/file?{urlencode({"name": name})}">{label}</a></li>'
+                    for label, name in DOWNLOADS)
+    return page("Files", f"<h1>Files</h1><ul>{links}</ul>")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -287,6 +297,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_body(hidden_page())
         if path == "/promo":
             return self.send_body(promo_page())
+        if path == "/files":
+            return self.send_body(files_page())
+        if path == "/file":
+            # The name the page suggests goes out as sent, hostile or not.
+            name = query.get("name", ["file.txt"])[0]
+            return self.send_body(f"content of {name}\n", ctype="text/plain; charset=utf-8",
+                                  headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        if path == "/redirect":
+            # Any Location, verbatim: backslashes, extra slashes and all.
+            self.send_response(302)
+            self.send_header("Location", query.get("to", ["/"])[0])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
         if path == "/go-evil":
             self.send_response(302)
             self.send_header("Location", "https://evil.example/landing")

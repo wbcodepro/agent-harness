@@ -119,11 +119,13 @@ impl ApprovalLayer {
         // A tool that acts on applications is governed by the grants in
         // `[computer]`, which its adapter enforces per target and
         // capability; asking about every click would defeat a standing
-        // scope. A rule can still ask about or deny it.
-        let fallback = if matches!(request.effect, Effect::ReadOnly | Effect::Control) {
-            RuleAction::Allow
-        } else {
-            self.default
+        // scope. That holds when the default is to ask; a default of deny
+        // (or allow) is the user's choice and applies to it as to any other
+        // tool. A rule can still ask about or deny it.
+        let fallback = match request.effect {
+            Effect::ReadOnly => RuleAction::Allow,
+            Effect::Control if self.default == RuleAction::Ask => RuleAction::Allow,
+            _ => self.default,
         };
         let whole = self.rule_for(request, subject);
         if request.name == "apply_patch" {
@@ -229,6 +231,27 @@ mod tests {
     use hame_kernel::Chain;
     use serde_json::json;
     use std::sync::Mutex;
+
+    #[test]
+    fn application_tools_follow_a_deny_default_but_are_not_asked_about() {
+        let layer = |default| ApprovalLayer {
+            rules: vec![],
+            default,
+            prompter: Arc::new(Scripted {
+                answer: None,
+                asked: Mutex::new(vec![]),
+            }),
+        };
+        let click = ToolRequest {
+            call_id: "c".into(),
+            name: "browser".into(),
+            input: json!({"action": "act"}),
+            effect: Effect::Control,
+        };
+        assert_eq!(layer(RuleAction::Ask).decide(&click), RuleAction::Allow);
+        assert_eq!(layer(RuleAction::Deny).decide(&click), RuleAction::Deny);
+        assert_eq!(layer(RuleAction::Allow).decide(&click), RuleAction::Allow);
+    }
 
     #[test]
     fn globs_match_literally_except_for_stars() {

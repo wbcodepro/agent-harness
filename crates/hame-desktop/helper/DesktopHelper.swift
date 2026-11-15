@@ -21,7 +21,7 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-let HELPER_PROTOCOL = 1
+let HELPER_PROTOCOL = 2
 let HELPER_VERSION = "0.1.0"
 
 @_silgen_name("_AXUIElementGetWindow")
@@ -717,6 +717,126 @@ func inDialog(_ e: AXUIElement) -> Bool {
     return false
 }
 
+/// Whether `e` is a sheet, a dialog, or an open or save panel window.
+func isDialogLike(_ e: AXUIElement) -> Bool {
+    let role = roleOf(e).0 ?? ""
+    let sub = strAttr(e, kAXSubroleAttribute) ?? ""
+    let ident = strAttr(e, kAXIdentifierAttribute) ?? ""
+    return role == "AXSheet" || sub == "AXDialog" || sub == "AXSystemDialog"
+        || ident == "open-panel" || ident == "save-panel"
+}
+
+/// Whether a sheet, dialog or panel is a save panel: it has the name field
+/// every NSSavePanel has.
+func isSavePanel(_ e: AXUIElement) -> Bool {
+    if strAttr(e, kAXIdentifierAttribute) == "save-panel" { return true }
+    return findFirst(e, limit: 600) { el in
+        strAttr(el, kAXIdentifierAttribute) == "saveAsNameTextField"
+    } != nil
+}
+
+/// What surrounds an element: whether it is inside any sheet, dialog or
+/// panel, all the way up to its window (a Go To Folder sheet on a save sheet
+/// is inside both), and whether any of them is a save panel. `windows` are
+/// checked too, with the sheets attached to them: keys go to a sheet while
+/// one is open. Used to decide what Return, Space or a click may do there.
+func surroundings(_ e: AXUIElement?, windows: [AXUIElement]) -> (inDialog: Bool, savePanel: Bool) {
+    var inDialog = false
+    var savePanel = false
+    var visited: [AXUIElement] = []
+    func consider(_ c: AXUIElement) {
+        if visited.contains(where: { CFEqual($0, c) }) { return }
+        visited.append(c)
+        if isDialogLike(c) {
+            inDialog = true
+            if !savePanel && isSavePanel(c) { savePanel = true }
+        }
+    }
+    var cursor = e
+    var hops = 0
+    while let c = cursor, hops < 80 {
+        consider(c)
+        let role = roleOf(c).0 ?? ""
+        if role == "AXWindow" || role == "AXApplication" { break }
+        cursor = elementAttr(c, kAXParentAttribute)
+        hops += 1
+    }
+    for w in windows {
+        consider(w)
+        for sheet in sheetsOf(w) {
+            inDialog = true
+            consider(sheet)
+        }
+    }
+    return (inDialog, savePanel)
+}
+
+/// Where keyboard input would go: the focused element's role, name and a
+/// short value, and its surroundings. `known` is false when nothing has
+/// focus (or it cannot be read); the Rust side then requires the stricter
+/// capabilities.
+func focusContext(_ e: AXUIElement?, windows: [AXUIElement]) -> [String: Any] {
+    let s = surroundings(e, windows: windows)
+    var out: [String: Any] = ["known": false, "in_dialog": s.inDialog, "save_panel": s.savePanel]
+    guard let e = e, let role = roleOf(e).0, !role.isEmpty else { return out }
+    out["known"] = true
+    out["role"] = role
+    out["subrole"] = strAttr(e, kAXSubroleAttribute) ?? ""
+    out["name"] = nameOf(e)
+    if role != "AXSecureTextField" { out["value"] = valueString(e, limit: 200) ?? "" }
+    return out
+}
+
+func describeContext(_ c: [String: Any]) -> String {
+    if c["known"] as? Bool == false { return "nothing focused" }
+    var text = "\(c["role"] as? String ?? "?") \"\(c["name"] as? String ?? "")\""
+    if c["save_panel"] as? Bool == true { text += " in a save panel" }
+    else if c["in_dialog"] as? Bool == true { text += " in a dialog" }
+    return text
+}
+
+/// Refuses physical input when focus is no longer what the Rust side
+/// classified the input by (it decided which capabilities the input needs
+/// from that). Runs right before anything is sent.
+func checkContext(_ req: [String: Any], _ now: [String: Any]) throws {
+    guard let expect = req["expect_context"] as? [String: Any] else { return }
+    var same = now["known"] as? Bool == true
+    for key in ["role", "subrole"] where (expect[key] as? String ?? "") != (now[key] as? String ?? "") {
+        same = false
+    }
+    for key in ["in_dialog", "save_panel"] where (expect[key] as? Bool) != (now[key] as? Bool) {
+        same = false
+    }
+    if !same {
+        throw fail("interference",
+                   "Keyboard focus is not where it was when this input was authorized (was \(describeContext(expect)), now \(describeContext(now))); nothing was sent. Observe and try again.",
+                   ["dispatched": false])
+    }
+}
+
+/// The element under a point of `window` and its ancestors up to the
+/// window, innermost first, with the surroundings of the point.
+func hitTest(appEl: AXUIElement, window: AXUIElement, point: CGPoint) -> [String: Any] {
+    var hit: AXUIElement?
+    let err = AXUIElementCopyElementAtPosition(appEl, Float(point.x), Float(point.y), &hit)
+    var chain: [[String: Any]] = []
+    var inner: AXUIElement? = nil
+    if err == .success, let h = hit, attached(h, to: window) {
+        inner = h
+        var cursor: AXUIElement? = h
+        var hops = 0
+        while let c = cursor, hops < 40, !CFEqual(c, window) {
+            let role = roleOf(c).0 ?? ""
+            if role == "AXWindow" || role == "AXApplication" { break }
+            chain.append(["role": role, "subrole": strAttr(c, kAXSubroleAttribute) ?? "", "name": nameOf(c)])
+            cursor = elementAttr(c, kAXParentAttribute)
+            hops += 1
+        }
+    }
+    let s = surroundings(inner, windows: [window])
+    return ["chain": chain, "in_dialog": s.inDialog, "save_panel": s.savePanel]
+}
+
 /// Whether `e` is (still) inside `window`, following parents.
 func attached(_ e: AXUIElement, to window: AXUIElement) -> Bool {
     var cursor: AXUIElement? = e
@@ -832,6 +952,8 @@ func elementJSON(_ r: Resolved) -> [String: Any] {
         "in_dialog": inDialog(r.element),
         "save_panel": inSavePanel(r.element),
         "window": windowJSON(r.window, app: r.app, appEl: r.appEl) ?? [:],
+        // What typing into this element would meet once it has focus.
+        "context": focusContext(r.element, windows: [r.window]),
     ]
     if let v = valueString(r.element, limit: 100_000) { out["value"] = v }
     if let f = rectJSON(frameOf(r.element)) { out["frame"] = f }
@@ -1341,21 +1463,27 @@ func typeText(_ req: [String: Any], id: Int) throws -> [String: Any] {
     var appEl: AXUIElement
     var pid: pid_t
     var wid: CGWindowID
+    var topWindow: AXUIElement
     if hasElement {
         let r = try resolveElement(req)
         try checkExpected(r, req)
-        appEl = r.appEl; pid = r.app.processIdentifier; wid = r.windowID
+        appEl = r.appEl; pid = r.app.processIdentifier; wid = r.windowID; topWindow = r.window
         if boolAttr(r.element, kAXFocusedAttribute) != true {
             AXUIElementSetAttributeValue(r.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             Thread.sleep(forTimeInterval: 0.05)
         }
     } else {
-        let (app, ael, _, w) = try resolveWindow(req)
-        appEl = ael; pid = app.processIdentifier; wid = w
+        let (app, ael, w, id) = try resolveWindow(req)
+        appEl = ael; pid = app.processIdentifier; wid = id; topWindow = w
     }
     let size = max(1, min((req["chunk"] as? Int) ?? 8, 16))
     let delay = Double(max(0, min((req["delay_ms"] as? Int) ?? 12, 1000))) / 1000.0
     var target = try captureInputTarget(pid: pid, appEl: appEl, windowID: wid)
+    // Focus may not move while typing (checked before every chunk), so the
+    // focus checked here is the focus every newline and space will meet.
+    // The exceptions followEditor allows stay inside what the typing
+    // itself opened: the app's own editor for the element typed into.
+    try checkContext(req, focusContext(target.focus, windows: [target.focusedWindow, topWindow]))
     var startFocus = target.focus
     let hid = postsToHID(req, target)
     var baseCount = charCount(startFocus)
@@ -1418,6 +1546,8 @@ func pressKey(_ req: [String: Any], id: Int) throws -> [String: Any] {
     let target = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid)
     try checkCancelled(id)
     try checkInputTarget(target, emitted: "", checkFocus: false)
+    try checkContext(req, focusContext(elementAttr(appEl, kAXFocusedUIElementAttribute),
+                                       windows: [target.focusedWindow, window]))
     postKey(CGKeyCode(code), flags: flags, pid: app.processIdentifier, hid: postsToHID(req, target))
     Thread.sleep(forTimeInterval: 0.08)
     return ["pressed": req["label"] as? String ?? "", "window": windowJSON(window, app: app, appEl: appEl) ?? [:]]
@@ -1468,6 +1598,21 @@ func clickAt(_ req: [String: Any]) throws -> [String: Any] {
     guard let hit = windowAt(point), hit.0 == wid else {
         throw fail("interference", "Another window covers (\(x), \(y)); nothing was clicked.",
                    ["hit_window": Int(windowAt(point)?.0 ?? 0)])
+    }
+    // The Rust side decided which capabilities this click needs from the
+    // element it found under the point; it must still be that element.
+    if let expect = req["expect_hit"] as? [String: Any] {
+        let now = hitTest(appEl: appEl, window: window, point: point)
+        let first = (now["chain"] as? [[String: Any]])?.first
+        let role = first?["role"] as? String ?? ""
+        let name = first?["name"] as? String ?? ""
+        let wantRole = expect["role"] as? String ?? ""
+        let wantName = expect["name"] as? String ?? ""
+        if role != wantRole || name != wantName {
+            throw fail("stale_capture",
+                       "The element under (\(x), \(y)) changed since the click was authorized (was \(wantRole) \"\(wantName)\", now \(role) \"\(name)\"); nothing was clicked. Take a new screenshot.",
+                       ["dispatched": false])
+        }
     }
     let src = CGEventSource(stateID: .privateState)
     let restore = CGEvent(source: nil)?.location
@@ -1758,7 +1903,7 @@ func wait(_ req: [String: Any], id: Int) throws -> [String: Any] {
 
 // MARK: - Dispatch
 
-let OPERATIONS = ["apps", "windows", "observe", "resolve", "press", "set_value", "focus", "select", "menu", "type",
+let OPERATIONS = ["apps", "windows", "observe", "resolve", "focus_context", "hit_test", "press", "set_value", "focus", "select", "menu", "type",
                   "key", "screenshot", "click_at", "clipboard", "wait", "window_state", "cancel", "shutdown"]
 
 func handle(_ req: [String: Any]) {
@@ -1803,6 +1948,17 @@ func handle(_ req: [String: Any]) {
             let (app, appEl, window, _) = try resolveWindow(req)
             result = ["window": windowJSON(window, app: app, appEl: appEl) ?? [:],
                       "frontmost_pid": Int(frontmostPid() ?? 0)]
+        case "focus_context":
+            // Only meaningful while the window would receive the input.
+            let (app, appEl, window, wid) = try resolveWindow(req)
+            let t = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid)
+            result = focusContext(t.focus, windows: [t.focusedWindow, window])
+        case "hit_test":
+            guard let x = req["x"] as? Double, let y = req["y"] as? Double else {
+                throw fail("invalid", "hit_test needs x and y in screen points.")
+            }
+            let (_, appEl, window, _) = try resolveWindow(req)
+            result = hitTest(appEl: appEl, window: window, point: CGPoint(x: x, y: y))
         case "observe": result = try observe(req)
         case "resolve": result = elementJSON(try resolveElement(req))
         case "press": result = try press(req)

@@ -142,15 +142,15 @@ hame task task.toml --trace session          # ghi thêm trace.v1.jsonl cạnh l
 hame task task.toml --cwd ~/work/project --provider anthropic --model claude-haiku-5-5 --yes
 ```
 
-Các loại điều kiện (`kind`): `file_exists`, `file_absent` (`path`); `file_contains` (`path`, `text`, khớp chính xác, giữ nguyên Unicode); `file_sha256` (`path`, `sha256`); `json_value` (`path`, `pointer` theo RFC 6901, `equals`); `csv_shape` (`path`, `rows` không tính dòng tiêu đề, `columns`); `command` (`command`, `exit`, mặc định 0; do chính hame chạy bằng `sh -c` trong thư mục làm việc, **không** nằm trong sandbox, giới hạn 120 giây, nên chỉ đặt vào file tác vụ những lệnh bạn sẵn sàng tự chạy); `browser_state` (`url_contains`, `text_contains`, `profile`; đọc trang đang mở); `desktop_state` (`app` là bundle id, `window_title_contains`, `value_contains`; đọc ứng dụng đang chạy). Đường dẫn tính từ thư mục làm việc. File tác vụ không có điều kiện nghiệm thu bị từ chối, vì không thể kiểm chứng nó đã xong.
+Các loại điều kiện (`kind`): `file_exists`, `file_absent` (`path`); `file_contains` (`path`, `text`, khớp chính xác, giữ nguyên Unicode); `file_sha256` (`path`, `sha256`); `json_value` (`path`, `pointer` theo RFC 6901, `equals`); `csv_shape` (`path`, `rows` không tính dòng tiêu đề, `columns`); `command` (`command`, `exit`, mặc định 0; chạy bằng `sh -c` trong thư mục làm việc, trong cùng sandbox với các tool của agent, tắt mạng, chỉ có các biến môi trường cơ bản (không có thông tin xác thực), giới hạn 120 giây: agent có thể sửa những file mà lệnh đó chạy, như một bài test hay Makefile, nên bước kiểm không được nhiều quyền hơn agent; với `--sandbox danger-full-access` nó chạy không bị giam, như mọi thứ khác); `browser_state` (`url_contains`, `text_contains`, `profile`; đọc trang đang mở); `desktop_state` (`app` là bundle id, `window_title_contains`, `value_contains`; đọc ứng dụng đang chạy). Đường dẫn tính từ thư mục làm việc. File tác vụ không có điều kiện nghiệm thu bị từ chối, vì không thể kiểm chứng nó đã xong. Cũng bị từ chối: điều kiện không kiểm gì cả (`text`, `command` hay `path` rỗng; `browser_state` không có `url_contains` lẫn `text_contains`; `desktop_state` không có `window_title_contains` lẫn `value_contains`) và mọi trường viết sai hay không biết, trong điều kiện, quyền và ngân sách: `text_contians` là lỗi, không phải một điều kiện luôn đạt, và `orgin` là lỗi, không phải quyền cho mọi origin. `browser_state` có `profile` sẽ không đạt khi trình duyệt không xác nhận được profile. Tham số workflow chèn vào điều kiện `command` được quote cho shell, mỗi tham số là một từ.
 
-Agent được cho biết các điều kiện để nhắm tới; hame tự đánh giá chúng sau đó trên trạng thái thật. Khi agent kết thúc lượt mà còn điều kiện chưa đạt, nó bị gửi lại cùng bằng chứng của điều kiện hỏng, tối đa hai lần. `hame task` thoát 0 khi mọi điều kiện đạt, 1 khi có điều kiện không đạt (hoặc lượt bị lỗi), 130 khi bị ngắt. Log ghi `task/start` (hợp đồng tác vụ), `task/verified` (báo cáo) và các biên nhận thao tác. `max_steps`, `max_tokens`, `deadline_ms` và `max_cost_usd` được kiểm trước mỗi request tới model. Chi phí được tính theo bảng giá có ghi ngày, chỉ gồm các model Anthropic; khi đặt ngân sách chi phí mà giá của model không rõ, tác vụ dừng lại thay vì chạy không đo được.
+Agent được cho biết các điều kiện để nhắm tới; hame tự đánh giá chúng sau đó trên trạng thái thật. Khi agent kết thúc lượt mà còn điều kiện chưa đạt, nó bị gửi lại cùng bằng chứng của điều kiện hỏng, tối đa hai lần. `hame task` thoát 0 khi mọi điều kiện đạt, 1 khi có điều kiện không đạt (hoặc lượt bị lỗi), 130 khi bị ngắt. Log ghi `task/start` (hợp đồng tác vụ), `task/verified` (báo cáo) và các biên nhận thao tác. `max_steps`, `max_tokens`, `deadline_ms` và `max_cost_usd` được kiểm trước mỗi request tới model. `max_tokens` tính cả các subagent mà tác vụ khởi chạy (nó giới hạn ngân sách chung `[limits] tree_tokens`). Chi phí được tính theo bảng giá có ghi ngày, chỉ gồm các model Anthropic; khi đặt ngân sách chi phí mà giá của model không rõ, tác vụ dừng lại thay vì chạy không đo được. Chi tiêu của subagent được đếm bằng token nhưng không quy ra tiền, nên tác vụ có `max_cost_usd` không được dùng tool subagent. Request thất bại mà provider không báo usage thì không được tính.
 
 Quyền cấp trong file tác vụ được cộng thêm vào quyền trong `config.toml`, chỉ cho lần chạy đó, và bật tool trình duyệt hay desktop khi chúng nêu kênh tương ứng.
 
 ## Điều khiển trình duyệt và desktop
 
-Hai tool chạy phía host, ngoài sandbox của shell: `browser` (Chrome qua Playwright, trên nền tảng nào chạy được hai thứ đó) và `desktop` (ứng dụng macOS qua giao diện accessibility). Cả hai đều tắt cho tới khi cấu hình bật lên hoặc có quyền cấp nêu kênh của chúng, và mỗi thao tác được đối chiếu với quyền cấp trước khi gửi đi.
+Hai tool chạy phía host, ngoài sandbox của shell: `browser` (Chrome qua Playwright; mới kiểm trên macOS arm64, xem [SUPPORT-MATRIX](docs/release/SUPPORT-MATRIX.md)) và `desktop` (ứng dụng macOS qua giao diện accessibility). Cả hai đều tắt cho tới khi cấu hình bật lên hoặc có quyền cấp nêu kênh của chúng, và mỗi thao tác được đối chiếu với quyền cấp trước khi gửi đi.
 
 ```toml
 [computer]
@@ -171,9 +171,9 @@ capabilities = ["observe", "interact"]
 [[computer.grant]]              # TextEdit: đọc, bấm, gõ, lưu file qua hộp thoại Save
 channel = "desktop"
 app = "com.apple.TextEdit"
-capabilities = ["observe", "interact", "global_input", "file_write"]
+capabilities = ["observe", "interact", "global_input", "commit", "file_write"]
 
-[[computer.grant]]              # chụp cửa sổ TextEdit và bấm vào điểm ảnh của ảnh chụp
+[[computer.grant]]              # chụp cửa sổ TextEdit và bấm vào điểm ảnh của ảnh chụp (không bấm Save, Delete, ...)
 channel = "visual"
 app = "com.apple.TextEdit"
 capabilities = ["screen", "global_input"]
@@ -185,22 +185,23 @@ Một quyền cấp có `channel` (`browser`, `desktop`, hoặc `visual` cho ả
 |---|---|
 | `observe` | đọc trang, cửa sổ và cây accessibility; chờ; trích dữ liệu |
 | `interact` | bấm, điền, chọn, nhấn phím trên phần tử, đặt giá trị, mục menu chỉ mở thêm thứ gì đó |
-| `commit` | thao tác gửi, lưu, xóa, thanh toán, mua (nhận ra theo tên nút, phương thức của form, hoặc model khai `commit: true`) |
-| `file_write` | tải file về workspace; xác nhận hộp thoại lưu file |
-| `clipboard` | đọc và đặt clipboard (desktop; nội dung cũ được khôi phục) |
-| `global_input` | sự kiện bàn phím, tổ hợp phím và cú bấm theo điểm ảnh; cần cửa sổ đích ở trên cùng và giữ một khóa liên tiến trình |
+| `commit` | thao tác gửi, lưu, xóa, thanh toán, mua (nhận ra theo tên nút, phương thức của form, hoặc model khai `commit: true`), bằng bất kỳ đường nào: trên desktop còn gồm Return hoặc Space khi nó bấm một nút, cmd+s, cmd+w, cmd+q, cmd+d, cmd+delete, ký tự xuống dòng gõ vào bất cứ đâu ngoài vùng văn bản của tài liệu, và cú bấm theo điểm ảnh vào một nút như vậy hoặc vào thứ hame không nhận ra được |
+| `file_write` | tải file về workspace (xem bên dưới); xác nhận hộp thoại lưu file (nút Save, Return hoặc ký tự xuống dòng gõ trong hộp thoại, cú bấm vào Save) và cmd+s |
+| `clipboard` | đọc và đặt clipboard (desktop; nội dung cũ được khôi phục), và cmd+c, cmd+x, cmd+v |
+| `global_input` | sự kiện bàn phím, tổ hợp phím và cú bấm theo điểm ảnh; cần cửa sổ đích ở trên cùng và giữ một khóa liên tiến trình. Riêng nó chỉ đủ cho việc gõ chữ và các phím không commit; xem `commit` |
 | `screen` | ảnh chụp màn hình (lưu thành artifact) |
 
 Mô hình an toàn:
 
 - **Quyền chỉ đến từ bạn**: `[computer]` trong `~/.hame/config.toml`, hoặc file tác vụ bạn đưa cho `hame task`. `.hame/config.toml` của dự án không cấp được quyền (nó chỉ được đặt `[verify]`).
 - **Quyền điều khiển desktop và trình duyệt tách biệt với sandbox của shell và không bị sandbox giam.** Các helper chạy dưới tài khoản của bạn, với quyền riêng tư macOS (Accessibility, Screen Recording) của terminal và cookie trong hồ sơ trình duyệt. Seatbelt, Landlock và danh sách mạng cho phép áp dụng cho `bash` và các tool bị giam khác, không cho hai tool này. Hãy cấp hẹp: mẫu app hoặc origin, và chỉ những năng lực tác vụ cần.
-- Helper trình duyệt chặn điều hướng cấp trang tới origin không có quyền, trước khi request rời máy. Các request của chính trang (script, ảnh, gọi API) không bị lọc, và trình duyệt không đi qua proxy của hame.
+- Helper trình duyệt chặn điều hướng cấp trang tới origin không có quyền, trước khi request rời máy. Mỗi lần chuyển hướng được kiểm hai lần: `Location` được phân giải theo cách Chrome phân giải (dấu gạch ngược tính như gạch chéo, nên `/\evil.example/` dẫn tới evil.example; đích nào không phân giải chắc chắn được thì bị từ chối), rồi request mà Chrome tạo ra sau đó được kiểm tại chính URL Chrome đã tính. Các request của chính trang (script, ảnh, gọi API) không bị lọc, và trình duyệt không đi qua proxy của hame.
+- File tải về chỉ được lưu trong workspace và không bao giờ đi qua symlink: đích là một symlink (dù trỏ đi đâu), hoặc đường dẫn thư mục đi ra ngoài qua một symlink, đều bị từ chối. File có sẵn chỉ bị thay khi lời gọi có `overwrite: true`, và chỉ khi nó là file thường; nội dung được ghi vào một file tạm mới rồi đổi tên vào chỗ, nên không bao giờ ghi vào một file có sẵn, một symlink hay một hard link khác của nó. Khi đường dẫn là thư mục, tên file trang đề nghị được rút về một tên file đơn (không dấu phân cách, `..`, dấu chấm đầu tên, ký tự điều khiển hay tên mà Windows dành riêng; tối đa 120 byte). Upload chỉ đọc file thường trong workspace, không qua symlink và không có hard link khác, và trình duyệt nhận một bản sao riêng.
 - Mọi thao tác có tác động đều được ghi nhật ký (`not_started`, `dispatched`, rồi `completed`, `failed` hoặc `outcome_unknown`) trước và sau khi gửi. Thao tác commit mang khóa idempotency; một thao tác có thể đã có hiệu lực sẽ không được lặp lại cho tới khi trang hay cửa sổ được quan sát lại và agent nêu thao tác trước đó (`reconciled`). Sau crash, các thao tác đã gửi đi thành `outcome_unknown` và agent được dặn kiểm tra trạng thái; hame không bao giờ tự làm lại chúng.
 - Ref (`e12`, `o3:e7`) thuộc về một lần quan sát. Ref mà trang đã chuyển đi, phần tử đã đổi hoặc bị xóa, hay cửa sổ đã đóng đều bị từ chối (`stale_ref`, `stale_window`), hai đích cùng khớp bị từ chối là `ambiguous`; tool không bao giờ tự nhắm sang một phần tử "giống giống". Nhập liệu vật lý dừng khi focus chuyển đi (`interference`) hoặc có hộp thoại bật lên (`unexpected_dialog`) và báo chính xác đã gõ được gì.
-- Việc nhận ra commit là heuristic theo tên nút và phương thức form: một nút gửi dữ liệu bằng JavaScript có thể bị tính là `interact`. Đừng chỉ dựa vào việc không cấp `commit` để bảo vệ một trang mà một cú bấm có thể gây hại.
+- Việc nhận ra commit là heuristic theo tên nút và phương thức form: một nút gửi dữ liệu bằng JavaScript có thể bị tính là `interact`. Đừng chỉ dựa vào việc không cấp `commit` để bảo vệ một trang mà một cú bấm có thể gây hại. Trên desktop, nhập liệu vật lý được phân loại theo nơi đang có focus bàn phím (hoặc thứ nằm dưới điểm ảnh được bấm), đọc từ ứng dụng ngay trước khi gửi; helper từ chối gửi nếu điều đó đã đổi trong lúc ấy, và khi không đọc được thì cần bộ năng lực chặt hơn. Gõ chữ bình thường vào một ô, và Return trong vùng văn bản của tài liệu, chỉ cần `global_input`.
 
-Hồ sơ trình duyệt là thư mục lâu dài (`~/.hame/browser-profiles/<tên>`), nên hồ sơ đã đăng nhập sẽ giữ đăng nhập; hãy coi nó như hồ sơ trình duyệt của chính bạn. File tải về nằm trong workspace. Helper desktop là một chương trình Swift được biên dịch ở lần dùng đầu vào `~/.hame/helpers/` (khoảng 4 giây). Chi tiết từng tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
+Hồ sơ trình duyệt là thư mục lâu dài (`~/.hame/browser-profiles/<tên>`), nên hồ sơ đã đăng nhập sẽ giữ đăng nhập; hãy coi nó như hồ sơ trình duyệt của chính bạn. File tải về nằm trong workspace, theo các luật ở trên. Helper desktop là một chương trình Swift được biên dịch ở lần dùng đầu vào `~/.hame/helpers/` (khoảng 4 giây). Chi tiết từng tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
 
 ## Workflow
 
@@ -241,9 +242,9 @@ Mặc định (`workspace-write`):
 
 - Với `[secrets] substitute`, secret không vào sandbox: biến môi trường của tool chứa một giá trị giả, và proxy mạng thay nó bằng secret thật trong phần đầu của request (dòng request và header, kể cả `Authorization: Basic`) gửi tới đúng các host bạn nêu. Với HTTPS, proxy phải đọc được request nên nó tự kết thúc kết nối TLS của tool cho riêng các host đó, bằng một chứng chỉ gốc sinh ra cho lần chạy này, rồi mở kết nối TLS đã xác thực của nó tới host thật; các host khác vẫn được chuyển tiếp nguyên vẹn. Tool được trỏ tới chứng chỉ gốc ấy qua `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` và `NODE_EXTRA_CA_CERTS`; chương trình không đọc các biến này sẽ từ chối kết nối tới host đó. Thân request cũng được thay khi nó khai báo `Content-Length` và không quá 1 MiB (độ dài được sửa lại cho khớp). Giới hạn: thân gửi kiểu chunked hoặc lớn hơn thì đi qua nguyên vẹn; với HTTP không mã hóa chỉ phần đầu được thay; chỉ HTTP/1.1; mỗi kết nối một request; một host bạn nêu mà lại gửi trả header thì secret sẽ quay về đầu ra (và bị che như mọi secret). Danh sách chứng chỉ trao cho tool được lấy từ kho chứng chỉ của hệ điều hành, cộng thêm chứng chỉ của proxy.
 
-`--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý.
+`--sandbox read-only` cấm ghi; `--sandbox danger-full-access` bỏ giam, khi đó mọi tool không chỉ-đọc đều phải được bạn đồng ý, trừ `browser` và `desktop` (xem dưới).
 
-Tool `browser` và `desktop` là ngoại lệ của nguyên tắc "tool không chạy trong tiến trình của harness": chúng thao tác trên hồ sơ trình duyệt và ứng dụng của bạn từ ngoài sandbox, trong phạm vi quyền bạn cấp, như mô tả ở [Điều khiển trình duyệt và desktop](#điều-khiển-trình-duyệt-và-desktop). Chúng tắt nếu không được cấu hình hay cấp quyền.
+Tool `browser` và `desktop` là ngoại lệ của nguyên tắc "tool không chạy trong tiến trình của harness": chúng thao tác trên hồ sơ trình duyệt và ứng dụng của bạn từ ngoài sandbox, trong phạm vi quyền bạn cấp, như mô tả ở [Điều khiển trình duyệt và desktop](#điều-khiển-trình-duyệt-và-desktop). Chúng tắt nếu không được cấu hình hay cấp quyền. Với `[approval] default = "ask"` (mặc định), từng lệnh gọi của chúng không bị hỏi riêng, vì quyền đã cấp quyết định mỗi hành động được làm gì; với `default = "deny"` hoặc `"allow"`, chúng theo mặc định đó như mọi tool khác, và một `[[approval.rule]]` cho `browser` hay `desktop` vẫn áp dụng.
 
 Giới hạn cần biết:
 

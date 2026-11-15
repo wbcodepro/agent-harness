@@ -134,7 +134,13 @@ pub async fn task(home: &Path, store: &SessionStore, args: TaskArgs) -> Result<E
         .as_ref()
         .map(|t| t.span(hame_trace::SpanKind::Verification, "acceptance"));
     let probe: Arc<dyn hame_verify::StateProbe> = runtime.computer.probe.clone();
-    let report = hame_verify::verify(&contract, &cwd, Some(probe.as_ref())).await;
+    let report = hame_verify::verify(
+        &contract,
+        &cwd,
+        Some(probe.as_ref()),
+        runtime.confine.as_ref(),
+    )
+    .await;
     if let Some(span) = verify_span {
         span.end(if report.passed {
             hame_trace::SpanStatus::Ok

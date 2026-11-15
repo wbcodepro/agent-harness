@@ -176,6 +176,77 @@ pub struct Runtime {
     /// The main model's name, when hame chose the provider (not for a
     /// model passed in by the embedder). Used to price spending.
     pub model: Option<String>,
+    /// Confines `command` acceptance checks; `None` when tools run
+    /// unconfined.
+    pub confine: Option<hame_verify::Confinement>,
+}
+
+/// What the agent's tools must neither read nor write in hame's data
+/// directory: credentials, settings, sessions, the workflow trust list, the
+/// desktop helper binary, browser profiles. Everything in it except the
+/// spill directory (tools are pointed at spilled output) and subagent
+/// worktrees, plus the names hame creates later.
+fn private_home_paths(home: &Path) -> Vec<PathBuf> {
+    const KNOWN: &[&str] = &[
+        ".env",
+        "config.toml",
+        "sessions",
+        "checkpoints",
+        "artifacts",
+        "helpers",
+        "browser-profiles",
+        "trusted-workflows.json",
+        "workflows",
+        "approvals.jsonl",
+        "facts",
+        "tasks",
+        "skills",
+        "plugins",
+        "desktop.lease",
+        "AGENTS.md",
+    ];
+    const SHARED: &[&str] = &["spill", "worktrees"];
+    let mut paths: Vec<PathBuf> = KNOWN.iter().map(|name| home.join(name)).collect();
+    if let Ok(entries) = std::fs::read_dir(home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !SHARED.iter().any(|shared| name == *shared) {
+                let path = home.join(&name);
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// How `command` acceptance checks run: with no more access than the
+/// agent's own tools (the same readable and writable paths, so a build or a
+/// test can still write its output in the workspace), no network, and only
+/// the basic environment (no credentials). `None` when tools are
+/// unconfined.
+fn check_confinement(policy: &SandboxPolicy) -> Result<Option<hame_verify::Confinement>, String> {
+    if !policy.is_confined() {
+        return Ok(None);
+    }
+    let helper =
+        std::env::current_exe().map_err(|e| format!("cannot find the hame executable: {e}"))?;
+    let mut checks = policy.clone();
+    if !cfg!(windows) {
+        checks.network = Network::Blocked;
+    }
+    Ok(Some(Arc::new(
+        move |program: &Path, args: &[std::ffi::OsString]| {
+            let wrapped =
+                hame_sandbox::wrap(&checks, &helper, program, args).map_err(|e| e.to_string())?;
+            Ok(hame_verify::ConfinedCommand {
+                program: wrapped.program,
+                args: wrapped.args,
+                env: Some(hame_sandbox::inherited_environment(&[])),
+            })
+        },
+    )))
 }
 
 /// The directory where checkpoints of `cwd` are kept.
@@ -348,8 +419,11 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         // The harness's own data: credentials, settings, other sessions.
         // The spill directory stays readable; tools are pointed at it.
         let home = hame_kernel::real_path(home).unwrap_or_else(|_| home.to_path_buf());
-        for private in [".env", "config.toml", "sessions", "checkpoints"] {
-            policy.unreadable.push(home.join(private));
+        policy.unreadable.extend(private_home_paths(&home));
+        if let Some(dir) = &config.computer.profiles_dir {
+            policy
+                .unreadable
+                .push(hame_kernel::real_path(dir).unwrap_or_else(|_| dir.clone()));
         }
         policy.hide_env_files = config.sandbox.hide_env_files;
         policy.network = match options.network.unwrap_or(config.network.mode) {
@@ -688,10 +762,21 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
     // Working with other agents: a shared board, a shared budget, and the
     // ability to start subagents until the depth limit.
+    // A task's token budget covers the subagents it starts as well: it caps
+    // the shared tree budget.
+    let task_tokens = options
+        .task
+        .as_ref()
+        .and_then(|task| task.budget.max_tokens);
+    let tree_limit = match (config.limits.tree_tokens, task_tokens) {
+        (0, None) => None,
+        (0, Some(task)) => Some(task),
+        (tree, None) => Some(tree),
+        (tree, Some(task)) => Some(tree.min(task)),
+    };
     let lineage = options.lineage.clone().unwrap_or_else(|| Lineage {
         depth: 0,
-        budget: (config.limits.tree_tokens > 0)
-            .then(|| hame_multi::TreeBudget::new(config.limits.tree_tokens)),
+        budget: tree_limit.map(hame_multi::TreeBudget::new),
         board: hame_multi::TaskBoard::new(
             home.join("tasks")
                 .join(checkpoint_dir(home, cwd).file_name().unwrap_or_default())
@@ -704,7 +789,13 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     if let Some(budget) = &lineage.budget {
         hooks.push(Arc::new(hame_multi::BudgetHook::new(Arc::clone(budget))));
     }
-    if lineage.depth < config.limits.subagent_depth {
+    // What subagents spend is counted in tokens, not priced, so a task with
+    // a cost limit does not start any: the limit could not be kept.
+    let cost_limited = options
+        .task
+        .as_ref()
+        .is_some_and(|task| task.budget.max_cost_usd.is_some());
+    if lineage.depth < config.limits.subagent_depth && !cost_limited {
         let (child_home, parent_options, parent_lineage) =
             (home.to_path_buf(), options.clone(), lineage.clone());
         let factory: hame_multi::ChildFactory = Arc::new(move |spec: hame_multi::ChildSpec| {
@@ -806,6 +897,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         .map(|task| task.authorization.clone())
         .unwrap_or_default();
     let computer = computer::Computer::build(home, &config, &extra, Some(Arc::clone(&pipeline)));
+    let confine = check_confinement(&policy)?;
     if let Some(browser) = &computer.browser {
         tools.insert(browser.clone());
     }
@@ -830,6 +922,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             tools: tools.clone(),
             pipeline: Arc::clone(&pipeline),
             probe: Some(computer.probe.clone() as Arc<dyn hame_verify::StateProbe>),
+            confine: confine.clone(),
             authorization: computer.authorization.clone(),
             runner: Some(Arc::clone(&runner)),
         }));
@@ -838,6 +931,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         hooks.push(Arc::new(hame_verify::OutcomeGate {
             cwd: cwd.to_path_buf(),
             probe: Some(computer.probe.clone() as Arc<dyn hame_verify::StateProbe>),
+            confine: confine.clone(),
             max_rounds: 2,
         }));
     }
@@ -886,6 +980,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     };
     Ok(Runtime {
         agent,
+        confine,
         policy,
         proxy,
         secrets,
@@ -1599,6 +1694,75 @@ pub async fn rewind(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hames_own_data_is_hidden_from_tools_except_spill_and_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = hame_kernel::real_path(dir.path()).unwrap();
+        for name in ["spill", "worktrees", "something-new"] {
+            std::fs::create_dir_all(home.join(name)).unwrap();
+        }
+        let hidden = private_home_paths(&home);
+        for name in [
+            "trusted-workflows.json",
+            "helpers",
+            "browser-profiles",
+            "config.toml",
+            "sessions",
+            "something-new",
+        ] {
+            assert!(hidden.contains(&home.join(name)), "{name} is not hidden");
+        }
+        assert!(!hidden.contains(&home.join("spill")));
+        assert!(!hidden.contains(&home.join("worktrees")));
+    }
+
+    /// `command` acceptance checks cannot read or write hame's data, reach
+    /// the network or see credentials in the environment.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn command_checks_run_confined() {
+        use hame_session::contract::{Predicate, TaskContract};
+        let dir = tempfile::tempdir().unwrap();
+        let root = hame_kernel::real_path(dir.path()).unwrap();
+        let (home, cwd) = (root.join("home"), root.join("work"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(home.join("trusted-workflows.json"), "{}").unwrap();
+        let mut policy = SandboxPolicy::workspace(&cwd);
+        policy.unreadable.extend(private_home_paths(&home));
+        let confine = check_confinement(&policy).unwrap().unwrap();
+        let check = |command: String| {
+            let confine = confine.clone();
+            let cwd = cwd.clone();
+            async move {
+                let task = TaskContract {
+                    version: 1,
+                    id: "t".into(),
+                    outcome: "t".into(),
+                    constraints: vec![],
+                    acceptance: vec![Predicate::Command { command, exit: 0 }],
+                    authorization: Default::default(),
+                    budget: Default::default(),
+                };
+                hame_verify::verify(&task, &cwd, None, Some(&confine)).await
+            }
+        };
+        assert!(check("true".into()).await.passed);
+        assert!(!check("/usr/bin/nc -z -w 2 1.1.1.1 443".into()).await.passed);
+        let trust = home.join("trusted-workflows.json");
+        assert!(!check(format!("cat '{}'", trust.display())).await.passed);
+        assert!(
+            !check(format!("echo x > '{}'", trust.display()))
+                .await
+                .passed
+        );
+        assert_eq!(std::fs::read_to_string(&trust).unwrap(), "{}");
+        // Cargo sets this for test processes; it is not a basic variable,
+        // so like a credential it must not reach the check.
+        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
+        assert!(check("test -z \"$CARGO_MANIFEST_DIR\"".into()).await.passed);
+    }
 
     #[test]
     fn a_rename_stops_at_a_file_a_rule_protects() {

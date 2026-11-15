@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:4b0e059e-ca3a-5870-830c-a72f4637820c",
+  "serialNumber": "urn:uuid:61e182d2-4189-5b3d-ac50-56e4f2344f85",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T08:40:47+07:00",
+    "timestamp": "2026-11-15T09:04:16+07:00",
     "tools": {
       "components": [
         {
@@ -29,7 +29,7 @@
       "properties": [
         {
           "name": "hame:cargo-lock-sha256",
-          "value": "31afbee830c119a29168e9bd7768775e6c3f316fd20263003e9ef803b26f04ec"
+          "value": "f5965a5df0eae2ce11f54c3e80d89d65955c219079d4d220f8eb04ab24ba07c1"
         }
       ]
     }

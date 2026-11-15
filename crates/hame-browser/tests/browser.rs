@@ -433,6 +433,23 @@ async fn b03_the_right_file_is_uploaded_to_the_right_record() {
         "unauthorized",
     )
     .await;
+    // Not through a link that leads outside, either.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            env.dir.path().join("secret.txt"),
+            env.workspace().join("docs/link.pdf"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(env.dir.path(), env.workspace().join("up")).unwrap();
+        for path in ["docs/link.pdf", "up/secret.txt"] {
+            env.err(
+                json!({"action": "upload", "ref": input, "path": path}),
+                "unauthorized",
+            )
+            .await;
+        }
+    }
     env.ok(json!({"action": "upload", "ref": input, "path": "docs/invoice-march.pdf"}))
         .await;
     let sent = env.ok(json!({"action": "click", "ref": upload})).await;
@@ -507,6 +524,190 @@ async fn b04_a_delayed_date_range_csv_download_completes_with_the_right_content(
                 && r.status == ActionStatus::Completed
                 && r.action == "browser.download")
     );
+    env.finish().await;
+}
+
+/// Every file below `dir`, as paths relative to it, sorted.
+fn files_below(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() && !path.is_symlink() {
+                stack.push(path);
+            } else {
+                let rel = path.strip_prefix(dir).unwrap();
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn downloads_never_write_through_links_or_over_existing_files() {
+    let Some(env) = Env::new(everything()) else {
+        return;
+    };
+    let work = env.workspace();
+    let outside = env.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("rc"), "VICTIM").unwrap();
+    std::fs::write(work.join("keep.txt"), "old").unwrap();
+    env.ok(json!({"action": "open", "url": env.fixture.url("/files")}))
+        .await;
+
+    // A link at the destination, wherever it points, or a directory link
+    // leading outside, is refused before anything is clicked.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside.join("rc"), work.join("out.txt")).unwrap();
+        std::os::unix::fs::symlink(&outside, work.join("away")).unwrap();
+        for (path, overwrite) in [
+            ("out.txt", false),
+            ("out.txt", true),
+            ("away/x.txt", false),
+            ("away/", true),
+        ] {
+            let out = env
+                .err(
+                    json!({"action": "download", "text": "Plain", "path": path, "overwrite": overwrite}),
+                    "unauthorized",
+                )
+                .await;
+            assert!(
+                out.text.contains(path.trim_end_matches('/')),
+                "{}",
+                out.text
+            );
+        }
+        assert_eq!(files_below(&outside), ["rc"]);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("rc")).unwrap(),
+            "VICTIM"
+        );
+        std::fs::remove_file(work.join("out.txt")).unwrap();
+        std::fs::remove_file(work.join("away")).unwrap();
+    }
+
+    // An existing file is replaced only when the call asks.
+    let out = env
+        .err(
+            json!({"action": "download", "text": "Plain", "path": "keep.txt"}),
+            "exists",
+        )
+        .await;
+    assert!(out.text.contains("overwrite:true"), "{}", out.text);
+    assert_eq!(
+        std::fs::read_to_string(work.join("keep.txt")).unwrap(),
+        "old"
+    );
+    env.ok(json!({"action": "download", "text": "Plain", "path": "keep.txt", "overwrite": true}))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(work.join("keep.txt")).unwrap(),
+        "content of report.txt\n"
+    );
+    // Nothing was dispatched for the refusals.
+    let dispatched = env
+        .receipts()
+        .into_iter()
+        .filter(|r| r.status == ActionStatus::Dispatched)
+        .count();
+    assert_eq!(dispatched, 1);
+
+    // Into a directory, the name the page suggests is made safe: no
+    // separators, no climbing out, no hidden files.
+    for label in ["Plain", "Parent", "Hidden", "Nested", "Backslash"] {
+        let out = env
+            .ok(json!({"action": "download", "text": label, "path": "exports/"}))
+            .await;
+        assert!(out.text.contains("/exports/"), "{}", out.text);
+    }
+    let saved = files_below(&work.join("exports"));
+    assert_eq!(saved.len(), 5, "{saved:?}");
+    for name in &saved {
+        assert!(
+            !name.starts_with('.') && !name.contains('/') && !name.contains(".."),
+            "{saved:?}"
+        );
+        let text = std::fs::read_to_string(work.join("exports").join(name)).unwrap();
+        assert!(text.starts_with("content of "), "{name}: {text}");
+    }
+    assert!(saved.contains(&"report.txt".to_string()), "{saved:?}");
+    assert_eq!(files_below(&work), {
+        let mut all: Vec<String> = saved.iter().map(|n| format!("exports/{n}")).collect();
+        all.push("keep.txt".into());
+        all.sort();
+        all
+    });
+    assert_eq!(files_below(&outside), ["rc"]);
+
+    // The suggested name is not a licence to replace a file either.
+    std::fs::write(work.join("exports/report.txt"), "mine").unwrap();
+    let out = env
+        .err(
+            json!({"action": "download", "text": "Plain", "path": "exports/"}),
+            "exists",
+        )
+        .await;
+    assert!(out.text.contains("not saved"), "{}", out.text);
+    assert_eq!(
+        std::fs::read_to_string(work.join("exports/report.txt")).unwrap(),
+        "mine"
+    );
+    env.ok(json!({"action": "download", "text": "Plain", "path": "exports/", "overwrite": true}))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(work.join("exports/report.txt")).unwrap(),
+        "content of report.txt\n"
+    );
+    env.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_redirect_written_with_backslashes_cannot_leave_the_granted_origins() {
+    let Some(env) = Env::new(everything()) else {
+        return;
+    };
+    let redirect = |to: &str| {
+        let to: String = url::form_urlencoded::byte_serialize(to.as_bytes()).collect();
+        env.fixture.url(&format!("/redirect?to={to}"))
+    };
+    env.ok(json!({"action": "open", "url": env.fixture.url("/form")}))
+        .await;
+    // Python's urljoin keeps these on 127.0.0.1; Chrome goes to evil.example.
+    for location in [
+        "/\\evil.example/x",
+        "\\\\evil.example/x",
+        "http:\\\\evil.example/x",
+        "http:///evil.example/x",
+    ] {
+        let out = env
+            .err(
+                json!({"action": "navigate", "url": redirect(location)}),
+                "unauthorized",
+            )
+            .await;
+        assert!(
+            out.text.contains("http://evil.example/x"),
+            "{location}: {}",
+            out.text
+        );
+    }
+    let tabs = env.ok(json!({"action": "tabs"})).await;
+    assert!(
+        tabs.text.contains("/form") && !tabs.text.contains("evil.example"),
+        "{}",
+        tabs.text
+    );
+    // A redirect that stays on the origin still works.
+    let out = env
+        .ok(json!({"action": "navigate", "url": redirect("/table")}))
+        .await;
+    assert!(out.text.contains("Items"), "{}", out.text);
     env.finish().await;
 }
 

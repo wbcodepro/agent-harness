@@ -1,0 +1,150 @@
+{
+  "arms": [
+    {
+      "name": "default",
+      "overrides": {},
+      "source": null
+    }
+  ],
+  "bootstrap_resamples": 2000,
+  "comparisons": [],
+  "experiment_id": "sonnet-haiku-failures",
+  "model": "claude-sonnet-5-5",
+  "passed": 1,
+  "provider": "anthropic",
+  "records": [
+    {
+      "adapter_commits": null,
+      "agent_ms": 13852.44,
+      "app_versions": {
+        "chrome": "Google Chrome 157.0.8103.78",
+        "macos": "26.6.2",
+        "playwright": "1.64.1"
+      },
+      "arm": "default",
+      "artifact_hashes": {
+        "exports/ledger-2026-02.csv": "2dae97fa07a1211ffdeb2b9a29aea4b03a96e9e7e7386255633c4f81e1c5066b"
+      },
+      "attempts": 6,
+      "billed_cost": 0.026880699999999997,
+      "cache_write": 6926,
+      "cached_input": 29477,
+      "channels": [
+        "browser",
+        "files"
+      ],
+      "check_passed": true,
+      "claimed_success": true,
+      "cold_or_warm": "cold",
+      "display_scale": null,
+      "enabled_features": {},
+      "experiment_id": "sonnet-haiku-failures",
+      "failed_attempts": 0,
+      "failure_category": null,
+      "forbidden_effects": [],
+      "hame_commit": "74ba6e44f82a9d8c75560995e137b367dde4f41d",
+      "hardware": "Apple M5, aarch64 10 cpus, 24 GB",
+      "human_interventions": 0,
+      "image_bytes": 0,
+      "initial_state_id": "sha256:e3b0c44298fc1c14",
+      "lang": "en",
+      "local_compute_time": null,
+      "model_calls": 6,
+      "model_version": "claude-sonnet-5-5",
+      "nested_model_calls": 0,
+      "network_profile": "loopback",
+      "note": "28 rows, exported 1 time(s)",
+      "os": "macos-aarch64",
+      "outcome": "pass",
+      "output": 659,
+      "peak_memory": null,
+      "prompt_version": "sha256:98bb00276730",
+      "reasoning_if_exposed": null,
+      "receipt_ids": [
+        "01a1dd35663174139ecc",
+        "01a1dd3566537738ab7e",
+        "01a1dd356d9174e99841",
+        "01a1dd357b22727ba4a7"
+      ],
+      "request_bytes": 98825,
+      "response_bytes": 17326,
+      "retries": 0,
+      "run_index": 1,
+      "screenshots": 0,
+      "semantic_observations": 1,
+      "setup_ms": 34.76,
+      "stage_spans": {
+        "model_request": 10859.084,
+        "tool": 2452.282,
+        "turn": 13672.764
+      },
+      "tariff_date": "2026-11-15",
+      "task_id": "B04",
+      "task_set_version": "2026-11-15.2",
+      "tool_calls": 6,
+      "total_ms": 13892.891,
+      "trace_reference": "<scratch>/runs/sonnet-b04.traces/default/B04/run-1.trace.v1.jsonl",
+      "uncached_input": 14,
+      "usage_complete": true,
+      "verification_ms": 40.451,
+      "viewport": null
+    }
+  ],
+  "runs": 1,
+  "schema": "hame.eval.v2",
+  "seed": 1,
+  "summaries": [
+    {
+      "all_latency_ms_p50": 13892.891,
+      "arm": "default",
+      "attempts": 1,
+      "cache_write": 6926,
+      "cached_input": 29477,
+      "cost_per_attempt": 0.026880699999999997,
+      "cost_per_success": 0.026880699999999997,
+      "cost_usd": 0.026880699999999997,
+      "errors": 0,
+      "failed_model_attempts": 0,
+      "fails": 0,
+      "false_successes": 0,
+      "image_bytes": 0,
+      "known_cost_usd": 0.026880699999999997,
+      "model_calls": 6,
+      "nested_model_calls": 0,
+      "output": 659,
+      "passes": 1,
+      "request_bytes": 98825,
+      "retries": 0,
+      "strict_completion_rate": 1.0,
+      "timeouts": 0,
+      "uncached_input": 14,
+      "unsupported": 0,
+      "usage_complete": true,
+      "verified_latency_ms_p50": 13892.891,
+      "verified_latency_ms_p95": 13892.891
+    }
+  ],
+  "tariff_date": "2026-11-15",
+  "tariff_source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "task_set": "pilot",
+  "task_set_version": "2026-11-15.2",
+  "tasks": [
+    {
+      "arm": "default",
+      "cached_tokens": 29477,
+      "escalated": false,
+      "evidence": "no-change",
+      "input_tokens": 6940,
+      "name": "B04",
+      "note": "",
+      "outcome": "pass",
+      "output_tokens": 659,
+      "passed": true,
+      "requests": 6,
+      "reviewed": false,
+      "seconds": 13.892890999999999,
+      "tool_calls": 6
+    }
+  ],
+  "total": 1
+}

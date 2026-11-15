@@ -154,15 +154,15 @@ hame task task.toml --trace session          # also write trace.v1.jsonl beside 
 hame task task.toml --cwd ~/work/project --provider anthropic --model claude-haiku-5-5 --yes
 ```
 
-Acceptance conditions (`kind`): `file_exists`, `file_absent` (`path`); `file_contains` (`path`, `text`, exact and Unicode-preserving); `file_sha256` (`path`, `sha256`); `json_value` (`path`, `pointer` as RFC 6901, `equals`); `csv_shape` (`path`, `rows` without the header, `columns`); `command` (`command`, `exit`, default 0; run by hame itself with `sh -c` in the working directory, **not** in the sandbox, with a 120-second limit, so only put commands you would run yourself in a task file); `browser_state` (`url_contains`, `text_contains`, `profile`; reads the live page); `desktop_state` (`app` bundle id, `window_title_contains`, `value_contains`; reads the live application). Paths are relative to the working directory. A task without acceptance conditions is refused: its completion could not be verified.
+Acceptance conditions (`kind`): `file_exists`, `file_absent` (`path`); `file_contains` (`path`, `text`, exact and Unicode-preserving); `file_sha256` (`path`, `sha256`); `json_value` (`path`, `pointer` as RFC 6901, `equals`); `csv_shape` (`path`, `rows` without the header, `columns`); `command` (`command`, `exit`, default 0; run with `sh -c` in the working directory under the same sandbox as the agent's tools, with the network off, only the basic environment variables (no credentials) and a 120-second limit: the agent can change the files such a command runs, such as a test or a Makefile, so the check gets no more access than the agent; with `--sandbox danger-full-access` it runs unconfined, like everything else); `browser_state` (`url_contains`, `text_contains`, `profile`; reads the live page); `desktop_state` (`app` bundle id, `window_title_contains`, `value_contains`; reads the live application). Paths are relative to the working directory. A task without acceptance conditions is refused: its completion could not be verified. So is a condition that would check nothing (an empty `text`, `command` or `path`; a `browser_state` without `url_contains` or `text_contains`; a `desktop_state` without `window_title_contains` or `value_contains`) and any misspelt or unknown field, in conditions, grants and the budget: `text_contians` is an error, not a condition that always passes, and `orgin` is an error, not a grant for every origin. A `browser_state` with `profile` fails when the browser cannot confirm the profile. Workflow parameters substituted into a `command` condition are shell-quoted, one word each.
 
-The agent is told the conditions so it can aim at them; hame evaluates them afterwards against the real state. When the agent ends its turn with a condition failing, it is sent back with the failing evidence, at most twice. `hame task` exits 0 when every condition holds, 1 when one does not (or the turn failed), 130 when interrupted. The log records `task/start` (the contract) and `task/verified` (the report), and the action receipts. `max_steps`, `max_tokens`, `deadline_ms` and `max_cost_usd` are enforced before each model request. The cost is priced from a dated tariff that covers Anthropic models only; with a cost budget set and a model whose price is unknown, the task stops rather than run unmetered.
+The agent is told the conditions so it can aim at them; hame evaluates them afterwards against the real state. When the agent ends its turn with a condition failing, it is sent back with the failing evidence, at most twice. `hame task` exits 0 when every condition holds, 1 when one does not (or the turn failed), 130 when interrupted. The log records `task/start` (the contract) and `task/verified` (the report), and the action receipts. `max_steps`, `max_tokens`, `deadline_ms` and `max_cost_usd` are enforced before each model request. `max_tokens` counts the subagents the task starts too (it caps the shared `[limits] tree_tokens` budget). The cost is priced from a dated tariff that covers Anthropic models only; with a cost budget set and a model whose price is unknown, the task stops rather than run unmetered. Subagent spending is counted in tokens but not priced, so a task with `max_cost_usd` is not offered the subagent tool. Requests that fail without the provider reporting usage are not counted.
 
 The grants in a task file add to those in `config.toml` for that run only, and turn on the browser or desktop tool when they name its channel.
 
 ## Browser and desktop control
 
-Two host-side tools act outside the shell sandbox: `browser` (Chrome through Playwright, any platform where those run) and `desktop` (native macOS applications through the accessibility interface). Both are off until the configuration turns them on or a grant names their channel, and each action is checked against the grants before it is sent.
+Two host-side tools act outside the shell sandbox: `browser` (Chrome through Playwright; tested on macOS arm64 only, see [SUPPORT-MATRIX](docs/release/SUPPORT-MATRIX.md)) and `desktop` (native macOS applications through the accessibility interface). Both are off until the configuration turns them on or a grant names their channel, and each action is checked against the grants before it is sent.
 
 ```toml
 [computer]
@@ -183,9 +183,9 @@ capabilities = ["observe", "interact"]
 [[computer.grant]]              # TextEdit: read, press, type, save files through its save panel
 channel = "desktop"
 app = "com.apple.TextEdit"
-capabilities = ["observe", "interact", "global_input", "file_write"]
+capabilities = ["observe", "interact", "global_input", "commit", "file_write"]
 
-[[computer.grant]]              # TextEdit screenshots and clicks on screenshot pixels
+[[computer.grant]]              # TextEdit screenshots and clicks on screenshot pixels (not on Save, Delete, ...)
 channel = "visual"
 app = "com.apple.TextEdit"
 capabilities = ["screen", "global_input"]
@@ -197,22 +197,23 @@ A grant has a `channel` (`browser`, `desktop`, or `visual` for screenshots and p
 |---|---|
 | `observe` | read pages, windows and accessibility trees; wait; extract |
 | `interact` | click, fill, select, press, set values, menus that only open something |
-| `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model) |
-| `file_write` | downloads into the workspace; confirming a save panel |
-| `clipboard` | read and set the clipboard (desktop; the previous contents are restored) |
-| `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease |
+| `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model), by whatever route: on the desktop also Return or Space where it presses a button, cmd+s, cmd+w, cmd+q, cmd+d, cmd+delete, a newline typed anywhere but a document's text area, and a pixel click on such a control or on anything hame cannot identify |
+| `file_write` | downloads into the workspace (see below); confirming a save panel (its Save button, Return or a typed newline in it, a click on Save) and cmd+s |
+| `clipboard` | read and set the clipboard (desktop; the previous contents are restored), and cmd+c, cmd+x, cmd+v |
+| `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease. Alone it covers typing and keys that do not commit; see `commit` |
 | `screen` | screenshots (stored as artifacts) |
 
 Security model:
 
 - **Grants come only from you**: `[computer]` in `~/.hame/config.toml`, or a task file you pass to `hame task`. A project's `.hame/config.toml` cannot grant them (it may only set `[verify]`). Text in a page, a document, an accessibility label or a screenshot is marked untrusted, and the agent is told it can never widen its scope. A refused action says which capability on which target was missing.
 - **Desktop and browser authority is separate from the shell sandbox and is not confined by it.** The helpers run as your user, with your terminal's macOS privacy permissions (Accessibility, Screen Recording) and your browser profiles' cookies. Seatbelt, Landlock and the network allowlist apply to `bash` and other confined tools, not to these. Grant narrowly: an app or origin pattern, and only the capabilities the task needs.
-- The browser helper blocks top-level navigation to origins no grant covers, before the request leaves the machine. A page's own requests (scripts, images, API calls) are not filtered, and the browser does not go through hame's proxy.
+- The browser helper blocks top-level navigation to origins no grant covers, before the request leaves the machine. Each redirect is checked twice: its `Location` is resolved the way Chrome resolves it (a backslash counts as a slash, so `/\evil.example/` leads to evil.example; a target it cannot resolve with certainty is refused), and the request Chrome then makes is checked at the URL Chrome itself computed. A page's own requests (scripts, images, API calls) are not filtered, and the browser does not go through hame's proxy.
+- Downloads are saved only inside the workspace, and never through a symbolic link: a destination that is a link (wherever it points), or a directory path that leads outside through one, is refused. An existing file is replaced only when the call passes `overwrite: true`, and then only a regular file; the download is written to a new temporary file and renamed into place, so it never writes into an existing file, a link or another hard link of it. When the path is a directory, the page's suggested name is reduced to a plain file name (no separators, `..`, leading dots, control characters or Windows-reserved names; at most 120 bytes). An upload reads only a regular file inside the workspace, not through a link and not one with other hard links, and the browser is given a private copy.
 - Every acting operation is journalled (`not_started`, `dispatched`, then `completed`, `failed` or `outcome_unknown`) before and after it is sent. A commit carries an idempotency key; one that may already have taken effect is not repeated until the page or window has been observed again and the agent names the earlier operation (`reconciled`). After a crash, dispatched actions become `outcome_unknown` and the agent is told to check the state; hame never replays them.
 - Refs (`e12`, `o3:e7`) belong to one observation. A ref whose page navigated, whose element changed or was removed, or whose window closed is refused (`stale_ref`, `stale_window`), and two matching targets are refused as `ambiguous`; the tools never re-target a "similar" element. Physical input stops when focus moves (`interference`) or a dialog appears (`unexpected_dialog`) and reports exactly what was typed.
-- Commit detection is a heuristic over control names and form methods: a button that posts through JavaScript may count as `interact`. Do not rely on withholding `commit` as the only safeguard on a site where a click can do damage.
+- Commit detection is a heuristic over control names and form methods: a button that posts through JavaScript may count as `interact`. Do not rely on withholding `commit` as the only safeguard on a site where a click can do damage. On the desktop, physical input is classified from where keyboard focus is (or what is under a clicked pixel), read from the application right before the input is sent; the helper refuses the input if that changed in between, and when it cannot be read the stricter set is required. Typing ordinary text into a field, and Return in a document's text area, need only `global_input`.
 
-Browser profiles are persistent directories (`~/.hame/browser-profiles/<name>`), so a profile you sign in to stays signed in; treat it like a browser profile of your own. Downloads go into the workspace. The desktop helper is a Swift program built on first use into `~/.hame/helpers/` (about 4 seconds). Details per tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
+Browser profiles are persistent directories (`~/.hame/browser-profiles/<name>`), so a profile you sign in to stays signed in; treat it like a browser profile of your own. Downloads go into the workspace, under the rules above. The desktop helper is a Swift program built on first use into `~/.hame/helpers/` (about 4 seconds). Details per tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
 
 ## Workflows
 
@@ -247,7 +248,7 @@ tool = "browser"
 input = { action = "fill", text = "To", value = "{{to}}" }
 [[steps]]
 tool = "browser"
-input = { action = "download", text = "Export CSV", path = "out/ledger.csv" }
+input = { action = "download", text = "Export CSV", path = "out/ledger.csv", overwrite = true }
 note = "the server takes a second or two"
 
 [[post]]                         # at least one; the run fails if these do not hold
@@ -290,9 +291,9 @@ By default (`workspace-write`):
 - With `[approval] reviewer = true`, a second model looks at each call that needs permission (it sees only the tool name, arguments and working directory, not the conversation) and approves on its own only calls that are clearly harmless; everything else, including unclear answers, is still asked of you. Every verdict is logged to `~/.hame/approvals.jsonl`. It is a model and can be wrong: it reduces how often you are asked; it does not replace the sandbox.
 - With `[secrets] substitute`, a secret never enters the sandbox: the tool's environment holds a stand-in, and the network proxy replaces it with the real secret in the request head (request line and headers, including `Authorization: Basic`) sent to the hosts you name. For HTTPS the proxy must read the request, so it terminates the tool's TLS connection for those hosts only, with a root certificate generated for this run, and opens its own verified TLS connection to the real host; other hosts are passed through untouched. Tools are pointed at that root certificate through `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO` and `NODE_EXTRA_CA_CERTS`; programs that read none of them refuse to connect to that host. A request body is also substituted when it declares `Content-Length` and is at most 1 MiB (the length is corrected). Limits: chunked or larger bodies pass through untouched; over plain HTTP only the head is substituted; HTTP/1.1 only; one request per connection; a host you name that echoes headers back would return the secret in output (where it is masked like every secret). The certificate list given to tools is the operating system's store plus the proxy's certificate.
 
-`--sandbox read-only` forbids writes; `--sandbox danger-full-access` removes confinement, and then every tool that is not read-only needs your approval.
+`--sandbox read-only` forbids writes; `--sandbox danger-full-access` removes confinement, and then every tool that is not read-only needs your approval, except `browser` and `desktop` (below).
 
-The `browser` and `desktop` tools are the exception to "tools do not run inside the harness": they act on your browser profiles and applications from outside the sandbox, under the grants you give, as described in [Browser and desktop control](#browser-and-desktop-control). They are off unless configured or granted.
+The `browser` and `desktop` tools are the exception to "tools do not run inside the harness": they act on your browser profiles and applications from outside the sandbox, under the grants you give, as described in [Browser and desktop control](#browser-and-desktop-control). They are off unless configured or granted. With `[approval] default = "ask"` (the default) their calls are not asked about one by one, because the grants already decide what each action may do; with `default = "deny"` or `"allow"` they follow that default like any other tool, and an `[[approval.rule]]` for `browser` or `desktop` still applies.
 
 Known limits:
 
