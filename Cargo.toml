@@ -4,10 +4,12 @@ members = ["crates/*"]
 exclude = ["plugins"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0-rc.1"
 edition = "2024"
 license = "MIT"
 rust-version = "1.89"
+repository = "https://github.com/wbcodepro/agent-harness"
+homepage = "https://github.com/wbcodepro/agent-harness"
 
 [workspace.dependencies]
 hame-kernel = { path = "crates/hame-kernel" }

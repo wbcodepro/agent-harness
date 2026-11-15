@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "hame-acp"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "agent-client-protocol",
  "base64 0.22.1",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "hame-agent"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "futures-util",
  "hame-eval",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "hame-app"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "hame-agent",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "hame-browser"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "hame-agent",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "hame-checkpoint"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-agent",
  "hame-kernel",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "hame-cli"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "agent-client-protocol",
  "clap",
@@ -1621,8 +1621,10 @@ dependencies = [
  "hame-acp",
  "hame-agent",
  "hame-app",
+ "hame-browser",
  "hame-checkpoint",
  "hame-context",
+ "hame-desktop",
  "hame-eval",
  "hame-ext",
  "hame-kernel",
@@ -1646,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "hame-context"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-agent",
  "hame-eval",
@@ -1662,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "hame-desktop"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -1680,7 +1682,7 @@ dependencies = [
 
 [[package]]
 name = "hame-eval"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-llm",
  "hame-session",
@@ -1696,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "hame-ext"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "hame-agent",
@@ -1718,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "hame-kernel"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "tempfile",
  "tokio",
@@ -1726,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "hame-llm"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "hame-kernel",
@@ -1741,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "hame-multi"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-agent",
  "hame-eval",
@@ -1756,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "hame-policy"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-agent",
  "hame-ext",
@@ -1774,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "hame-sandbox"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "hame-kernel",
@@ -1795,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "hame-session"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1807,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "hame-tools"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "globset",
  "hame-kernel",
@@ -1828,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "hame-trace"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-agent",
  "hame-kernel",
@@ -1844,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "hame-tui"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-acp",
  "hame-agent",
@@ -1861,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "hame-verify"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "hame-agent",
  "hame-eval",
@@ -1879,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "hame-web"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "axum",
  "futures-util",

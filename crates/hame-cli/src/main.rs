@@ -3,6 +3,7 @@ mod run;
 mod setup;
 mod skill;
 mod task;
+mod workflow;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -69,6 +70,11 @@ enum Command {
     Mcp {
         #[command(subcommand)]
         command: skill::McpCommand,
+    },
+    /// List saved workflows, show one, and trust or untrust it.
+    Workflow {
+        #[command(subcommand)]
+        command: workflow::WorkflowCommand,
     },
     /// List sessions, or manage their storage.
     Sessions {
@@ -263,6 +269,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Skill { command } => return skill::run(&home, command),
         Command::Plugin { command } => return skill::run_plugin(&home, command),
         Command::Mcp { command } => return skill::run_mcp(&home, command).await,
+        Command::Workflow { command } => return workflow::run(&home, command),
         Command::Sessions { command } => match command.unwrap_or(SessionsCommand::List) {
             SessionsCommand::List => {
                 for header in store.list().map_err(display)? {

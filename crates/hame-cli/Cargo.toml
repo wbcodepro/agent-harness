@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["agent", "llm", "cli", "sandbox", "coding-agent"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "hame"
@@ -16,6 +21,8 @@ hame-context.workspace = true
 clap.workspace = true
 hame-acp.workspace = true
 hame-agent.workspace = true
+hame-browser.workspace = true
+hame-desktop.workspace = true
 hame-policy.workspace = true
 crossterm = "0.29"
 hame-app.workspace = true

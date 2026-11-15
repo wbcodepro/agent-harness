@@ -153,6 +153,10 @@ async fn report(home: &Path, ping: bool) -> Vec<Check> {
         false,
         "optional: syntax checks of Python edits use it",
     ));
+    checks.push(artifacts_check(home));
+    let (browser_on, desktop_on) = computer_enabled(&config);
+    checks.push(browser_check(home, &config, browser_on, None));
+    checks.push(desktop_check(home, desktop_on).await);
 
     if ping {
         let text = match &chosen {
@@ -200,6 +204,183 @@ fn program_check(label: &str, program: &str, required: bool, why: &str) -> Check
         None if required => Check::line(label, Some(false), &format!("not found: {why}")),
         None => Check::line(label, None, &format!("not found ({why})")),
     }
+}
+
+/// Whether the configuration turns on the browser and the desktop tool,
+/// directly or through a standing grant. (A task file can turn them on
+/// too; that is only known when it runs.)
+fn computer_enabled(config: &hame_policy::Config) -> (bool, bool) {
+    use hame_session::contract::Channel;
+    let granted = |channels: &[Channel]| {
+        config
+            .computer
+            .grants
+            .iter()
+            .any(|grant| channels.contains(&grant.channel))
+    };
+    (
+        config.computer.browser || granted(&[Channel::Browser]),
+        config.computer.desktop || granted(&[Channel::Desktop, Channel::Visual]),
+    )
+}
+
+/// Images and files tools return are stored in `<home>/artifacts`; a
+/// session cannot keep a screenshot or a download if that is not writable.
+fn artifacts_check(home: &Path) -> Check {
+    match artifacts_writable(home) {
+        Ok(text) => Check::line("artifacts", Some(true), &text),
+        Err(text) => Check::line("artifacts", Some(false), &text),
+    }
+}
+
+fn artifacts_writable(home: &Path) -> Result<String, String> {
+    let dir = home.join("artifacts");
+    // The store is created on first use; until then, what matters is that
+    // it can be.
+    let (probe_dir, note) = if dir.is_dir() {
+        (dir.clone(), "")
+    } else {
+        let existing = dir
+            .ancestors()
+            .find(|ancestor| ancestor.is_dir())
+            .ok_or_else(|| format!("no existing parent directory of {}", dir.display()))?;
+        (existing.to_path_buf(), " (created on first use)")
+    };
+    let probe = probe_dir.join(format!(".hame-doctor-{}.tmp", std::process::id()));
+    std::fs::write(&probe, b"probe").map_err(|e| {
+        format!(
+            "{} is not writable ({e}); screenshots and downloads could not be kept",
+            probe_dir.display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(format!("{} is writable{note}", dir.display()))
+}
+
+/// The browser tool needs Python with Playwright and a browser. Missing
+/// pieces fail the report only when the configuration turns the tool on.
+fn browser_check(
+    home: &Path,
+    config: &hame_policy::Config,
+    enabled: bool,
+    python: Option<PathBuf>,
+) -> Check {
+    let mut browser = hame_browser::BrowserConfig::for_home(home, config.computer.authorization());
+    if let Some(channel) = &config.computer.browser_channel {
+        browser.channel = channel.clone();
+    }
+    browser.python = python;
+    let state = if enabled {
+        "enabled"
+    } else {
+        "not enabled ([computer] browser = true or a browser grant turns it on)"
+    };
+    match hame_browser::requirements(&browser) {
+        Ok(()) => Check::line(
+            "browser",
+            Some(true),
+            &format!(
+                "Playwright for Python and the {} browser found; {state}",
+                browser.channel
+            ),
+        ),
+        Err(e) if enabled => Check::line("browser", Some(false), &e),
+        Err(e) => Check::line("browser", None, &format!("{e}; {state}")),
+    }
+}
+
+/// The desktop tool needs macOS 14 or later, `swiftc` to build its helper,
+/// and the Accessibility (and, for screenshots, Screen Recording)
+/// permission. The permissions are read from the helper's own handshake,
+/// so they are the ones the tool will run with.
+async fn desktop_check(home: &Path, enabled: bool) -> Check {
+    let state = if enabled {
+        "enabled"
+    } else {
+        "not enabled ([computer] desktop = true or a desktop grant turns it on)"
+    };
+    let fail = |text: &str| {
+        if enabled {
+            Check::line("desktop", Some(false), text)
+        } else {
+            Check::line("desktop", None, &format!("{text}; {state}"))
+        }
+    };
+    if !hame_desktop::supported() {
+        return fail("desktop control is available on macOS only");
+    }
+    if let Some(major) = macos_major()
+        && major < 14
+    {
+        return fail(&format!("needs macOS 14 or later; this is macOS {major}"));
+    }
+    let swiftc = std::process::Command::new("swiftc")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !swiftc {
+        return fail(
+            "swiftc not found: the desktop helper is built with it on first use \
+             (xcode-select --install)",
+        );
+    }
+    let dir = home.join("helpers");
+    let built = tokio::task::spawn_blocking(move || {
+        hame_desktop::protocol::ensure_helper(&dir, Path::new("swiftc"))
+    })
+    .await;
+    let program = match built {
+        Ok(Ok(program)) => program,
+        Ok(Err(e)) => return fail(&e.message),
+        Err(e) => return fail(&e.to_string()),
+    };
+    let helper = match hame_desktop::protocol::Helper::start(
+        &program,
+        &[],
+        &[],
+        serde_json::json!({ "first_observation": 1 }),
+    )
+    .await
+    {
+        Ok(helper) => helper,
+        Err(e) => return fail(&e.message),
+    };
+    let hello = helper.hello.clone();
+    // Dropping the helper closes its input, which is how it exits.
+    drop(helper);
+    if !hello.ax_trusted {
+        return fail(
+            "the Accessibility permission is not granted to the program running hame: \
+             System Settings > Privacy & Security > Accessibility, add your terminal, then \
+             restart it",
+        );
+    }
+    let screen = if hello.screen_access {
+        "Screen Recording granted"
+    } else {
+        "Screen Recording not granted (only screenshots and click_at need it: System \
+         Settings > Privacy & Security > Screen & System Audio Recording)"
+    };
+    Check::line(
+        "desktop",
+        Some(true),
+        &format!("helper ready, Accessibility granted, {screen}; {state}"),
+    )
+}
+
+/// The major version of macOS, from `sw_vers`.
+fn macos_major() -> Option<u32> {
+    let output = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// Runs a command through the same confined worker sessions use, and
@@ -603,6 +784,66 @@ fn update_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_artifact_store_must_be_writable_or_creatable() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let text = artifacts_writable(&home).unwrap();
+        assert!(text.contains("created on first use"), "{text}");
+        assert!(!home.exists(), "the check creates nothing");
+        std::fs::create_dir_all(home.join("artifacts")).unwrap();
+        let text = artifacts_writable(&home).unwrap();
+        assert!(!text.contains("first use"), "{text}");
+        assert_eq!(
+            std::fs::read_dir(home.join("artifacts")).unwrap().count(),
+            0
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let store = home.join("artifacts");
+            std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o500)).unwrap();
+            // Root writes anyway; the refusal can only be seen as a user.
+            let root = std::fs::write(store.join("x"), b"").is_ok();
+            if !root {
+                assert!(
+                    artifacts_writable(&home)
+                        .unwrap_err()
+                        .contains("not writable")
+                );
+            }
+            std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
+    #[test]
+    fn computer_requirements_fail_only_when_the_tools_are_turned_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = hame_policy::Config::parse(
+            "[[computer.grant]]\nchannel = \"visual\"\ncapabilities = [\"screen\"]\n",
+        )
+        .unwrap();
+        assert_eq!(computer_enabled(&config), (false, true));
+        assert_eq!(
+            computer_enabled(&hame_policy::Config::default()),
+            (false, false)
+        );
+
+        let missing = Some(dir.path().join("no-such-python"));
+        let off = browser_check(dir.path(), &config, false, missing.clone());
+        assert_eq!(off.ok, None);
+        let on = browser_check(dir.path(), &config, true, missing);
+        assert_eq!(on.ok, Some(false));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn the_desktop_check_says_macos_only_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(desktop_check(dir.path(), false).await.ok, None);
+        assert_eq!(desktop_check(dir.path(), true).await.ok, Some(false));
+    }
 
     #[test]
     fn a_saved_key_replaces_the_old_one_and_keeps_other_lines() {
