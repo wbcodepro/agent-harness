@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use hame_kernel::BoxFuture;
 use hame_sandbox::{SandboxPolicy, wrap};
-use hame_session::ToolSpec;
+use hame_session::artifact::MAX_ARTIFACT_BYTES;
+use hame_session::{Block, ToolSpec};
 use hame_tools::{Effect, GroupGuard, Tool, ToolContext, ToolOutput};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -695,6 +696,146 @@ fn exposed_name(server: &str, tool: &str) -> String {
         .collect()
 }
 
+/// Decodes a base64 payload of an MCP content item, refusing one that would
+/// be larger than an artifact may be before decoding it.
+fn decode_payload(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    let estimate = (data.len() as u64 / 4) * 3;
+    if estimate > MAX_ARTIFACT_BYTES {
+        return Err(format!(
+            "about {estimate} bytes, over the {MAX_ARTIFACT_BYTES}-byte limit"
+        ));
+    }
+    let compact: String = data.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(compact.as_bytes())
+        .map_err(|e| format!("its base64 is invalid ({e})"))
+}
+
+/// Stores binary content a server returned and gives the block that refers
+/// to it, or an `Unsupported` block saying why it could not be kept.
+fn stored(kind: &str, data: &str, mime: &str, name: Option<&str>, ctx: &ToolContext) -> Block {
+    let unsupported = |note: String| Block::Unsupported {
+        kind: kind.to_string(),
+        note,
+    };
+    if data.is_empty() {
+        return unsupported(format!("empty {mime} {kind}"));
+    }
+    let bytes = match decode_payload(data) {
+        Ok(bytes) => bytes,
+        Err(why) => return unsupported(format!("{mime} {kind} not kept: {why}")),
+    };
+    let Some(store) = &ctx.artifacts else {
+        return unsupported(format!(
+            "{mime} {kind} of {} bytes; no artifact store to keep it in",
+            bytes.len()
+        ));
+    };
+    match store.put(&bytes, mime) {
+        Ok(mut artifact) => {
+            artifact.name = name.map(str::to_string);
+            if artifact.is_image() {
+                Block::Image { artifact }
+            } else {
+                Block::Artifact { artifact }
+            }
+        }
+        Err(e) => unsupported(format!(
+            "{mime} {kind} of {} bytes not kept: {e}",
+            bytes.len()
+        )),
+    }
+}
+
+/// Turns a `tools/call` result into the tool's output, keeping every kind
+/// of content the protocol defines (MCP 2025-06-18, "Tool Result"): text
+/// as text; images and binary resources as artifacts, so a model that can
+/// see them gets the picture; embedded text resources and resource links as
+/// text naming their URI; audio, which no model here takes, as an explicit
+/// note; and `structuredContent` as data next to the text.
+fn tool_output(result: &Value, ctx: &ToolContext) -> ToolOutput {
+    let mut text = String::new();
+    let mut parts = Vec::new();
+    let line = |text: &mut String, piece: &str| {
+        text.push_str(piece);
+        text.push('\n');
+    };
+    for item in result["content"].as_array().into_iter().flatten() {
+        let mime = item["mimeType"]
+            .as_str()
+            .unwrap_or("application/octet-stream");
+        match item["type"].as_str() {
+            Some("text") => line(&mut text, item["text"].as_str().unwrap_or("")),
+            Some("image") => parts.push(stored(
+                "image",
+                item["data"].as_str().unwrap_or(""),
+                mime,
+                None,
+                ctx,
+            )),
+            Some("audio") => {
+                let size = item["data"].as_str().map_or(0, |data| data.len() / 4 * 3);
+                parts.push(Block::Unsupported {
+                    kind: "audio".into(),
+                    note: format!("{mime} audio, about {size} bytes"),
+                });
+            }
+            Some("resource") => {
+                let resource = &item["resource"];
+                let uri = resource["uri"].as_str().unwrap_or("?");
+                if let Some(body) = resource["text"].as_str() {
+                    line(&mut text, &format!("[resource {uri}]\n{body}"));
+                } else if let Some(blob) = resource["blob"].as_str() {
+                    let mime = resource["mimeType"]
+                        .as_str()
+                        .unwrap_or("application/octet-stream");
+                    let name = uri.rsplit('/').next().filter(|name| !name.is_empty());
+                    parts.push(stored("resource", blob, mime, name, ctx));
+                } else {
+                    line(&mut text, &format!("[resource {uri}, no content]"));
+                }
+            }
+            Some("resource_link") => {
+                let uri = item["uri"].as_str().unwrap_or("?");
+                let mut link = format!("[resource link {uri}");
+                if let Some(name) = item["name"].as_str() {
+                    link.push_str(&format!(" \"{name}\""));
+                }
+                if let Some(mime) = item["mimeType"].as_str() {
+                    link.push_str(&format!(" {mime}"));
+                }
+                if let Some(about) = item["description"].as_str() {
+                    link.push_str(&format!(": {about}"));
+                }
+                link.push(']');
+                line(&mut text, &link);
+            }
+            Some(other) => parts.push(Block::Unsupported {
+                kind: other.to_string(),
+                note: "a content type this client does not know".into(),
+            }),
+            None => {}
+        }
+    }
+    if !result["structuredContent"].is_null() {
+        parts.push(Block::Data {
+            value: result["structuredContent"].clone(),
+        });
+    }
+    let text = text.trim_end().to_string();
+    ToolOutput {
+        // With only parts, they are the output; with nothing at all, say so.
+        text: if text.is_empty() && parts.is_empty() {
+            "(no output)".into()
+        } else {
+            text
+        },
+        is_error: result["isError"].as_bool().unwrap_or(false),
+        parts,
+    }
+}
+
 struct McpTool {
     client: Arc<McpClient>,
     remote: String,
@@ -718,7 +859,7 @@ impl Tool for McpTool {
         true
     }
 
-    fn call<'a>(&'a self, input: &'a Value, _ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
+    fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             let headers: Vec<(String, String)> = self
                 .header_params
@@ -772,29 +913,7 @@ impl Tool for McpTool {
                     _ => break result,
                 }
             };
-            let mut text = String::new();
-            for item in result["content"].as_array().into_iter().flatten() {
-                match item["type"].as_str() {
-                    Some("text") => text.push_str(item["text"].as_str().unwrap_or("")),
-                    Some(other) => text.push_str(&format!("[{other} content omitted]")),
-                    None => {}
-                }
-                text.push('\n');
-            }
-            // A result given only as structured data is still a result.
-            if text.trim().is_empty() && !result["structuredContent"].is_null() {
-                text = result["structuredContent"].to_string();
-            }
-            let text = text.trim_end().to_string();
-            ToolOutput {
-                text: if text.is_empty() {
-                    "(no output)".into()
-                } else {
-                    text
-                },
-                is_error: result["isError"].as_bool().unwrap_or(false),
-                parts: Vec::new(),
-            }
+            tool_output(&result, ctx)
         })
     }
 }
@@ -875,7 +994,14 @@ for line in sys.stdin:
 
         let ctx = ToolContext::new(dir.path());
         let echoed = tools[0].call(&json!({"text": "hi"}), &ctx).await;
-        assert_eq!(echoed, ToolOutput::ok("echo: hi\n[image content omitted]"));
+        // An image with no data is said to be empty, not silently dropped.
+        assert_eq!(
+            echoed,
+            ToolOutput::ok("echo: hi").with_part(Block::Unsupported {
+                kind: "image".into(),
+                note: "empty application/octet-stream image".into(),
+            })
+        );
         let failed = tools[2].call(&json!({}), &ctx).await;
         assert!(
             failed.is_error && failed.text.contains("boom"),
@@ -1068,7 +1194,18 @@ for line in sys.stdin:
         let ctx = ToolContext::new(dir.path());
         // A result that is only structured data.
         let total = tools[0].call(&json!({"values": [1, 2, 39]}), &ctx).await;
-        assert_eq!(total, ToolOutput::ok("{\"sum\":42}"));
+        assert_eq!(
+            total,
+            ToolOutput::ok("").with_part(Block::Data {
+                value: json!({"sum": 42})
+            })
+        );
+        assert_eq!(
+            total.content(),
+            [Block::Data {
+                value: json!({"sum": 42})
+            }]
+        );
         // The server asks for its own state back: one more round.
         assert_eq!(
             tools[1].call(&json!({}), &ctx).await,
@@ -1254,5 +1391,131 @@ for line in sys.stdin:
             .await;
         assert!(outside.is_error, "{}", outside.text);
         assert!(!root.join("out.txt").exists());
+    }
+
+    /// A 1x1 PNG, base64.
+    const PIXEL: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+    /// A server whose one tool answers with every kind of content at once.
+    const MIXED_SERVER: &str = r#"
+import json, sys
+PIXEL = sys.argv[1]
+def send(m): sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    m = json.loads(line)
+    i, method = m.get("id"), m.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "m", "version": "0"}}})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "snap", "description": "Snapshot."}]}})
+    elif method == "tools/call":
+        send({"jsonrpc": "2.0", "id": i, "result": {
+            "content": [
+                {"type": "text", "text": "page loaded"},
+                {"type": "image", "data": PIXEL, "mimeType": "image/png"},
+                {"type": "audio", "data": "AAAAAAAA", "mimeType": "audio/wav"},
+                {"type": "resource", "resource": {"uri": "file:///notes.txt", "mimeType": "text/plain", "text": "remember"}},
+                {"type": "resource", "resource": {"uri": "file:///shot.png", "mimeType": "image/png", "blob": PIXEL}},
+                {"type": "resource_link", "uri": "file:///big.log", "name": "big.log", "mimeType": "text/plain"}],
+            "structuredContent": {"title": "Home", "links": 3}}})
+"#;
+
+    #[tokio::test]
+    async fn a_mixed_result_keeps_text_images_and_structured_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("mixed.py");
+        std::fs::write(&script, MIXED_SERVER).unwrap();
+        let config = McpServerConfig {
+            command: python(),
+            args: vec![script.display().to_string(), PIXEL.to_string()],
+            ..McpServerConfig::default()
+        };
+        let client = McpClient::start("mixed", &config, None, Path::new("hame"), dir.path())
+            .await
+            .unwrap();
+        let tools = client.tools().await.unwrap();
+        let store = hame_session::ArtifactStore::new(dir.path().join("artifacts"));
+        let ctx = ToolContext::new(dir.path()).with_artifacts(store.clone());
+        let output = tools[0].call(&json!({}), &ctx).await;
+
+        assert!(!output.is_error);
+        assert_eq!(
+            output.text,
+            "page loaded\n[resource file:///notes.txt]\nremember\n\
+             [resource link file:///big.log \"big.log\" text/plain]"
+        );
+        let [image, audio, blob, data] = output.parts.as_slice() else {
+            panic!("four parts: {:?}", output.parts);
+        };
+        let Block::Image { artifact } = image else {
+            panic!("{image:?}");
+        };
+        assert_eq!(
+            (artifact.mime.as_str(), artifact.width),
+            ("image/png", Some(1))
+        );
+        assert!(store.get(artifact).unwrap().starts_with(b"\x89PNG"));
+        assert_eq!(
+            audio,
+            &Block::Unsupported {
+                kind: "audio".into(),
+                note: "audio/wav audio, about 6 bytes".into(),
+            }
+        );
+        assert!(
+            matches!(blob, Block::Image { artifact: stored } if stored.name.as_deref() == Some("shot.png")),
+            "{blob:?}"
+        );
+        assert_eq!(
+            data,
+            &Block::Data {
+                value: json!({"title": "Home", "links": 3}),
+            }
+        );
+        // The model sees the text first, then each part.
+        assert_eq!(output.content().len(), 5);
+
+        // Without a store the image is described, with its size, not lost.
+        let bare = tools[0]
+            .call(&json!({}), &ToolContext::new(dir.path()))
+            .await;
+        assert!(
+            matches!(&bare.parts[0], Block::Unsupported { kind, note }
+                if kind == "image" && note == "image/png image of 69 bytes; no artifact store to keep it in"),
+            "{:?}",
+            bare.parts[0]
+        );
+    }
+
+    #[test]
+    fn content_too_large_or_malformed_is_described_not_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = hame_session::ArtifactStore::new(dir.path().join("artifacts"));
+        let ctx = ToolContext::new(dir.path()).with_artifacts(store);
+        let huge = "A".repeat((MAX_ARTIFACT_BYTES / 3 * 4 + 8) as usize);
+        let result = json!({"content": [
+            {"type": "image", "data": huge, "mimeType": "image/png"},
+            {"type": "image", "data": "not base64!", "mimeType": "image/png"},
+            {"type": "hologram"},
+        ]});
+        let output = tool_output(&result, &ctx);
+        assert_eq!(output.text, "");
+        let notes: Vec<String> = output
+            .parts
+            .iter()
+            .map(|part| part.as_text().unwrap())
+            .collect();
+        assert!(
+            notes[0].contains("over the 67108864-byte limit"),
+            "{}",
+            notes[0]
+        );
+        assert!(notes[1].contains("base64 is invalid"), "{}", notes[1]);
+        assert_eq!(
+            notes[2],
+            "[hologram content not carried: a content type this client does not know]"
+        );
+        // Nothing at all is still an answer.
+        assert_eq!(tool_output(&json!({}), &ctx), ToolOutput::ok("(no output)"));
     }
 }
