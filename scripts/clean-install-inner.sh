@@ -22,7 +22,7 @@ chown -R builder /src
 if [ "$(id -u)" = 0 ] && [ -z "${HAME_INNER_USER:-}" ]; then
   # Plugin tests build a WebAssembly example (a documented prerequisite).
   rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || echo "note: wasm32 target not added"
-  exec su builder -c "HAME_INNER_USER=1 PATH=/usr/local/cargo/bin:\$PATH RUSTUP_HOME=/usr/local/rustup CARGO_HOME=\$HOME/.cargo bash /src/scripts/clean-install-inner.sh"
+  exec su builder -c "HAME_INNER_USER=1 HAME_TEST_JOBS=${HAME_TEST_JOBS:-3} PATH=/usr/local/cargo/bin:\$PATH RUSTUP_HOME=/usr/local/rustup CARGO_HOME=\$HOME/.cargo bash /src/scripts/clean-install-inner.sh"
 fi
 
 cd /src
@@ -45,9 +45,12 @@ echo "== hame doctor (empty HAME_HOME, no key)"
 mkdir -p /tmp/project
 ( cd /tmp/project && HAME_HOME=/tmp/hame-home /src/target/release/hame doctor ) || echo "doctor exit: $?"
 
-echo "== cargo test --workspace"
+# Linking the debug test binaries (wasmtime is large) takes 1-2 GB each;
+# with one job per CPU an 8 GB container runs out of memory.
+jobs="${HAME_TEST_JOBS:-3}"
+echo "== cargo test --workspace -j $jobs"
 start=$(date +%s)
-cargo test --workspace --no-fail-fast >/tmp/test.log 2>&1 || true
+cargo test --workspace --no-fail-fast -j "$jobs" >/tmp/test.log 2>&1 || true
 echo "tests: $(( $(date +%s) - start )) s"
 grep -E "^test result|FAILED|panicked" /tmp/test.log || true
 echo "== failing tests (if any)"
