@@ -52,7 +52,14 @@ async fn hame_connect_signs_in_pairs_a_device_and_serves_it() {
     relay.auto_approve(&account);
 
     let mut child = hame(&home)
-        .args(["connect", "--relay", &relay.url, "--name", "test host"])
+        .args([
+            "connect",
+            "--relay",
+            &relay.url,
+            "--name",
+            "test host",
+            "--show-uri",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -65,13 +72,14 @@ async fn hame_connect_signs_in_pairs_a_device_and_serves_it() {
     line_with(&mut lines, "enter the code", &mut seen).await;
     line_with(&mut lines, "signed in", &mut seen).await;
     line_with(&mut lines, "Scan this code", &mut seen).await;
-    let uri = line_with(&mut lines, "or enter: ", &mut seen).await;
+    line_with(&mut lines, "Pairing code (secret", &mut seen).await;
+    let uri = line_with(&mut lines, "hame-pair:v1?", &mut seen).await;
     assert!(
         seen.iter()
             .any(|l| l.contains('▀') || l.contains('▄') || l.contains('█')),
         "a QR code is drawn"
     );
-    let offer = PairingOffer::parse(uri.split("or enter: ").nth(1).unwrap().trim()).unwrap();
+    let offer = PairingOffer::parse(uri.trim()).unwrap();
     assert!(offer.relay.starts_with("http://127.0.0.1:"));
 
     // The relay knows the host's public keys, nothing more.
@@ -96,12 +104,14 @@ async fn hame_connect_signs_in_pairs_a_device_and_serves_it() {
         handle,
         events,
     );
-    let (sas, answered) = phone.start_pairing(&offer, "My phone").await.unwrap();
+    let mut pairing = phone.start_pairing(&offer, "My phone").await.unwrap();
+    let sas = pairing.sas().await.unwrap();
     let question = line_with(&mut lines, "Does the device show the code", &mut seen).await;
-    assert!(question.contains(&sas), "{question} shows {sas}");
+    let shown = format!("{} {}", &sas[..4], &sas[4..]);
+    assert!(question.contains(&shown), "{question} shows {shown}");
     stdin.write_all(b"y\n").await.unwrap();
     stdin.flush().await.unwrap();
-    let grant = phone.paired(answered).await.unwrap();
+    let grant = phone.paired(pairing).await.unwrap();
     assert_eq!(grant.label, "My phone");
     line_with(&mut lines, "paired My phone", &mut seen).await;
 
@@ -119,10 +129,15 @@ async fn hame_connect_signs_in_pairs_a_device_and_serves_it() {
     }
     let list = published
         .expect("a grant list")
-        .verify(&offer.host_keys.ed)
+        .verify(&offer.host, &offer.host_keys.ed)
         .unwrap();
     assert_eq!(list.devices.len(), 1);
     assert_eq!(list.devices[0].device, phone_id);
+    assert!(list.version >= 1);
+    assert_eq!(
+        list.devices[0].label, "",
+        "labels stay off the relay by default"
+    );
 
     // Revoking from another terminal takes effect in the running host.
     let output = hame(&home)

@@ -6,7 +6,9 @@ import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { b64url, concat, equalBytes, fromB64url, fromB64url32, fromUtf8, utf8 } from "./encoding.js";
 import { SyncError } from "./errors.js";
+import { validId } from "./envelope.js";
 import { type PublicKeys, verifySignature } from "./keys.js";
+import { checkRelayUrl } from "./relay.js";
 
 export const SCHEME = "hame-pair:v1?";
 export const GRANT_CONTEXT = utf8("hame-sync v1 grant");
@@ -50,8 +52,12 @@ export function parseOffer(uri: string): PairingOffer {
   const exp = field("exp");
   if (!/^[0-9]+$/.test(exp)) throw new SyncError("malformed", "bad expiry");
   return {
-    relay: field("relay"),
-    host: field("host"),
+    relay: checkRelayUrl(field("relay")),
+    host: (() => {
+      const host = field("host");
+      if (!validId(host)) throw new SyncError("malformed", "bad host id in pairing code");
+      return host;
+    })(),
     hostKeys: { ed: fromB64url32(field("ed")), x: fromB64url32(field("x")) },
     secret: fromB64url32(field("secret")),
     expires: Number(exp),
@@ -75,10 +81,11 @@ export function checkPairingProof(secret: Uint8Array, client: PublicKeys, proof:
  * Six digits from SHA256("hame-sas" ‖ secret ‖ host_ed ‖ client_ed): the
  * first four bytes big-endian, modulo one million, zero-padded.
  */
-export function sas(secret: Uint8Array, hostEd: Uint8Array, clientEd: Uint8Array): string {
-  const digest = sha256(concat(utf8("hame-sas"), secret, hostEd, clientEd));
-  const n = ((digest[0]! << 24) >>> 0) + (digest[1]! << 16) + (digest[2]! << 8) + digest[3]!;
-  return String(n % 1_000_000).padStart(6, "0");
+export function sas(secret: Uint8Array, hostEd: Uint8Array, clientEd: Uint8Array, hostNonce: Uint8Array): string {
+  const digest = sha256(concat(utf8("hame-sas-v2"), secret, hostEd, clientEd, hostNonce));
+  let n = 0n;
+  for (const b of digest.subarray(0, 8)) n = (n << 8n) | BigInt(b);
+  return String(n % 100_000_000n).padStart(8, "0");
 }
 
 export interface Grant {
@@ -117,19 +124,32 @@ export interface GrantList {
   kind: typeof GRANT_LIST_KIND;
   v: number;
   host: string;
+  version: number;
   devices: { device: string; ed: string; x: string; label: string }[];
   issued: number;
 }
 
+/** What a host signs for a grant list (the relay's format). */
+export function grantListMessage(hostId: string, version: number, document: Uint8Array): Uint8Array {
+  return concat(utf8(`hame-grants:v1\n${hostId}\n${version}\n`), document);
+}
+
 /**
  * Verifies a host's grant list as the relay returns it
- * (GET /v1/hosts/{id}/grants): a plain Ed25519 signature over the document
- * bytes, the document naming itself with kind "hame-sync/grants".
+ * (GET /v1/hosts/{id}/grants): an Ed25519 signature over
+ * "hame-grants:v1\n{host}\n{version}\n" ‖ document, the document naming
+ * itself with kind "hame-sync/grants", this host and this version.
  */
-export function verifyGrantList(signed: { document: string; signature: string }, hostEd: Uint8Array): GrantList {
+export function verifyGrantList(
+  signed: { version: number; document: string; signature: string },
+  hostId: string,
+  hostEd: Uint8Array,
+): GrantList {
   const bytes = fromB64url(signed.document);
-  verifyDocument(hostEd, new Uint8Array(), bytes, signed.signature);
+  verifyDocument(hostEd, new Uint8Array(), grantListMessage(hostId, signed.version, bytes), signed.signature);
   const list = JSON.parse(fromUtf8(bytes)) as GrantList;
-  if (list.kind !== GRANT_LIST_KIND) throw new SyncError("malformed", "not a grant list");
+  if (list.kind !== GRANT_LIST_KIND || list.host !== hostId || list.version !== signed.version) {
+    throw new SyncError("malformed", "not this host's grant list");
+  }
   return list;
 }

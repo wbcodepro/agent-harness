@@ -17,8 +17,16 @@
 //!   `expired_token` / `invalid_grant`), `refresh` with rotation and reuse
 //!   detection, `POST /v1/devices {name, kind, ed25519, x25519}` binding the
 //!   session, `GET /v1/devices`, `GET /v1/hosts`, and host grants
-//!   (`POST` verifies the host's Ed25519 signature over the document bytes;
-//!   `GET` returns them).
+//!   (`POST {version, document, signature}` verifies the host's Ed25519
+//!   signature over `hame-grants:v1\n{host}\n{version}\n` ‖ document and
+//!   refuses a version not above the stored one with `409 stale_version`;
+//!   `GET` returns them);
+//! - device-code sessions have the `host` scope: they may register only a
+//!   `host` device and cannot approve device codes (`403
+//!   insufficient_scope`);
+//! - `{"op":"auth","token"}` renews a connection's token (answered with
+//!   `{"op":"auth","expires_at"}`; a bad token gets `unauthorized` and the
+//!   connection closes); at most 20 devices per account.
 //!
 //! Not modelled: accounts, passwords, OAuth, passkeys, push, rate limits,
 //! the 24-hour expiry. Test controls let a test play a malicious relay:
@@ -75,6 +83,8 @@ enum Command {
 struct Session {
     account: String,
     device: Option<String>,
+    /// `full` or `host` (device-code sign-ins).
+    scope: &'static str,
 }
 
 #[derive(Default)]
@@ -106,6 +116,7 @@ struct Inner {
     mail: Mutex<Mailboxes>,
     grants: Mutex<HashMap<String, SignedGrantList>>,
     log: Mutex<Vec<Routed>>,
+    renewals: Mutex<HashMap<String, usize>>,
     counter: AtomicU64,
 }
 
@@ -124,13 +135,14 @@ impl Inner {
         Some((id, session))
     }
 
-    fn new_session(&self, account: &str, device: Option<String>) -> String {
+    fn new_session(&self, account: &str, device: Option<String>, scope: &'static str) -> String {
         let id = self.fresh("sess");
         self.sessions.lock().expect("sessions").insert(
             id.clone(),
             Session {
                 account: account.into(),
                 device,
+                scope,
             },
         );
         id
@@ -320,7 +332,9 @@ impl MockRelay {
             .expect("a registered device")
             .account
             .clone();
-        let session = self.inner.new_session(&account, Some(device.into()));
+        let session = self
+            .inner
+            .new_session(&account, Some(device.into()), "full");
         self.inner.tokens(&session)["access_token"]
             .as_str()
             .expect("token")
@@ -380,6 +394,17 @@ impl MockRelay {
             .queues
             .get(device)
             .map_or(0, VecDeque::len)
+    }
+
+    /// How many times `device` renewed its token on a connection.
+    pub fn renewals(&self, device: &str) -> usize {
+        self.inner
+            .renewals
+            .lock()
+            .expect("renewals")
+            .get(device)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The grant list a host last published.
@@ -505,6 +530,9 @@ async fn device_approve(
         Ok(s) => s,
         Err(e) => return *e,
     };
+    if session.scope != "full" {
+        return error(StatusCode::FORBIDDEN, "insufficient_scope");
+    }
     let wanted = normalise_code(body["user_code"].as_str().unwrap_or(""));
     let approve = body["approve"].as_bool().unwrap_or(true);
     let mut codes = inner.codes.lock().expect("codes");
@@ -545,7 +573,7 @@ async fn device_token(State(inner): State<Arc<Inner>>, Json(body): Json<Value>) 
             }
         }
     };
-    let session = inner.new_session(&account, None);
+    let session = inner.new_session(&account, None, "host");
     Json(inner.tokens(&session)).into_response()
 }
 
@@ -583,6 +611,12 @@ async fn register(
         return error(StatusCode::CONFLICT, "session_has_device");
     }
     let kind = body["kind"].as_str().unwrap_or("");
+    if session.scope == "host" && kind != "host" {
+        return error(StatusCode::FORBIDDEN, "insufficient_scope");
+    }
+    if inner.account_devices(&session.account).len() >= 20 {
+        return error(StatusCode::CONFLICT, "too_many_devices");
+    }
     if !["web", "desktop", "ios", "android", "host"].contains(&kind) {
         return error(StatusCode::BAD_REQUEST, "invalid_kind");
     }
@@ -667,8 +701,18 @@ async fn put_grants(
     let Some(device) = inner.devices.lock().expect("devices").get(&host).cloned() else {
         return error(StatusCode::NOT_FOUND, "not_found");
     };
-    // As the real relay: a plain Ed25519 signature by the host's registered
-    // key over the document bytes.
+    // As the real relay: the host's registered key over
+    // "hame-grants:v1\n{host}\n{version}\n" ‖ document, with a version
+    // above the stored one.
+    let stored = inner
+        .grants
+        .lock()
+        .expect("grants")
+        .get(&host)
+        .map_or(0, |g| g.version);
+    if body.version < 1 || body.version <= stored {
+        return error(StatusCode::CONFLICT, "stale_version");
+    }
     let (Ok(ed), Ok(document), Ok(signature)) = (
         unb64_32(&device.ed25519),
         unb64(&body.document),
@@ -679,7 +723,8 @@ async fn put_grants(
     let Ok(signature) = <[u8; 64]>::try_from(signature) else {
         return error(StatusCode::BAD_REQUEST, "bad_signature");
     };
-    if verify_signature(&ed, &document, &signature).is_err() {
+    let message = crate::pairing::grant_list_message(&host, body.version, &document);
+    if verify_signature(&ed, &message, &signature).is_err() {
         return error(StatusCode::BAD_REQUEST, "bad_signature");
     }
     inner.grants.lock().expect("grants").insert(host, body);
@@ -695,7 +740,7 @@ async fn get_grants(
         return *e;
     }
     match inner.grants.lock().expect("grants").get(&host) {
-        Some(g) => Json(json!({"host_id": host, "document": g.document, "signature": g.signature, "updated_at": 0}))
+        Some(g) => Json(json!({"host_id": host, "version": g.version, "document": g.document, "signature": g.signature, "updated_at": 0}))
             .into_response(),
         None => error(StatusCode::NOT_FOUND, "not_found"),
     }
@@ -848,6 +893,28 @@ async fn connection(inner: Arc<Inner>, device: String, account: String, socket: 
             }
             RelayFrame::Ack { seq } => inner.acknowledge(&device, seq),
             RelayFrame::Ping => reply(RelayFrame::Pong),
+            RelayFrame::Auth { token, .. } => {
+                let same_device = token
+                    .as_deref()
+                    .and_then(|t| inner.session_of(t))
+                    .is_some_and(|(_, s)| s.device.as_deref() == Some(device.as_str()));
+                if same_device {
+                    *inner
+                        .renewals
+                        .lock()
+                        .expect("renewals")
+                        .entry(device.clone())
+                        .or_insert(0) += 1;
+                    reply(RelayFrame::Auth {
+                        token: None,
+                        expires_at: Some(crate::pairing::now_unix() as i64 + 900),
+                    });
+                } else {
+                    reply(send_error("unauthorized", "bad token", None));
+                    let _ = tx.send(Command::Close);
+                    break;
+                }
+            }
             RelayFrame::Resume { .. } => reply(send_error(
                 "bad_request",
                 "resume only as the first frame",

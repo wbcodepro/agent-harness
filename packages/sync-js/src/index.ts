@@ -2,20 +2,23 @@ export * from "./encoding.js";
 export * from "./envelope.js";
 export * from "./errors.js";
 export * from "./frames.js";
+export * from "./jcs.js";
 export * from "./keys.js";
 export * from "./pairing.js";
 export * from "./relay.js";
 export * from "./remote.js";
 
-import type { DeviceIdentity, PublicKeys } from "./keys.js";
+import type { DeviceIdentity, KeyStorage, PublicKeys } from "./keys.js";
 import { RelayClient, type SocketFactory } from "./relay.js";
-import { type CounterStore, RemoteHost, RemoteTransport } from "./remote.js";
+import { type CounterStore, PersistentSequence, RemoteHost, RemoteTransport } from "./remote.js";
 
 export interface ConnectRemoteOptions {
   relayUrl: string;
   deviceId: string;
   token: () => Promise<string>;
   identity: DeviceIdentity;
+  /** Where the identity lives: this device's envelope counter is kept there too. */
+  storage: KeyStorage;
   hostId: string;
   /** The host's keys pinned at pairing (from the grant or the QR code). */
   hostKeys?: PublicKeys;
@@ -41,6 +44,7 @@ export function connectRemote(options: ConnectRemoteOptions): {
     hostId: options.hostId,
     hostKeys: options.hostKeys,
     counters: options.counters,
+    sequence: new PersistentSequence(options.storage, `counter:${options.deviceId}`),
     onRejected: options.onRejected,
     send: (to, envelope) => relay!.send(to, envelope),
   });

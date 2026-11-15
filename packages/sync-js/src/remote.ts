@@ -3,11 +3,13 @@
 // the host sends back, and offers the UI's Transport interface.
 
 import { sha256 } from "@noble/hashes/sha2.js";
-import { b64url, fromB64, fromUtf8, hex, utf8 } from "./encoding.js";
-import { Counter, Sealed, header, seal } from "./envelope.js";
+import { b64url, fromB64, fromB64url32, fromUtf8, hex, utf8 } from "./encoding.js";
+import { Counter, ReplayWindow, Sealed, header, seal } from "./envelope.js";
 import { SyncError } from "./errors.js";
 import { type Frame, streamOf } from "./frames.js";
-import type { DeviceIdentity, PublicKeys } from "./keys.js";
+import { argsSha256 } from "./jcs.js";
+import type { DeviceIdentity, KeyStorage, PublicKeys } from "./keys.js";
+import { checkRelayUrl } from "./relay.js";
 import { type Grant, type PairingOffer, offerExpired, pairingProof, sas, verifyGrant } from "./pairing.js";
 
 /** The interface the UI speaks, locally (HTTP + SSE) or remotely (this). */
@@ -37,6 +39,12 @@ export interface RemoteHostOptions {
   /** Hands an envelope to the relay (RelayClient.send). */
   send: (to: string, envelope: string) => void;
   counters?: CounterStore;
+  /**
+   * This device's envelope counter. Use a PersistentSequence over the same
+   * storage as the identity, so it survives reloads and is shared safely by
+   * several tabs; the default counts in memory from 1 (tests).
+   */
+  sequence?: SequenceSource;
   /** How long a request waits for its answer. */
   timeoutMs?: number;
   /** Envelopes dropped, with the reason (for diagnostics). */
@@ -59,17 +67,83 @@ interface Subscription {
   onEnd: (err?: Error) => void;
 }
 
+/** Where a device's envelope counters come from. */
+export interface SequenceSource {
+  next(): Promise<number>;
+}
+
+/** Counts in memory from 1. */
+export class MemorySequence implements SequenceSource {
+  private readonly counter = new Counter();
+  async next(): Promise<number> {
+    return this.counter.next();
+  }
+}
+
+/**
+ * A counter kept in the device's KeyStorage, incremented under a Web Lock
+ * when the runtime has one (several tabs share one identity safely; the
+ * host's replay window absorbs the reordering between tabs), otherwise
+ * under an in-process lock.
+ */
+export class PersistentSequence implements SequenceSource {
+  private chain: Promise<unknown> = Promise.resolve();
+  constructor(
+    private readonly storage: KeyStorage,
+    private readonly key = "counter",
+  ) {}
+
+  next(): Promise<number> {
+    const step = async () => {
+      const stored = Number((await this.storage.get(this.key)) ?? 0);
+      const next = (Number.isSafeInteger(stored) ? stored : 0) + 1;
+      await this.storage.set(this.key, next);
+      return next;
+    };
+    const locks = (globalThis as { navigator?: { locks?: { request(name: string, cb: () => Promise<number>): Promise<number> } } })
+      .navigator?.locks;
+    const run = this.chain.then(() => (locks ? locks.request(`hame-sync:${this.key}`, step) : step()));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+}
+
+/** A random stream id (52 bits): never reused by a restarted client. */
+export function randomId(): number {
+  const words = new Uint32Array(2);
+  globalThis.crypto.getRandomValues(words);
+  return (words[0]! & 0xfffff) * 2 ** 32 + words[1]!;
+}
+
+/**
+ * The answer to an approval question as the host requires it: the
+ * question's id and tool call id, and the sha256 of the arguments'
+ * canonical JSON recomputed here from the arguments shown to the user. A
+ * question whose stated hash does not match its arguments is refused.
+ */
+export function approvalAnswer(
+  question: { id: number; tool_call_id: string; arguments: unknown; args_sha256?: string },
+  allow: boolean,
+): { id: number; allow: boolean; tool_call_id: string; args_sha256: string } {
+  const hash = argsSha256(question.arguments);
+  if (question.args_sha256 !== undefined && question.args_sha256 !== hash) {
+    throw new SyncError("malformed", "the question's hash does not match its arguments");
+  }
+  return { id: question.id, allow, tool_call_id: question.tool_call_id, args_sha256: hash };
+}
+
 export class RemoteHost {
   private hostKeys: PublicKeys | undefined;
-  private readonly counter = new Counter();
-  private lastHostCounter: number | undefined;
+  private readonly sequence: SequenceSource;
+  private hostWindow: ReplayWindow | undefined;
   private loaded = false;
   // Request ids start from the clock, so a restarted client never reuses
   // an id an old answer could be replayed for.
-  private nextId = Date.now() * 1000;
+
   private readonly pending = new Map<number, Pending>();
   private readonly subscriptions = new Map<number, Subscription>();
   private pairingWaiter: ((frame: Frame) => void) | undefined;
+  private challengeWaiter: ((nonce: Uint8Array) => void) | undefined;
   /** sha256 → session id, learned from the events a subscription delivers. */
   private readonly artifactSessions = new Map<string, string>();
   /** Envelopes are opened one at a time so counters are checked in order. */
@@ -78,6 +152,7 @@ export class RemoteHost {
 
   constructor(private readonly options: RemoteHostOptions) {
     this.hostKeys = options.hostKeys;
+    this.sequence = options.sequence ?? new MemorySequence();
   }
 
   get hostId(): string {
@@ -113,11 +188,13 @@ export class RemoteHost {
     if (!this.loaded) {
       this.loaded = true;
       const stored = await this.options.counters?.get(this.options.hostId);
-      if (stored !== undefined) this.lastHostCounter = Math.max(stored, this.lastHostCounter ?? 0);
+      if (stored !== undefined && !this.hostWindow) this.hostWindow = ReplayWindow.startingAt(stored);
     }
-    const plain = await sealed.open(this.options.identity, this.options.deviceId, this.hostKeys, this.lastHostCounter);
-    this.lastHostCounter = sealed.header.counter;
-    await this.options.counters?.set(this.options.hostId, sealed.header.counter);
+    const plain = await sealed.open(this.options.identity, this.options.deviceId, this.hostKeys, this.hostWindow);
+    const counter = sealed.header.counter;
+    if (this.hostWindow) this.hostWindow.record(counter);
+    else this.hostWindow = ReplayWindow.startingAt(counter);
+    await this.options.counters?.set(this.options.hostId, this.hostWindow.last);
     const frame = JSON.parse(fromUtf8(plain)) as Frame;
     if (streamOf(frame) !== sealed.header.stream) throw new SyncError("malformed", "frame and header name different streams");
     this.route(frame);
@@ -125,6 +202,12 @@ export class RemoteHost {
 
   private route(frame: Frame): void {
     switch (frame.t) {
+      case "pair_challenge": {
+        const waiter = this.challengeWaiter;
+        this.challengeWaiter = undefined;
+        waiter?.(fromB64url32(frame.nonce));
+        return;
+      }
       case "paired":
       case "pair_refused": {
         const waiter = this.pairingWaiter;
@@ -182,7 +265,7 @@ export class RemoteHost {
     const run = this.sendChain.then(async () => {
       const keys = this.hostKeys;
       if (!keys) throw new SyncError("pairing", "not paired with this host");
-      const h = header(this.options.deviceId, this.options.hostId, streamOf(frame), this.counter.next());
+      const h = header(this.options.deviceId, this.options.hostId, streamOf(frame), await this.sequence.next());
       const envelope = await seal(this.options.identity, keys.x, h, utf8(JSON.stringify(frame)));
       this.options.send(this.options.hostId, envelope);
     });
@@ -191,16 +274,21 @@ export class RemoteHost {
   }
 
   /**
-   * Answers a pairing offer (scanned QR code). Returns the six digits to
-   * show (the host shows the same) and the host's verified grant.
+   * Answers a pairing offer (scanned QR code). `sas` resolves to the eight
+   * digits to show once the host's nonce arrived (the host shows the same);
+   * `grant` to the host's verified grant.
    */
-  async pair(offer: PairingOffer, label: string): Promise<{ sas: string; grant: Promise<Grant> }> {
+  async pair(offer: PairingOffer, label: string): Promise<{ sas: Promise<string>; grant: Promise<Grant> }> {
+    checkRelayUrl(offer.relay);
     if (offerExpired(offer)) throw new SyncError("pairing", "the pairing code has expired");
     if (offer.host !== this.options.hostId) throw new SyncError("pairing", "the code is for another host");
     this.hostKeys = offer.hostKeys;
     const me = this.options.identity.publicKeys;
     const answer = new Promise<Frame>((resolve) => {
       this.pairingWaiter = resolve;
+    });
+    const challenge = new Promise<Uint8Array>((resolve) => {
+      this.challengeWaiter = resolve;
     });
     await this.send({ t: "pair", ed: b64url(me.ed), x: b64url(me.x), label, mac: b64url(pairingProof(offer.secret, me)) });
     const grant = answer.then((frame) => {
@@ -212,7 +300,16 @@ export class RemoteHost {
       }
       return verified;
     });
-    return { sas: sas(offer.secret, offer.hostKeys.ed, me.ed), grant };
+    // A refusal before the challenge settles the digits with the same error.
+    const digits = Promise.race([
+      challenge.then((nonce) => sas(offer.secret, offer.hostKeys.ed, me.ed, nonce)),
+      grant.then(() => {
+        throw new SyncError("pairing", "the host sent no pairing challenge");
+      }),
+    ]);
+    digits.catch(() => undefined);
+    grant.catch(() => undefined);
+    return { sas: digits, grant };
   }
 
   private open(id: number, onFrame: (frame: Frame) => void): () => void {
@@ -221,7 +318,7 @@ export class RemoteHost {
   }
 
   private async exchange(make: (id: number) => Frame, timeoutMs = this.options.timeoutMs ?? 30_000): Promise<Response> {
-    const id = this.nextId++;
+    const id = randomId();
     let close: () => void = () => undefined;
     const answer = new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -260,7 +357,7 @@ export class RemoteHost {
 
   /** Subscribes to an event stream; records up to `after` are skipped (-1: all). */
   subscribe(path: string, after: number, onEvent: (seq: number, data: unknown) => void, onEnd: (err?: Error) => void): () => void {
-    const id = this.nextId++;
+    const id = randomId();
     this.subscriptions.set(id, { path, lastSeq: after, onEvent, onEnd });
     this.send({ t: "sub", id, path, after }).catch((error: unknown) => {
       this.subscriptions.delete(id);
@@ -278,7 +375,7 @@ export class RemoteHost {
   async fetchBlob(digest: string, session?: string): Promise<{ mime: string; bytes: Uint8Array }> {
     const owner = session ?? this.artifactSessions.get(digest);
     if (!owner) throw new SyncError("malformed", "no session refers to this artifact yet");
-    const id = this.nextId++;
+    const id = randomId();
     const timeoutMs = this.options.timeoutMs ?? 60_000;
     let close: () => void = () => undefined;
     const result = new Promise<{ mime: string; bytes: Uint8Array }>((resolve, reject) => {

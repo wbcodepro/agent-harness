@@ -21,6 +21,7 @@ pub mod client;
 pub mod connector;
 pub mod envelope;
 pub mod frames;
+pub mod jcs;
 pub mod keys;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
@@ -28,6 +29,7 @@ pub mod pairing;
 pub mod relay;
 pub mod relay_api;
 pub mod store;
+pub mod text;
 
 use std::path::{Path, PathBuf};
 
@@ -69,6 +71,8 @@ pub enum SyncError {
     Store(String),
     #[error("relay: {0}")]
     Relay(String),
+    #[error("the relay refused the sign-in; run `hame connect --relay <url>` to sign in again")]
+    Unauthorized,
     #[error("closed")]
     Closed,
 }

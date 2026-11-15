@@ -9,6 +9,7 @@ export type RelayFrame =
   | { op: "resume"; after: number }
   | { op: "presence"; device: string; online: boolean }
   | { op: "error"; code: string; message?: string; to?: string }
+  | { op: "auth"; token?: string; expires_at?: number }
   | { op: "ping" }
   | { op: "pong" };
 
@@ -23,6 +24,7 @@ export type Frame =
   | { t: "pair"; ed: string; x: string; label: string; mac: string }
   | { t: "paired"; grant: string; sig: string }
   | { t: "pair_refused"; reason: string }
+  | { t: "pair_challenge"; nonce: string }
   | { t: "revoke"; id: number; device: string }
   | { t: "devices"; id: number };
 
@@ -32,6 +34,7 @@ export function streamOf(frame: Frame): string {
     case "pair":
     case "paired":
     case "pair_refused":
+    case "pair_challenge":
       return "pair";
     default:
       return String(frame.id);

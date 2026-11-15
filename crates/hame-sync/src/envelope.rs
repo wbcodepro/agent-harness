@@ -41,7 +41,7 @@ pub const SIGNATURE_CONTEXT: &[u8] = b"hame-sync v1 signature";
 /// Longest header, in bytes.
 pub const MAX_HEADER: usize = 1024;
 /// Longest device or stream id in a header.
-pub const MAX_ID: usize = 128;
+pub const MAX_ID: usize = crate::text::MAX_ID;
 /// Largest plaintext an envelope carries (a 256 KiB blob chunk in base64
 /// inside its JSON frame fits with room to spare).
 pub const MAX_PLAINTEXT: usize = 512 * 1024;
@@ -78,7 +78,7 @@ impl Header {
             return Err(SyncError::Malformed("unknown envelope version"));
         }
         for id in [&self.from, &self.to, &self.stream] {
-            if id.is_empty() || id.len() > MAX_ID {
+            if !crate::text::valid_id(id) {
                 return Err(SyncError::Malformed("bad id in header"));
             }
         }
@@ -249,35 +249,86 @@ impl Sealed {
     }
 
     /// Everything a recipient checks, in order: addressed to `my_id`,
-    /// signed by the pinned `sender` key, a counter above `last_counter`,
-    /// and contents that decrypt. The caller records the counter only
-    /// after this succeeds.
+    /// signed by the pinned `sender` key, a counter the replay `window`
+    /// has not seen, and contents that decrypt. The caller records the
+    /// counter in the window only after this succeeds.
     pub fn open(
         &self,
         me: &Identity,
         my_id: &str,
         sender: &PublicIdentity,
-        last_counter: Option<u64>,
+        window: Option<&ReplayWindow>,
     ) -> Result<Zeroizing<Vec<u8>>, SyncError> {
         if self.header.to != my_id {
             return Err(SyncError::WrongRecipient);
         }
         self.verify(&sender.ed)?;
-        if let Some(last) = last_counter
-            && self.header.counter <= last
-        {
-            return Err(SyncError::Replay {
-                counter: self.header.counter,
-                last,
-            });
+        if let Some(window) = window {
+            window.check(self.header.counter)?;
         }
         self.decrypt(me)
     }
 }
 
-/// A sender's monotonic counter. Starts from the clock in microseconds, so
-/// a sender that lost its state (a private browser window) still counts
-/// upwards after a restart.
+/// How far below the highest counter seen an envelope may still arrive
+/// (several tabs sharing one identity, a resend after a reconnection).
+pub const REPLAY_WINDOW: u64 = 64;
+
+/// The counters accepted from one sender: the highest, and which of the 63
+/// below it were seen. A counter above the highest, or inside the window
+/// and not seen yet, is accepted once; anything else is a replay.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplayWindow {
+    pub last: u64,
+    /// Bit `i` set: counter `last - i` was accepted.
+    pub seen: u64,
+}
+
+impl ReplayWindow {
+    /// A window that has accepted `counter` and nothing else.
+    pub fn starting_at(counter: u64) -> Self {
+        Self {
+            last: counter,
+            seen: 1,
+        }
+    }
+
+    pub fn check(&self, counter: u64) -> Result<(), SyncError> {
+        if counter > self.last {
+            return Ok(());
+        }
+        let behind = self.last - counter;
+        if behind >= REPLAY_WINDOW || self.seen & (1 << behind) != 0 {
+            return Err(SyncError::Replay {
+                counter,
+                last: self.last,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn record(&mut self, counter: u64) {
+        if counter > self.last {
+            let shift = counter - self.last;
+            self.seen = if shift >= REPLAY_WINDOW {
+                0
+            } else {
+                self.seen << shift
+            };
+            self.seen |= 1;
+            self.last = counter;
+        } else {
+            let behind = self.last - counter;
+            if behind < REPLAY_WINDOW {
+                self.seen |= 1 << behind;
+            }
+        }
+    }
+}
+
+/// A sender's sequence: 1, 2, 3… The sender persists it (the host reserves
+/// blocks ahead, see the connector); a device that lost it pairs again,
+/// which resets the host's window for it.
 #[derive(Debug, Default)]
 pub struct Counter {
     last: u64,
@@ -292,13 +343,9 @@ impl Counter {
         self.last
     }
 
-    /// The next counter value: above the last one and at least the clock.
+    /// The next counter value.
     pub fn advance(&mut self) -> u64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_micros() as u64)
-            .unwrap_or(0);
-        self.last = now.max(self.last + 1);
+        self.last += 1;
         self.last
     }
 }
@@ -318,7 +365,14 @@ mod tests {
         let text = seal(&alice, &bob.public().x, &header, b"secret").unwrap();
         let sealed = Sealed::parse(&text).unwrap();
         assert_eq!(sealed.header, header);
-        let plain = sealed.open(&bob, "bob", &alice.public(), Some(9)).unwrap();
+        let plain = sealed
+            .open(
+                &bob,
+                "bob",
+                &alice.public(),
+                Some(&ReplayWindow::starting_at(9)),
+            )
+            .unwrap();
         assert_eq!(&plain[..], b"secret");
     }
 
@@ -338,7 +392,12 @@ mod tests {
             Err(SyncError::BadSignature)
         ));
         assert!(matches!(
-            sealed.open(&bob, "bob", &alice.public(), Some(10)),
+            sealed.open(
+                &bob,
+                "bob",
+                &alice.public(),
+                Some(&ReplayWindow::starting_at(10))
+            ),
             Err(SyncError::Replay { .. })
         ));
         // Not decryptable by anyone else, even with a valid signature.
@@ -392,12 +451,23 @@ mod tests {
     }
 
     #[test]
-    fn counters_increase() {
-        let mut counter = Counter::starting_after(1 << 52);
-        let a = counter.advance();
-        let b = counter.advance();
-        assert!(b > a);
-        let mut fresh = Counter::default();
-        assert!(fresh.advance() > 1_600_000_000_000_000);
+    fn counters_count_and_the_window_accepts_each_once() {
+        let mut counter = Counter::default();
+        assert_eq!((counter.advance(), counter.advance()), (1, 2));
+
+        let mut window = ReplayWindow::starting_at(10);
+        assert!(window.check(10).is_err());
+        // Out of order within the window: each accepted once.
+        for c in [12, 11, 15] {
+            window.check(c).unwrap();
+            window.record(c);
+            assert!(window.check(c).is_err());
+        }
+        window.check(13).unwrap();
+        window.record(100);
+        assert!(window.check(100 - REPLAY_WINDOW).is_err(), "too old");
+        window.check(100 - REPLAY_WINDOW + 1).unwrap();
+        window.record(1000);
+        assert_eq!(window.seen, 1);
     }
 }

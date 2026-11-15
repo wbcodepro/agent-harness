@@ -4,17 +4,16 @@
 //! protocol.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::SyncError;
-use crate::envelope::{Counter, Header, Sealed, seal};
+use crate::envelope::{Counter, Header, ReplayWindow, Sealed, seal};
 use crate::frames::Frame;
 use crate::keys::{Identity, PublicIdentity, b64, hex};
 use crate::pairing::{Grant, PairingOffer, SignedGrant, pairing_proof, sas};
@@ -41,10 +40,9 @@ struct Inner {
     host: Mutex<Option<PublicIdentity>>,
     relay: RelayHandle,
     counter: tokio::sync::Mutex<Counter>,
-    last_host_counter: Mutex<Option<u64>>,
-    next_id: AtomicU64,
+    host_window: Mutex<Option<ReplayWindow>>,
     waiters: Mutex<HashMap<u64, mpsc::UnboundedSender<Frame>>>,
-    pairing: Mutex<Option<oneshot::Sender<Frame>>>,
+    pairing: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     rejected: Mutex<Vec<String>>,
 }
 
@@ -72,8 +70,7 @@ impl RemoteClient {
                 host: Mutex::new(host),
                 relay,
                 counter: tokio::sync::Mutex::new(Counter::default()),
-                last_host_counter: Mutex::new(None),
-                next_id: AtomicU64::new(1),
+                host_window: Mutex::new(None),
                 waiters: Mutex::new(HashMap::new()),
                 pairing: Mutex::new(None),
                 rejected: Mutex::new(Vec::new()),
@@ -97,14 +94,16 @@ impl RemoteClient {
         self.inner.rejected.lock().expect("rejected").clone()
     }
 
-    /// Sends a pairing request answering `offer` and returns the six
-    /// digits to compare with the host's screen. Await
-    /// [`RemoteClient::paired`] for the host's answer.
+    /// Sends a pairing request answering `offer`. Then
+    /// [`Pairing::sas`] gives the eight digits to compare with the host's
+    /// screen (once the host's nonce arrived), and [`RemoteClient::paired`]
+    /// the host's answer.
     pub async fn start_pairing(
         &self,
         offer: &PairingOffer,
         label: &str,
-    ) -> Result<(String, oneshot::Receiver<Frame>), SyncError> {
+    ) -> Result<Pairing, SyncError> {
+        crate::relay::check_relay_url(&offer.relay)?;
         if offer.expired(crate::pairing::now_unix()) {
             return Err(SyncError::Pairing("the pairing code has expired".into()));
         }
@@ -113,7 +112,7 @@ impl RemoteClient {
         }
         *self.inner.host.lock().expect("host") = Some(offer.host_keys);
         let me = self.public();
-        let (answer, answered) = oneshot::channel();
+        let (answer, answered) = mpsc::unbounded_channel();
         *self.inner.pairing.lock().expect("pairing") = Some(answer);
         let frame = Frame::Pair {
             ed: b64(&me.ed),
@@ -122,15 +121,26 @@ impl RemoteClient {
             mac: b64(&pairing_proof(&offer.secret, &me)),
         };
         self.send(frame).await?;
-        Ok((sas(&offer.secret, &offer.host_keys.ed, &me.ed), answered))
+        Ok(Pairing {
+            answers: answered,
+            secret: offer.secret,
+            host_ed: offer.host_keys.ed,
+            client_ed: me.ed,
+            early: None,
+        })
     }
 
     /// The host's answer to a pairing request: its verified grant.
-    pub async fn paired(&self, answered: oneshot::Receiver<Frame>) -> Result<Grant, SyncError> {
-        let frame = tokio::time::timeout(Duration::from_secs(600), answered)
-            .await
-            .map_err(|_| SyncError::Pairing("no answer from the host".into()))?
-            .map_err(|_| SyncError::Closed)?;
+    pub async fn paired(&self, mut pairing: Pairing) -> Result<Grant, SyncError> {
+        let frame = loop {
+            let frame = match pairing.early.take() {
+                Some(frame) => frame,
+                None => pairing.next().await?,
+            };
+            if !matches!(frame, Frame::PairChallenge { .. }) {
+                break frame;
+            }
+        };
         match frame {
             Frame::Paired { grant, sig } => {
                 let host = self.host()?;
@@ -157,7 +167,9 @@ impl RemoteClient {
     }
 
     fn open_stream(&self) -> (u64, mpsc::UnboundedReceiver<Frame>) {
-        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        // Opaque random stream ids: a restarted client never reuses an id
+        // an old answer could be replayed for.
+        let id = rand::random::<u64>() >> 12;
         let (tx, rx) = mpsc::unbounded_channel();
         self.inner.waiters.lock().expect("waiters").insert(id, tx);
         (id, rx)
@@ -344,6 +356,48 @@ impl RemoteClient {
     }
 }
 
+/// A pairing in progress.
+pub struct Pairing {
+    answers: mpsc::UnboundedReceiver<Frame>,
+    secret: [u8; 32],
+    host_ed: [u8; 32],
+    client_ed: [u8; 32],
+    early: Option<Frame>,
+}
+
+impl Pairing {
+    async fn next(&mut self) -> Result<Frame, SyncError> {
+        tokio::time::timeout(Duration::from_secs(600), self.answers.recv())
+            .await
+            .map_err(|_| SyncError::Pairing("no answer from the host".into()))?
+            .ok_or(SyncError::Closed)
+    }
+
+    /// The eight digits both screens show, computed with the host's nonce
+    /// once it arrives. An early refusal is reported as an error (and again
+    /// by [`RemoteClient::paired`]).
+    pub async fn sas(&mut self) -> Result<String, SyncError> {
+        let frame = self.next().await?;
+        match &frame {
+            Frame::PairChallenge { nonce } => {
+                let nonce = crate::keys::unb64_32(nonce)?;
+                Ok(sas(&self.secret, &self.host_ed, &self.client_ed, &nonce))
+            }
+            Frame::PairRefused { reason } => {
+                let reason = reason.clone();
+                self.early = Some(frame);
+                Err(SyncError::Pairing(reason))
+            }
+            _ => {
+                self.early = Some(frame);
+                Err(SyncError::Pairing(
+                    "the host sent no pairing challenge".into(),
+                ))
+            }
+        }
+    }
+}
+
 impl Inner {
     async fn receive(self: Arc<Self>, mut events: mpsc::Receiver<RelayEvent>) {
         while let Some(event) = events.recv().await {
@@ -376,9 +430,16 @@ impl Inner {
             .lock()
             .expect("host")
             .ok_or_else(|| SyncError::UnknownSender(from.into()))?;
-        let last = *self.last_host_counter.lock().expect("counter");
-        let plain = sealed.open(&self.identity, &self.device_id, &host, last)?;
-        *self.last_host_counter.lock().expect("counter") = Some(sealed.header.counter);
+        let window = *self.host_window.lock().expect("window");
+        let plain = sealed.open(&self.identity, &self.device_id, &host, window.as_ref())?;
+        {
+            let mut window = self.host_window.lock().expect("window");
+            let counter = sealed.header.counter;
+            match window.as_mut() {
+                Some(window) => window.record(counter),
+                None => *window = Some(ReplayWindow::starting_at(counter)),
+            }
+        }
         let frame: Frame =
             serde_json::from_slice(&plain).map_err(|_| SyncError::Malformed("bad frame"))?;
         if frame.stream() != sealed.header.stream {
@@ -387,6 +448,11 @@ impl Inner {
             ));
         }
         match frame {
+            Frame::PairChallenge { .. } => {
+                if let Some(waiter) = self.pairing.lock().expect("pairing").as_ref() {
+                    let _ = waiter.send(frame);
+                }
+            }
             Frame::Paired { .. } | Frame::PairRefused { .. } => {
                 if let Some(waiter) = self.pairing.lock().expect("pairing").take() {
                     let _ = waiter.send(frame);

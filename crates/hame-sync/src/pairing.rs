@@ -77,9 +77,15 @@ impl PairingOffer {
                 .cloned()
                 .ok_or(SyncError::Malformed("pairing code misses a field"))
         };
+        let relay = field("relay")?;
+        crate::relay::check_relay_url(&relay)?;
+        let host = field("host")?;
+        if !crate::text::valid_id(&host) {
+            return Err(SyncError::Malformed("bad host id in pairing code"));
+        }
         Ok(Self {
-            relay: field("relay")?,
-            host: field("host")?,
+            relay,
+            host,
             host_keys: PublicIdentity {
                 ed: unb64_32(&field("ed")?)?,
                 x: unb64_32(&field("x")?)?,
@@ -118,18 +124,26 @@ pub fn check_pairing_proof(
         .map_err(|_| SyncError::Pairing("the pairing proof does not match".into()))
 }
 
-/// Six digits from `SHA256("hame-sas" ‖ secret ‖ host_ed ‖ client_ed)`:
-/// the first four bytes as a big-endian number, modulo one million,
-/// zero-padded.
-pub fn sas(secret: &[u8; 32], host_ed: &[u8; 32], client_ed: &[u8; 32]) -> String {
+/// Eight digits from
+/// `SHA256("hame-sas-v2" ‖ secret ‖ host_ed ‖ client_ed ‖ host_nonce)`: the
+/// first eight bytes as a big-endian number, modulo 10^8, zero-padded. The
+/// host's nonce is revealed only after the device sent its keys (in a
+/// `pair_challenge`), so no one can search for keys that give chosen digits.
+pub fn sas(
+    secret: &[u8; 32],
+    host_ed: &[u8; 32],
+    client_ed: &[u8; 32],
+    host_nonce: &[u8; 32],
+) -> String {
     let digest = Sha256::new()
-        .chain_update(b"hame-sas")
+        .chain_update(b"hame-sas-v2")
         .chain_update(secret)
         .chain_update(host_ed)
         .chain_update(client_ed)
+        .chain_update(host_nonce)
         .finalize();
-    let number = u32::from_be_bytes(digest[..4].try_into().expect("4 bytes"));
-    format!("{:06}", number % 1_000_000)
+    let number = u64::from_be_bytes(digest[..8].try_into().expect("8 bytes"));
+    format!("{:08}", number % 100_000_000)
 }
 
 /// The host's statement that it accepts a device.
@@ -219,50 +233,67 @@ pub struct GrantList {
     pub kind: String,
     pub v: u32,
     pub host: String,
+    /// Increases with every list the host publishes, so an older one
+    /// cannot be passed off as current.
+    pub version: u64,
     pub devices: Vec<GrantEntry>,
     pub issued: u64,
 }
 
 /// The body of `POST /v1/hosts/{id}/grants` (and what
-/// `GET /v1/hosts/{id}/grants` returns): the document bytes and the host's
-/// Ed25519 signature over exactly those bytes, both base64url. The relay
-/// checks the signature with the host's registered key before storing it.
+/// `GET /v1/hosts/{id}/grants` returns): a strictly increasing `version`,
+/// the document bytes and the host's Ed25519 signature over
+/// `"hame-grants:v1\n{host_id}\n{version}\n" ‖ document`, both base64url.
+/// The relay checks the signature with the host's registered key and the
+/// version against the stored one before storing it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedGrantList {
+    pub version: u64,
     pub document: String,
     pub signature: String,
 }
 
+/// What the host signs for a grant list (the relay's format).
+pub fn grant_list_message(host: &str, version: u64, document: &[u8]) -> Vec<u8> {
+    let mut message = format!("hame-grants:v1\n{host}\n{version}\n").into_bytes();
+    message.extend_from_slice(document);
+    message
+}
+
 impl GrantList {
-    pub fn new(host: &str, devices: Vec<GrantEntry>) -> Self {
+    pub fn new(host: &str, version: u64, devices: Vec<GrantEntry>) -> Self {
         Self {
             kind: GRANT_LIST_KIND.into(),
             v: 1,
             host: host.into(),
+            version,
             devices,
             issued: now_unix(),
         }
     }
 
-    /// Signs the JSON bytes as they are (no context prefix: the relay
-    /// verifies a plain signature).
+    /// Signs in the relay's format, see [`SignedGrantList`].
     pub fn sign(&self, host: &Identity) -> SignedGrantList {
         let bytes = serde_json::to_vec(self).expect("a grant list serialises");
+        let message = grant_list_message(&self.host, self.version, &bytes);
         SignedGrantList {
-            signature: sign_document(host, b"", &bytes),
+            version: self.version,
+            signature: b64(&host.sign(&message)),
             document: b64(&bytes),
         }
     }
 }
 
 impl SignedGrantList {
-    pub fn verify(&self, host_ed: &[u8; 32]) -> Result<GrantList, SyncError> {
+    /// Verifies a list published by the host `host_id`.
+    pub fn verify(&self, host_id: &str, host_ed: &[u8; 32]) -> Result<GrantList, SyncError> {
         let bytes = unb64(&self.document)?;
-        verify_document(host_ed, b"", &bytes, &self.signature)?;
+        let message = grant_list_message(host_id, self.version, &bytes);
+        verify_document(host_ed, b"", &message, &self.signature)?;
         let list: GrantList =
             serde_json::from_slice(&bytes).map_err(|_| SyncError::Malformed("bad grant list"))?;
-        if list.kind != GRANT_LIST_KIND {
-            return Err(SyncError::Malformed("not a grant list"));
+        if list.kind != GRANT_LIST_KIND || list.host != host_id || list.version != self.version {
+            return Err(SyncError::Malformed("not this host's grant list"));
         }
         Ok(list)
     }
@@ -275,12 +306,24 @@ mod tests {
     #[test]
     fn an_offer_round_trips_through_its_uri() {
         let host = Identity::generate();
-        let offer = PairingOffer::new("https://relay.example/x?y=1&z", "host 1", host.public());
+        let offer = PairingOffer::new("https://relay.example/x?y=1&z", "host-1", host.public());
         let uri = offer.to_uri();
         assert!(uri.starts_with("hame-pair:v1?relay=https%3A%2F%2Frelay.example"));
         assert_eq!(PairingOffer::parse(&uri).unwrap(), offer);
         assert!(PairingOffer::parse("hame-pair:v2?relay=x").is_err());
         assert!(PairingOffer::parse(&format!("{uri}&exp=1")).is_err());
+        let plain = PairingOffer::new("http://relay.example", "h", host.public());
+        assert!(
+            PairingOffer::parse(&plain.to_uri()).is_err(),
+            "no plain http"
+        );
+        let local = PairingOffer::new("http://127.0.0.1:8080", "h", host.public());
+        assert!(PairingOffer::parse(&local.to_uri()).is_ok());
+        let spaced = PairingOffer::new("https://r", "host 1", host.public());
+        assert!(
+            PairingOffer::parse(&spaced.to_uri()).is_err(),
+            "bad host id"
+        );
         assert!(!offer.expired(now_unix()));
         assert!(offer.expired(offer.expires));
     }
@@ -294,10 +337,11 @@ mod tests {
         check_pairing_proof(&secret, &client, &proof).unwrap();
         assert!(check_pairing_proof(&secret, &other, &proof).is_err());
         assert!(check_pairing_proof(&[8u8; 32], &client, &proof).is_err());
-        let code = sas(&secret, &[1; 32], &client.ed);
-        assert_eq!(code.len(), 6);
+        let code = sas(&secret, &[1; 32], &client.ed, &[9; 32]);
+        assert_eq!(code.len(), 8);
         assert!(code.bytes().all(|b| b.is_ascii_digit()));
-        assert_ne!(code, sas(&secret, &[1; 32], &other.ed));
+        assert_ne!(code, sas(&secret, &[1; 32], &other.ed, &[9; 32]));
+        assert_ne!(code, sas(&secret, &[1; 32], &client.ed, &[8; 32]));
     }
 
     #[test]
@@ -308,7 +352,11 @@ mod tests {
         let grant = signed.verify(&host.public().ed).unwrap();
         assert_eq!(grant.device, "d");
         assert!(signed.verify(&Identity::generate().public().ed).is_err());
-        let list = GrantList::new("h", vec![]);
-        assert_eq!(list.sign(&host).verify(&host.public().ed).unwrap(), list);
+        let list = GrantList::new("h", 3, vec![]);
+        assert_eq!(
+            list.sign(&host).verify("h", &host.public().ed).unwrap(),
+            list
+        );
+        assert!(list.sign(&host).verify("other", &host.public().ed).is_err());
     }
 }

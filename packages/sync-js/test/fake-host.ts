@@ -4,7 +4,7 @@
 // crates/hame-sync's connector.
 
 import { sha256 } from "@noble/hashes/sha2.js";
-import { Counter, Sealed, header, seal } from "../src/envelope.js";
+import { Counter, ReplayWindow, Sealed, header, seal } from "../src/envelope.js";
 import { b64, b64url, concat, fromB64url, fromB64url32, fromUtf8, hex, utf8 } from "../src/encoding.js";
 import { type Frame, streamOf } from "../src/frames.js";
 import { type PublicKeys, RawIdentity } from "../src/keys.js";
@@ -13,7 +13,7 @@ import { RelayClient } from "../src/relay.js";
 
 interface Device {
   keys: PublicKeys;
-  last: number;
+  window: ReplayWindow;
 }
 
 export class FakeHost {
@@ -88,13 +88,15 @@ export class FakeHost {
       if (!sealed.verify(keys.ed)) throw new Error("bad signature");
       if (!checkPairingProof(offer.secret, keys, fromB64url(frame.mac))) throw new Error("bad proof");
       this.offer = undefined;
-      const code = sas(offer.secret, this.identity.publicKeys.ed, keys.ed);
+      const nonce = crypto.getRandomValues(new Uint8Array(32));
+      await this.send(from, keys.x, { t: "pair_challenge", nonce: b64url(nonce) });
+      const code = sas(offer.secret, this.identity.publicKeys.ed, keys.ed, nonce);
       this.sasShown.push(code);
       if (!this.confirm(code)) {
         await this.send(from, keys.x, { t: "pair_refused", reason: "not confirmed on the host" });
         return;
       }
-      this.devices.set(from, { keys, last: sealed.header.counter });
+      this.devices.set(from, { keys, window: ReplayWindow.startingAt(sealed.header.counter) });
       const grant = utf8(
         JSON.stringify({ v: 1, host: this.id, device: from, ed: frame.ed, x: frame.x, label: frame.label, issued: 1 }),
       );
@@ -102,8 +104,8 @@ export class FakeHost {
       await this.send(from, keys.x, { t: "paired", grant: b64url(grant), sig: b64url(sig) });
       return;
     }
-    const plain = await sealed.open(this.identity, this.id, device.keys, device.last);
-    device.last = sealed.header.counter;
+    const plain = await sealed.open(this.identity, this.id, device.keys, device.window);
+    device.window.record(sealed.header.counter);
     const frame = JSON.parse(fromUtf8(plain)) as Frame;
     const reply = (f: Frame) => this.send(from, device.keys.x, f);
     switch (frame.t) {

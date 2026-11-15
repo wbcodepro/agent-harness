@@ -1,21 +1,30 @@
 //! The host's files in the hame home, under `sync/`:
 //!
 //! - `identity.json`: the host's private keys;
-//! - `allowlist.json`: enrolled devices with their pinned keys and last
-//!   counters, revoked keys, and the host's own counter;
-//! - `relay.json`: the relay address, this host's device id and tokens.
+//! - `allowlist.json`: enrolled devices with their pinned keys and replay
+//!   windows, revoked keys, the host's counter reservation and the grant
+//!   list version;
+//! - `revocations.log`: revoked devices, one JSON line each, only ever
+//!   appended to. Whatever `allowlist.json` says, a device listed here is
+//!   not enrolled: a process holding a stale copy of the allowlist cannot
+//!   bring a revoked device back;
+//! - `relay.json`: the relay address, this host's device id and tokens;
+//! - `lock`: an advisory lock taken for every read-modify-write, by the
+//!   running connector and by `hame connect revoke` alike.
 //!
 //! Every file is written with mode 0600 in a 0700 directory, atomically
 //! (temporary file, then rename). Loading refuses a file or directory that
 //! the group or others can read or write: keys on disk with mode 644 are
 //! how other products leaked them.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::SyncError;
+use crate::envelope::ReplayWindow;
 use crate::keys::{Identity, PublicIdentity, StoredIdentity, b64, unb64_32};
 
 /// A device the host accepts.
@@ -26,9 +35,9 @@ pub struct AllowedDevice {
     pub ed: String,
     pub x: String,
     pub added: u64,
-    /// The highest envelope counter accepted from this device.
+    /// The envelope counters accepted from this device.
     #[serde(default)]
-    pub last_counter: u64,
+    pub window: ReplayWindow,
 }
 
 impl AllowedDevice {
@@ -54,9 +63,13 @@ pub struct Allowlist {
     pub devices: Vec<AllowedDevice>,
     #[serde(default)]
     pub revoked: Vec<RevokedKey>,
-    /// The last counter the host used in an envelope it sent.
+    /// The host's counters up to this value may have been used: a host
+    /// restarts above it (the connector reserves blocks ahead).
     #[serde(default)]
     pub host_counter: u64,
+    /// The version of the last grant list published to the relay.
+    #[serde(default)]
+    pub grants_version: u64,
 }
 
 impl Allowlist {
@@ -73,8 +86,10 @@ impl Allowlist {
         self.revoked.iter().any(|r| r.ed == ed)
     }
 
-    /// Adds a device. A known device with a different key is refused,
-    /// never silently replaced; so is a revoked key.
+    /// Adds a device whose pairing envelope carried `counter`. A known
+    /// device with a different key is refused, never silently replaced; so
+    /// is a revoked key. A known device pairing again with its own key (it
+    /// lost its state) starts a fresh replay window.
     pub fn add(
         &mut self,
         device: &str,
@@ -85,10 +100,12 @@ impl Allowlist {
         if self.is_revoked(keys) {
             return Err(SyncError::Pairing("this key was revoked".into()));
         }
-        if let Some(known) = self.get(device) {
+        if let Some(known) = self.get_mut(device) {
             if known.keys()? != *keys {
                 return Err(SyncError::KeyChanged(device.into()));
             }
+            known.window = ReplayWindow::starting_at(counter);
+            known.label = label.into();
             return Ok(());
         }
         self.devices.push(AllowedDevice {
@@ -97,7 +114,7 @@ impl Allowlist {
             ed: b64(&keys.ed),
             x: b64(&keys.x),
             added: crate::pairing::now_unix(),
-            last_counter: counter,
+            window: ReplayWindow::starting_at(counter),
         });
         Ok(())
     }
@@ -115,6 +132,18 @@ impl Allowlist {
             revoked: crate::pairing::now_unix(),
         });
         true
+    }
+
+    /// Applies revocations: every device whose id and key are listed is
+    /// removed, and every listed key is remembered as revoked.
+    fn apply(&mut self, revocations: &[RevokedKey]) {
+        for revoked in revocations {
+            self.devices
+                .retain(|d| !(d.device == revoked.device && d.ed == revoked.ed));
+            if !self.revoked.iter().any(|r| r.ed == revoked.ed) {
+                self.revoked.push(revoked.clone());
+            }
+        }
     }
 }
 
@@ -135,6 +164,14 @@ pub struct HostStore {
     dir: PathBuf,
 }
 
+/// Holds the store's advisory lock until dropped.
+pub struct StoreLock {
+    _file: std::fs::File,
+}
+
+/// The stamps of the files that make up the allowlist.
+pub type Stamp = Vec<(std::time::SystemTime, u64)>;
+
 impl HostStore {
     pub fn new(home: &Path) -> Self {
         Self {
@@ -151,6 +188,17 @@ impl HostStore {
             create_private_dir(&self.dir)?;
         }
         check_private(&self.dir)
+    }
+
+    /// Takes the store's exclusive advisory lock (blocking).
+    pub fn lock(&self) -> Result<StoreLock, SyncError> {
+        self.ensure_dir()?;
+        let path = self.dir.join("lock");
+        let file = private_options(false)
+            .open(&path)
+            .map_err(|e| SyncError::io(&path, e))?;
+        file.lock().map_err(|e| SyncError::io(&path, e))?;
+        Ok(StoreLock { _file: file })
     }
 
     fn load<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, SyncError> {
@@ -174,6 +222,7 @@ impl HostStore {
 
     /// The host's identity, created on first use.
     pub fn identity(&self) -> Result<Identity, SyncError> {
+        let _lock = self.lock()?;
         if let Some(stored) = self.load::<StoredIdentity>("identity.json")? {
             return stored.identity();
         }
@@ -182,19 +231,95 @@ impl HostStore {
         Ok(identity)
     }
 
+    /// Every revocation ever made, in order.
+    pub fn revocations(&self) -> Result<Vec<RevokedKey>, SyncError> {
+        let path = self.dir.join("revocations.log");
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        check_private(&path)?;
+        let text = std::fs::read_to_string(&path).map_err(|e| SyncError::io(&path, e))?;
+        Ok(text
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect())
+    }
+
+    fn append_revocations(&self, entries: &[RevokedKey]) -> Result<(), SyncError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let path = self.dir.join("revocations.log");
+        let mut file = private_options(true)
+            .open(&path)
+            .map_err(|e| SyncError::io(&path, e))?;
+        let mut text = String::new();
+        for entry in entries {
+            text.push_str(&serde_json::to_string(entry).expect("serialises"));
+            text.push('\n');
+        }
+        file.write_all(text.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|e| SyncError::io(&path, e))
+    }
+
+    fn read_allowlist(&self) -> Result<Allowlist, SyncError> {
+        let mut allowlist: Allowlist = self.load("allowlist.json")?.unwrap_or_default();
+        allowlist.apply(&self.revocations()?);
+        Ok(allowlist)
+    }
+
+    /// The allowlist with every logged revocation applied.
     pub fn allowlist(&self) -> Result<Allowlist, SyncError> {
-        Ok(self.load("allowlist.json")?.unwrap_or_default())
+        let _lock = self.lock()?;
+        self.read_allowlist()
     }
 
+    /// Saves an allowlist. Revocations it holds that are not logged yet are
+    /// logged first, and logged revocations are applied to it, so a caller
+    /// with an older copy can neither lose a revocation nor undo one.
     pub fn save_allowlist(&self, allowlist: &Allowlist) -> Result<(), SyncError> {
-        self.save("allowlist.json", allowlist)
+        let _lock = self.lock()?;
+        self.write_allowlist(allowlist.clone())
     }
 
-    /// When and how large `allowlist.json` was last written, to notice a
-    /// change made by another process (`hame connect revoke`).
-    pub fn allowlist_stamp(&self) -> Option<(std::time::SystemTime, u64)> {
-        let metadata = std::fs::metadata(self.dir.join("allowlist.json")).ok()?;
-        Some((metadata.modified().ok()?, metadata.len()))
+    fn write_allowlist(&self, mut allowlist: Allowlist) -> Result<(), SyncError> {
+        let logged = self.revocations()?;
+        let new: Vec<RevokedKey> = allowlist
+            .revoked
+            .iter()
+            .filter(|r| !logged.iter().any(|l| l.ed == r.ed && l.device == r.device))
+            .cloned()
+            .collect();
+        self.append_revocations(&new)?;
+        allowlist.apply(&logged);
+        self.save("allowlist.json", &allowlist)
+    }
+
+    /// Read-modify-write under the lock: `change` sees the current file
+    /// (revocations applied) and what it leaves is saved. Returns the saved
+    /// allowlist and `change`'s result.
+    pub fn update_allowlist<T>(
+        &self,
+        change: impl FnOnce(&mut Allowlist) -> Result<T, SyncError>,
+    ) -> Result<(Allowlist, T), SyncError> {
+        let _lock = self.lock()?;
+        let mut allowlist = self.read_allowlist()?;
+        let result = change(&mut allowlist)?;
+        self.write_allowlist(allowlist)?;
+        Ok((self.read_allowlist()?, result))
+    }
+
+    /// When and how large `allowlist.json` and `revocations.log` were last
+    /// written, to notice a change made by another process.
+    pub fn allowlist_stamp(&self) -> Stamp {
+        ["allowlist.json", "revocations.log"]
+            .into_iter()
+            .filter_map(|name| {
+                let metadata = std::fs::metadata(self.dir.join(name)).ok()?;
+                Some((metadata.modified().ok()?, metadata.len()))
+            })
+            .collect()
     }
 
     pub fn relay(&self) -> Result<Option<RelayConfig>, SyncError> {
@@ -202,8 +327,25 @@ impl HostStore {
     }
 
     pub fn save_relay(&self, relay: &RelayConfig) -> Result<(), SyncError> {
+        let _lock = self.lock()?;
         self.save("relay.json", relay)
     }
+}
+
+fn private_options(append: bool) -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true);
+    if append {
+        options.append(true);
+    } else {
+        options.read(true).write(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
 }
 
 #[cfg(unix)]
@@ -246,8 +388,11 @@ pub fn check_private(_path: &Path) -> Result<(), SyncError> {
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), SyncError> {
-    use std::io::Write;
-    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
+    let temp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        crate::keys::hex(&crate::keys::random32()[..6])
+    ));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -310,5 +455,28 @@ mod tests {
         assert!(!list.revoke("phone"));
         assert!(list.get("phone").is_none());
         assert!(list.add("phone2", "Phone", &phone, 5).is_err());
+    }
+
+    #[test]
+    fn a_stale_copy_cannot_undo_a_revocation() {
+        let home = tempfile::tempdir().unwrap();
+        let store = HostStore::new(home.path());
+        let phone = Identity::generate().public();
+        store
+            .update_allowlist(|list| list.add("phone", "Phone", &phone, 1))
+            .unwrap();
+        // The running connector's copy, read before the revocation.
+        let mut stale = store.allowlist().unwrap();
+        // `hame connect revoke` in another process.
+        store
+            .update_allowlist(|list| Ok(list.revoke("phone")))
+            .unwrap();
+        // The connector saves its stale copy (a counter update).
+        stale.get_mut("phone").unwrap().window.record(2);
+        store.save_allowlist(&stale).unwrap();
+        let now = store.allowlist().unwrap();
+        assert!(now.get("phone").is_none());
+        assert!(now.is_revoked(&phone));
+        assert_eq!(store.revocations().unwrap().len(), 1);
     }
 }

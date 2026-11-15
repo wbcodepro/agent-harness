@@ -13,19 +13,22 @@ UI's `Transport` over a paired host. Byte-compatible with
 import { IndexedDbKeyStorage, connectRemote, loadOrCreateIdentity, parseOffer } from "@hame/sync";
 
 const storage = new IndexedDbKeyStorage(); // or an adapter over the OS keychain
-const identity = await loadOrCreateIdentity(storage); // non-extractable WebCrypto keys where possible
+// Non-extractable WebCrypto keys. Raw seeds only with { allowRawKeys: true }
+// (mobile keychains); show the user identity.kind when it is "raw".
+const identity = await loadOrCreateIdentity(storage);
 
 // deviceId and token come from the relay: register once with
 // POST /v1/devices {name, kind, ed25519: b64url(identity.publicKeys.ed), x25519: b64url(identity.publicKeys.x)}
 const { transport, host, relay } = connectRemote({
-  relayUrl, deviceId, token: async () => accessToken, identity,
+  relayUrl, deviceId, token: async () => freshAccessToken(), identity,
+  storage, // the envelope counter is kept here (shared safely by tabs)
   hostId, hostKeys, // hostKeys: pinned at pairing; omit before pairing
 });
 
 // Pairing: scan the QR code shown by `hame connect` or the desktop app.
 const offer = parseOffer(scannedText);
 const { sas, grant } = await host.pair(offer, "My phone");
-showToUser(sas);           // the host shows the same six digits
+showToUser(await sas);       // eight digits; the host shows the same
 const granted = await grant; // the host user confirmed; persist offer.hostKeys
 
 // Then the UI talks to `transport` exactly as to the local one:
@@ -39,10 +42,15 @@ Notes:
 - `afterSeq` is the last record seq seen; `-1` means from the start
   (records are numbered from 0). Events that are not records carry the last
   record's seq.
-- Approval answers must echo the question's `tool_call_id` and
-  `args_sha256`: `POST /api/sessions/{id}/approval {id, allow, tool_call_id, args_sha256}`.
+- Approval questions carry `tool`, `arguments` and `args_sha256`. Show the
+  arguments, then answer with
+  `POST /api/sessions/{id}/approval` and body `approvalAnswer(question, allow)`,
+  which recomputes the hash of the canonical arguments and refuses a
+  question whose hash does not match.
 - The relay token is sent as the WebSocket subprotocol `bearer.<token>` next
-  to `hame-relay.v1`.
+  to `hame-relay.v1`, and renewed on the open socket every 10 minutes
+  (`token()` is called again; return a fresh access token from `refresh`).
+- Relay addresses must be https (http only for localhost).
 - `CounterStore` (optional) persists the last counter accepted from each host,
   so a restarted app still refuses replayed envelopes from before.
 - When the host comes back online (relay presence), live subscriptions are

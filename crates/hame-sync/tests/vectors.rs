@@ -79,9 +79,10 @@ fn generate() -> Value {
         let (host, host_json) = identity(&format!("rust/host/{n}"));
         let (client, client_json) = identity(&format!("rust/client/{n}"));
         let secret = seed(&format!("rust/secret/{n}"));
+        let nonce = seed(&format!("rust/nonce-sas/{n}"));
         let offer = PairingOffer {
             relay: format!("https://relay.example.com:8443/base path/{n}?q=a&b"),
-            host: format!("host {n}"),
+            host: format!("host-{n}"),
             host_keys: host.public(),
             secret,
             expires: 1_763_000_600 + n,
@@ -95,7 +96,8 @@ fn generate() -> Value {
             "exp": offer.expires,
             "uri": offer.to_uri(),
             "mac": b64(&pairing_proof(&secret, &client.public())),
-            "sas": sas(&secret, &host.public().ed, &client.public().ed),
+            "nonce": b64(&nonce),
+            "sas": sas(&secret, &host.public().ed, &client.public().ed, &nonce),
         }));
     }
 
@@ -122,6 +124,7 @@ fn generate() -> Value {
         kind: GRANT_LIST_KIND.into(),
         v: 1,
         host: "host-1".into(),
+        version: 7,
         devices: vec![GrantEntry {
             device: "device-1".into(),
             ed: b64(&device.public().ed),
@@ -138,6 +141,7 @@ fn generate() -> Value {
         "fingerprints": fingerprints,
         "grants": [{"host": host_json, "grant": grant, "signed": signed}],
         "grant_lists": [{"host": host_json, "list": list, "signed": signed_list}],
+        "approvals": approvals(),
     })
 }
 
@@ -171,7 +175,9 @@ fn check(vectors: &Value) {
                 &recipient,
                 &header.to,
                 &sender_public,
-                Some(header.counter - 1),
+                Some(&hame_sync::envelope::ReplayWindow::starting_at(
+                    header.counter - 1,
+                )),
             )
             .unwrap();
         assert_eq!(
@@ -213,7 +219,8 @@ fn check(vectors: &Value) {
         assert_eq!(offer.secret, secret);
         assert_eq!(offer.to_uri(), vector["uri"]);
         assert_eq!(b64(&pairing_proof(&secret, &client)), vector["mac"]);
-        assert_eq!(sas(&secret, &host.ed, &client.ed), vector["sas"]);
+        let nonce = unb64_32(vector["nonce"].as_str().unwrap()).unwrap();
+        assert_eq!(sas(&secret, &host.ed, &client.ed, &nonce), vector["sas"]);
     }
     for vector in vectors["fingerprints"].as_array().unwrap() {
         let (_, keys) = keys_of(&vector["keys"]);
@@ -226,18 +233,56 @@ fn check(vectors: &Value) {
         assert_eq!(serde_json::to_value(&grant).unwrap(), vector["grant"]);
         assert_eq!(grant.sign(&host), signed);
     }
-    // Grant lists as published to the relay: a plain Ed25519 signature over
-    // the document bytes, which is what the relay verifies.
+    // Grant lists as published to the relay, signed over
+    // "hame-grants:v1\n{host}\n{version}\n" ‖ document, which is what the
+    // relay verifies.
     for vector in vectors["grant_lists"].as_array().unwrap() {
         let (host, host_public) = keys_of(&vector["host"]);
         let signed: SignedGrantList = serde_json::from_value(vector["signed"].clone()).unwrap();
+        let host_id = vector["list"]["host"].as_str().unwrap();
         let document = unb64(&signed.document).unwrap();
         let signature: [u8; 64] = unb64(&signed.signature).unwrap().try_into().unwrap();
-        hame_sync::keys::verify_signature(&host_public.ed, &document, &signature).unwrap();
-        let list = signed.verify(&host_public.ed).unwrap();
+        let message = hame_sync::pairing::grant_list_message(host_id, signed.version, &document);
+        hame_sync::keys::verify_signature(&host_public.ed, &message, &signature).unwrap();
+        let list = signed.verify(host_id, &host_public.ed).unwrap();
         assert_eq!(serde_json::to_value(&list).unwrap(), vector["list"]);
         assert_eq!(list.sign(&host), signed);
     }
+    // Approval hashes: sha256 of the arguments' canonical JSON (RFC 8785).
+    for vector in vectors["approvals"].as_array().unwrap() {
+        let arguments: Value =
+            serde_json::from_str(vector["arguments_json"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            hame_sync::jcs::canonical(&arguments).unwrap(),
+            vector["canonical"].as_str().unwrap()
+        );
+        assert_eq!(
+            hame_sync::approval::args_sha256(&arguments).unwrap(),
+            vector["sha256"].as_str().unwrap()
+        );
+    }
+}
+
+/// Arguments as JSON text (so number forms survive), their canonical form
+/// and its sha256.
+fn approvals() -> Vec<Value> {
+    [
+        r#"{"path":"a.txt","content":"from afar"}"#,
+        r#"{"b":[1,2.5,-0.000001,1e21,true,null],"a":{"z":"\u0007\n\"\\","é":"é","€":1,"𝄞":2}}"#,
+        r#"{"command":"ls -la","timeout_ms":120000,"ratio":0.1,"big":9007199254740991}"#,
+        r#"[]"#,
+    ]
+    .iter()
+    .map(|text| {
+        let value: Value = serde_json::from_str(text).unwrap();
+        let canonical = hame_sync::jcs::canonical(&value).unwrap();
+        json!({
+            "arguments_json": text,
+            "canonical": canonical,
+            "sha256": hame_sync::approval::args_sha256(&value).unwrap(),
+        })
+    })
+    .collect()
 }
 
 #[test]

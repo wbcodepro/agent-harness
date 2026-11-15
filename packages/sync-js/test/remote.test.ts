@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  MemoryKeyStorage,
   RawIdentity,
+  RelayClient,
+  checkRelayUrl,
+  type KeyStorage,
   WebCryptoIdentity,
   backoffMs,
   connectRemote,
@@ -53,9 +57,15 @@ describe("remote transport through a relay", () => {
     await relay.stop();
   });
 
-  function phone(identity: RawIdentity | WebCryptoIdentity, id = "phone", hostKeys?: { ed: Uint8Array; x: Uint8Array }) {
+  function phone(
+    identity: RawIdentity | WebCryptoIdentity,
+    id = "phone",
+    hostKeys?: { ed: Uint8Array; x: Uint8Array },
+    storage: KeyStorage = new MemoryKeyStorage(),
+  ) {
     const rejected: string[] = [];
     const remote = connectRemote({
+      storage,
       relayUrl: relay.url,
       deviceId: id,
       token: async () => relay.device(id),
@@ -72,9 +82,11 @@ describe("remote transport through a relay", () => {
     const offer = parseOffer(offerToUri(host.offerPairing(relay.url)));
     const device = phone(await WebCryptoIdentity.generate());
     const { sas, grant } = await device.host.pair(offer, "Phone");
+    const digits = await sas;
+    expect(digits).toMatch(/^[0-9]{8}$/);
     const granted = await grant;
     expect(granted.device).toBe("phone");
-    expect(host.sasShown).toEqual([sas]);
+    expect(host.sasShown).toEqual([digits]);
 
     const listed = await device.transport.request("GET", "/api/sessions");
     expect(listed.status).toBe(200);
@@ -145,6 +157,53 @@ describe("remote transport through a relay", () => {
         return Promise.race([answer, new Promise((_, reject) => setTimeout(() => reject(new Error("silent")), 300))]);
       })(),
     ).rejects.toThrow("silent");
+  });
+
+  it("two tabs sharing one identity and storage keep working", async () => {
+    const identity = RawIdentity.generate();
+    const storage = new MemoryKeyStorage();
+    const first = phone(identity, "phone", undefined, storage);
+    await (await first.host.pair(host.offerPairing(relay.url), "Phone")).grant;
+    const second = phone(identity, "phone", host.identity.publicKeys, storage);
+    // Both tabs draw counters from the same persisted sequence.
+    const answers = await Promise.all([
+      first.transport.request("GET", "/api/sessions"),
+      second.transport.request("GET", "/api/sessions"),
+      first.transport.request("GET", "/api/sessions"),
+    ]).catch(() => []);
+    // The relay connection is per device: the newest tab owns it, so the
+    // first tab's answers may go to the second; what matters is that the
+    // host refused nothing as a replay.
+    expect(host.rejected.filter((r) => r.includes("replay"))).toEqual([]);
+    expect(Number(await storage.get("counter:phone"))).toBeGreaterThanOrEqual(4);
+    void answers;
+  });
+
+  it("renews its token on the open connection", async () => {
+    const device = phone(RawIdentity.generate());
+    device.relay.stop();
+    const tokens: string[] = [];
+    const client = new RelayClient({
+      url: relay.url,
+      deviceId: "renewer",
+      token: async () => {
+        const token = relay.device("renewer");
+        tokens.push(token);
+        return token;
+      },
+      renewMs: 50,
+      onDeliver: () => undefined,
+    });
+    cleanup.push(() => client.stop());
+    client.start();
+    await until("two renewals", () => (relay.renewals.get("renewer") ?? 0) >= 2);
+    expect(tokens.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("refuses an unencrypted relay address that is not this machine", () => {
+    expect(() => wsUrl("http://relay.example", "d")).toThrow("unencrypted");
+    expect(() => checkRelayUrl("ws://10.0.0.1")).toThrow();
+    expect(checkRelayUrl("http://localhost:1")).toBe("http://localhost:1");
   });
 
   it("reports a pairing the host user declined", async () => {

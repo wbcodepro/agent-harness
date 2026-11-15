@@ -26,6 +26,11 @@ export const MAX_PLAINTEXT = 512 * 1024;
 export const MAX_ENVELOPE_TEXT = 1024 * 1024;
 const OVERHEAD_AFTER_HEADER = 32 + 24 + 16 + 64;
 
+/** Device and stream ids: 1 to 128 of [A-Za-z0-9_-]. */
+export function validId(id: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(id);
+}
+
 export interface Header {
   v: 1;
   from: string;
@@ -46,7 +51,7 @@ export function headerBytes(h: Header): Uint8Array {
 function checkHeader(h: Header): void {
   if (h.v !== 1) throw new SyncError("malformed", "unknown envelope version");
   for (const id of [h.from, h.to, h.stream]) {
-    if (typeof id !== "string" || id.length === 0 || utf8(id).length > MAX_ID) {
+    if (typeof id !== "string" || !validId(id)) {
       throw new SyncError("malformed", "bad id in header");
     }
   }
@@ -156,28 +161,62 @@ export class Sealed {
    * the pinned `sender` key, a counter above `lastCounter`, contents that
    * decrypt. Record the counter only after this succeeds.
    */
-  async open(me: DeviceIdentity, myId: string, sender: PublicKeys, lastCounter: number | undefined): Promise<Uint8Array> {
+  async open(me: DeviceIdentity, myId: string, sender: PublicKeys, window: ReplayWindow | undefined): Promise<Uint8Array> {
     if (this.header.to !== myId) throw new SyncError("wrong_recipient", "envelope addressed to another device");
     if (!this.verify(sender.ed)) throw new SyncError("bad_signature", "bad signature");
-    if (lastCounter !== undefined && this.header.counter <= lastCounter) {
-      throw new SyncError("replay", `replayed or reordered envelope (counter ${this.header.counter}, last ${lastCounter})`);
-    }
+    window?.check(this.header.counter);
     return this.decrypt(me);
   }
 }
 
+/** How far below the highest counter seen an envelope may still arrive. */
+export const REPLAY_WINDOW = 64;
+
 /**
- * A sender's monotonic counter, from the clock in microseconds so a device
- * that lost its state still counts upwards.
+ * The counters accepted from one sender: the highest, and which of the 63
+ * below it were seen (as crates/hame-sync's ReplayWindow). Each counter is
+ * accepted once; older than the window is a replay.
  */
+export class ReplayWindow {
+  constructor(
+    public last = 0,
+    /** Bit i: counter last - i was accepted (bigint, 64 bits). */
+    public seen = 0n,
+  ) {}
+
+  static startingAt(counter: number): ReplayWindow {
+    return new ReplayWindow(counter, 1n);
+  }
+
+  check(counter: number): void {
+    if (counter > this.last) return;
+    const behind = this.last - counter;
+    if (behind >= REPLAY_WINDOW || (this.seen >> BigInt(behind)) & 1n) {
+      throw new SyncError("replay", `replayed or reordered envelope (counter ${counter}, last ${this.last})`);
+    }
+  }
+
+  record(counter: number): void {
+    if (counter > this.last) {
+      const shift = counter - this.last;
+      this.seen = shift >= REPLAY_WINDOW ? 0n : (this.seen << BigInt(shift)) & ((1n << 64n) - 1n);
+      this.seen |= 1n;
+      this.last = counter;
+    } else {
+      const behind = this.last - counter;
+      if (behind < REPLAY_WINDOW) this.seen |= 1n << BigInt(behind);
+    }
+  }
+}
+
+/** A sender's sequence: 1, 2, 3… */
 export class Counter {
   constructor(private last = 0) {}
   get value(): number {
     return this.last;
   }
   next(): number {
-    const now = Date.now() * 1000;
-    this.last = Math.max(now, this.last + 1);
+    this.last += 1;
     return this.last;
   }
 }

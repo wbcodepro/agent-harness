@@ -2,6 +2,11 @@
 //! the tool call id and the sha256 of its exact arguments, and both must
 //! match the question the host asked. An answer naming anything else is
 //! refused before it reaches the agent.
+//!
+//! The hame web API's approval event carries the tool call id and the
+//! arguments; the connector adds `args_sha256`, the sha256 of the arguments'
+//! canonical JSON (RFC 8785), before relaying it. A device shows the
+//! arguments, recomputes the hash from them and sends it back.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -15,12 +20,11 @@ use crate::keys::hex;
 /// forgotten question is refused, which is the safe choice).
 const MAX_PENDING: usize = 1024;
 
-/// `sha256` (lowercase hex) of the arguments as the hame web API serialises
-/// them in its approval event.
-pub fn args_sha256(arguments: &Value) -> String {
-    hex(&Sha256::digest(
-        serde_json::to_vec(arguments).unwrap_or_default(),
-    ))
+/// `sha256` (lowercase hex) of the arguments' canonical JSON (RFC 8785).
+/// None for arguments that have no canonical form (integers beyond 2^53).
+pub fn args_sha256(arguments: &Value) -> Option<String> {
+    let canonical = crate::jcs::canonical(arguments).ok()?;
+    Some(hex(&Sha256::digest(canonical.as_bytes())))
 }
 
 /// The session id in `/api/sessions/{id}/approval`, if `path` is one.
@@ -69,17 +73,29 @@ pub struct PendingApprovals {
 
 impl PendingApprovals {
     /// Notes an event of `session`'s stream; approval questions are kept.
-    pub fn observe(&self, session: &str, event: &Value) {
+    /// Notes an event of `session`'s stream. An approval question gets its
+    /// `args_sha256` added (any value already there is replaced) and is kept;
+    /// one without a tool call id or arguments cannot be answered remotely.
+    pub fn observe(&self, session: &str, event: &mut Value) {
         if event["kind"] != "approval" {
             return;
         }
+        let hash = args_sha256(&event["arguments"]);
+        if let Some(object) = event.as_object_mut() {
+            match &hash {
+                Some(hash) => object.insert("args_sha256".into(), Value::String(hash.clone())),
+                None => object.remove("args_sha256"),
+            };
+        }
         let (Some(id), Some(call), Some(hash)) = (
             event["id"].as_u64(),
-            event["tool_call_id"].as_str(),
-            event["args_sha256"].as_str(),
+            event["tool_call_id"].as_str().map(str::to_string),
+            hash,
         ) else {
             return;
         };
+        let call = call.as_str();
+        let hash = hash.as_str();
         let mut table = self.inner.lock().expect("approvals");
         table.next += 1;
         let order = table.next;
@@ -141,10 +157,13 @@ mod tests {
     #[test]
     fn answers_must_name_the_same_call_and_arguments() {
         let pending = PendingApprovals::default();
-        let hash = args_sha256(&json!({"path": "a.txt"}));
-        pending.observe(
-            "s",
-            &json!({"kind":"approval","id":1,"question":"Allow write?","tool_call_id":"c1","args_sha256":hash}),
+        let hash = args_sha256(&json!({"path": "a.txt"})).unwrap();
+        let mut event = json!({"kind":"approval","id":1,"question":"Allow write?","tool_call_id":"c1","arguments":{"path":"a.txt"},"args_sha256":"forged"});
+        pending.observe("s", &mut event);
+        assert_eq!(
+            event["args_sha256"],
+            hash.as_str(),
+            "the connector's hash replaces any other"
         );
         let answer = |call: &str, hash: &str| json!({"id":1,"allow":true,"tool_call_id":call,"args_sha256":hash});
         assert!(

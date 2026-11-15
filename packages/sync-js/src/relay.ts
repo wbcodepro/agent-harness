@@ -1,12 +1,15 @@
 // A connection to the relay WebSocket (/v1/ws) that stays up: `resume` with
 // the last acknowledged seq as the first frame, `ack` after each delivery is
-// handled, `ping` every 25 s, reconnection with jittered exponential backoff
-// when the socket fails or goes quiet, and a queue for frames sent while
-// disconnected. A `send` stays unconfirmed until the relay answers it with
-// `sent` (or an error); unconfirmed sends are written again after a
-// reconnection, since a socket can die with them in flight. A duplicate
-// that reaches the recipient is refused there as a replay.
+// handled, `ping` every 25 s, an `auth` frame with a fresh token before the
+// access token expires, reconnection with jittered exponential backoff when
+// the socket fails, goes quiet or is closed as `unauthorized`, and a queue
+// for frames sent while disconnected. A `send` stays unconfirmed until the
+// relay answers it with `sent` (or an error naming the same recipient);
+// unconfirmed sends are written again after a reconnection, since a socket
+// can die with them in flight. A duplicate that reaches the recipient is
+// refused there as a replay. Unconfirmed sends are bounded in count and bytes.
 
+import { SyncError } from "./errors.js";
 import type { RelayFrame } from "./frames.js";
 
 /** The subset of the WebSocket API used here (browser, Node 22+, React Native). */
@@ -38,6 +41,22 @@ export interface RelayClientOptions {
   silenceMs?: number;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
+  /** Send a fresh token this often (default 10 minutes; tokens live 15). */
+  renewMs?: number;
+}
+
+/**
+ * Refuses relay addresses that are not encrypted, except on this machine:
+ * https/wss anywhere, http/ws only for localhost, 127.0.0.1 and [::1].
+ */
+export function checkRelayUrl(base: string): string {
+  const url = new URL(base);
+  if (url.protocol === "https:" || url.protocol === "wss:") return base;
+  if (url.protocol === "http:" || url.protocol === "ws:") {
+    if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return base;
+    throw new SyncError("relay", "an unencrypted relay address is only allowed on this machine; use https");
+  }
+  throw new SyncError("relay", `unsupported scheme ${url.protocol}`);
 }
 
 /** Full jitter: a random wait between half and all of min(max, base · 2^attempt). */
@@ -47,7 +66,7 @@ export function backoffMs(baseMs: number, maxMs: number, attempt: number): numbe
 }
 
 export function wsUrl(base: string, deviceId: string): string {
-  const url = new URL(base);
+  const url = new URL(checkRelayUrl(base));
   if (url.protocol === "http:") url.protocol = "ws:";
   else if (url.protocol === "https:") url.protocol = "wss:";
   else if (url.protocol !== "ws:" && url.protocol !== "wss:") throw new Error(`unsupported scheme ${url.protocol}`);
@@ -61,6 +80,7 @@ export function wsUrl(base: string, deviceId: string): string {
 export const RELAY_PROTOCOL = "hame-relay.v1";
 const OPEN = 1;
 const MAX_UNCONFIRMED = 1024;
+const MAX_UNCONFIRMED_BYTES = 16 * 1024 * 1024;
 
 /** [to, envelope, push] of a queued send frame; to is "" for other frames. */
 function unpackSend(text: string): [string, string, boolean] {
@@ -78,6 +98,8 @@ export class RelayClient {
   /** Sends written but not yet answered by `sent` or `error`, oldest first. */
   private readonly unconfirmed: string[] = [];
   private pingTimer: ReturnType<typeof setInterval> | undefined;
+  private renewTimer: ReturnType<typeof setInterval> | undefined;
+  private unconfirmedBytes = 0;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private lastHeard = 0;
   /** Deliveries are handled one at a time, in seq order. */
@@ -102,6 +124,7 @@ export class RelayClient {
     this.stopped = true;
     clearTimeout(this.retryTimer);
     clearInterval(this.pingTimer);
+    clearInterval(this.renewTimer);
     this.socket?.close(1000, "stopped");
     this.socket = undefined;
   }
@@ -112,7 +135,10 @@ export class RelayClient {
     const text = JSON.stringify(frame);
     if (this.write(text)) {
       this.unconfirmed.push(text);
-      if (this.unconfirmed.length > MAX_UNCONFIRMED) this.unconfirmed.shift();
+      this.unconfirmedBytes += text.length;
+      while (this.unconfirmed.length > MAX_UNCONFIRMED || this.unconfirmedBytes > MAX_UNCONFIRMED_BYTES) {
+        this.unconfirmedBytes -= this.unconfirmed.shift()?.length ?? 0;
+      }
     }
   }
 
@@ -167,6 +193,7 @@ export class RelayClient {
       this.options.onState?.(true);
       // Unconfirmed sends first, in their order, then what waited.
       const again = this.unconfirmed.splice(0);
+      this.unconfirmedBytes = 0;
       const waiting = this.queue.splice(0);
       for (const text of again) this.send(...unpackSend(text));
       for (const text of waiting) {
@@ -176,6 +203,8 @@ export class RelayClient {
       }
       clearInterval(this.pingTimer);
       this.pingTimer = setInterval(() => this.ping(socket), this.options.pingMs ?? 25_000);
+      clearInterval(this.renewTimer);
+      this.renewTimer = setInterval(() => void this.renew(socket), this.options.renewMs ?? 600_000);
     };
     socket.onmessage = (event) => {
       if (this.socket !== socket) return;
@@ -197,12 +226,30 @@ export class RelayClient {
       if (this.socket !== socket) return;
       this.socket = undefined;
       clearInterval(this.pingTimer);
+      clearInterval(this.renewTimer);
       if (this.connected) {
         this.connected = false;
         this.options.onState?.(false);
       }
       this.scheduleRetry();
     };
+  }
+
+  /** Sends a fresh access token; a token that cannot be had ends the connection. */
+  private async renew(socket: SocketLike): Promise<void> {
+    let token: string;
+    try {
+      token = await this.options.token();
+    } catch {
+      socket.close(4002, "no token");
+      return;
+    }
+    if (this.socket === socket && socket.readyState === OPEN) socket.send(JSON.stringify({ op: "auth", token } satisfies RelayFrame));
+  }
+
+  private confirm(to: string): void {
+    const at = this.unconfirmed.findIndex((text) => unpackSend(text)[0] === to);
+    if (at >= 0) this.unconfirmedBytes -= this.unconfirmed.splice(at, 1)[0]!.length;
   }
 
   private ping(socket: SocketLike): void {
@@ -237,7 +284,7 @@ export class RelayClient {
         return;
       }
       case "sent":
-        this.unconfirmed.shift();
+        this.confirm(frame.to);
         return;
       case "ping":
         this.write(JSON.stringify({ op: "pong" }));
@@ -248,8 +295,10 @@ export class RelayClient {
       case "error":
         // The relay answers a send it refused with an error naming its
         // recipient instead of sent.
-        if (frame.to !== undefined) this.unconfirmed.shift();
+        if (frame.to !== undefined) this.confirm(frame.to);
         this.options.onError?.(frame.code, frame.message ?? "");
+        // The relay closes the socket after this; reconnect with a fresh token.
+        if (frame.code === "unauthorized") this.socket?.close(4003, "unauthorized");
         return;
       default:
         return;

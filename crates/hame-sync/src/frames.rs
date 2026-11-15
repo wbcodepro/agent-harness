@@ -44,6 +44,14 @@ pub enum RelayFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<String>,
     },
+    /// Client → relay: a fresh access token for this connection
+    /// (`token`); relay → client: the renewal was accepted (`expires_at`).
+    Auth {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<i64>,
+    },
     Ping,
     Pong,
 }
@@ -104,6 +112,10 @@ pub enum Frame {
     Paired { grant: String, sig: String },
     /// The host refused the pairing.
     PairRefused { reason: String },
+    /// The host's answer to a valid pairing request: a fresh random nonce
+    /// (base64url, 32 bytes) that goes into the SAS. It is chosen after the
+    /// device committed to its keys, so the digits cannot be ground.
+    PairChallenge { nonce: String },
     /// Removes a device from the host's allowlist (from any enrolled
     /// device). Answered with a `res`.
     Revoke { id: u64, device: String },
@@ -129,7 +141,10 @@ impl Frame {
             | Frame::Blob { id, .. }
             | Frame::Revoke { id, .. }
             | Frame::Devices { id } => id.to_string(),
-            Frame::Pair { .. } | Frame::Paired { .. } | Frame::PairRefused { .. } => "pair".into(),
+            Frame::Pair { .. }
+            | Frame::Paired { .. }
+            | Frame::PairRefused { .. }
+            | Frame::PairChallenge { .. } => "pair".into(),
         }
     }
 }

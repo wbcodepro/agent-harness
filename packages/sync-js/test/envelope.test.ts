@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   Counter,
+  REPLAY_WINDOW,
+  ReplayWindow,
+  validId,
   MAX_ENVELOPE_TEXT,
   MAX_PLAINTEXT,
   MemoryKeyStorage,
@@ -49,11 +52,11 @@ describe("envelope", () => {
     const text = await seal(alice, bob.publicKeys.x, h, utf8("secret"));
     const sealed = Sealed.parse(text);
     expect(sealed.header).toEqual(h);
-    expect(fromUtf8(await sealed.open(bob, "bob", alice.publicKeys, 9))).toBe("secret");
+    expect(fromUtf8(await sealed.open(bob, "bob", alice.publicKeys, ReplayWindow.startingAt(9)))).toBe("secret");
 
     await expect(sealed.open(bob, "carol", alice.publicKeys, undefined)).rejects.toMatchObject({ code: "wrong_recipient" });
     await expect(sealed.open(bob, "bob", mallory.publicKeys, undefined)).rejects.toMatchObject({ code: "bad_signature" });
-    await expect(sealed.open(bob, "bob", alice.publicKeys, 10)).rejects.toMatchObject({ code: "replay" });
+    await expect(sealed.open(bob, "bob", alice.publicKeys, ReplayWindow.startingAt(10))).rejects.toMatchObject({ code: "replay" });
     await expect(sealed.decrypt(mallory)).rejects.toBeInstanceOf(SyncError);
 
     const bytes = fromB64url(text);
@@ -84,13 +87,29 @@ describe("envelope", () => {
     await expect(seal(alice, new Uint8Array(32), header("a", "b", "1", 1), utf8("x"))).rejects.toMatchObject({ code: "crypto" });
   });
 
-  it("counts upwards from the clock", () => {
+  it("counts and accepts each counter once within the window", () => {
     const counter = new Counter();
-    const a = counter.next();
-    const b = counter.next();
-    expect(b).toBeGreaterThan(a);
-    expect(a).toBeGreaterThan(1_600_000_000_000_000);
-    expect(Number.isSafeInteger(b)).toBe(true);
+    expect([counter.next(), counter.next()]).toEqual([1, 2]);
+    const window = ReplayWindow.startingAt(10);
+    expect(() => window.check(10)).toThrow();
+    for (const c of [12, 11, 15]) {
+      window.check(c);
+      window.record(c);
+      expect(() => window.check(c)).toThrow();
+    }
+    window.check(13);
+    window.record(100);
+    expect(() => window.check(100 - REPLAY_WINDOW)).toThrow();
+    window.check(100 - REPLAY_WINDOW + 1);
+    window.record(1000);
+    expect(window.seen).toBe(1n);
+  });
+
+  it("refuses ids outside the safe alphabet", async () => {
+    const alice = RawIdentity.generate();
+    await expect(seal(alice, alice.publicKeys.x, header("a b", "b", "1", 1), utf8("x"))).rejects.toMatchObject({ code: "malformed" });
+    expect(validId("dev-1_x")).toBe(true);
+    expect(validId("é")).toBe(false);
   });
 });
 
@@ -109,6 +128,18 @@ describe("keys", () => {
     expect(fromUtf8(await Sealed.parse(back).open(raw, "raw", web.publicKeys, undefined))).toBe("from the browser");
     expect(fingerprint(web.publicKeys)).toMatch(/^[0-9a-f]{64}$/);
     expect(displayFingerprint(web.publicKeys)).toMatch(/^([0-9a-f]{4} ){15}[0-9a-f]{4}$/);
+  });
+
+  it("uses raw keys only when asked to, and says so", async () => {
+    const keychain: KeyStorage = {
+      storesCryptoKeys: false,
+      get: async () => undefined,
+      set: async () => undefined,
+      delete: async () => undefined,
+    };
+    await expect(loadOrCreateIdentity(keychain)).rejects.toMatchObject({ code: "crypto" });
+    const identity = await loadOrCreateIdentity(keychain, { allowRawKeys: true });
+    expect(identity.kind).toBe("raw");
   });
 
   it("stores identities: CryptoKeys where possible, JSON strings for keychains", async () => {
@@ -130,9 +161,10 @@ describe("keys", () => {
         strings.delete(name);
       },
     };
-    const mobile = await loadOrCreateIdentity(keychain);
+    const mobile = await loadOrCreateIdentity(keychain, { allowRawKeys: true });
     expect(mobile).toBeInstanceOf(RawIdentity);
-    expect((await loadOrCreateIdentity(keychain)).publicKeys).toEqual(mobile.publicKeys);
+    expect((await loadOrCreateIdentity(keychain, { allowRawKeys: true })).publicKeys).toEqual(mobile.publicKeys);
+    await expect(loadOrCreateIdentity(keychain)).rejects.toThrow("allowRawKeys");
     await expect(restoreIdentity({ kind: "nope" })).rejects.toThrow();
   });
 });

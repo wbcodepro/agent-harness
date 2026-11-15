@@ -39,8 +39,8 @@ message):
 ```
 
 - header: UTF-8 JSON `{"v":1,"from","to","stream","counter"}`, carried as
-  the exact bytes that were authenticated (never re-serialised); ids at most
-  128 bytes; `counter` at most 2^53 − 1.
+  the exact bytes that were authenticated (never re-serialised); ids are 1
+  to 128 of `[A-Za-z0-9_-]`; `counter` at most 2^53 − 1.
 - `key = HKDF-SHA256(ikm = X25519(ephemeral, recipient_x), salt =
   ephemeral_public ‖ recipient_x_public, info = "hame-sync v1 envelope key")`,
   32 bytes. A fresh ephemeral key per envelope; an all-zero shared secret
@@ -54,13 +54,18 @@ message):
   decoding).
 - A recipient checks, in order: `to` is itself; `from` is on its allowlist
   (the relay's `from` must match the signed one); the signature verifies
-  with the pinned key; `counter` is above the last accepted from that
-  sender; the ciphertext decrypts; the frame's id matches the header's
-  `stream`. The counter is recorded (and persisted, on the host) only after
-  all of this.
-- Counters: `max(last + 1, unix time in µs)`, so a sender that lost its
-  state still counts upwards. Senders seal and queue strictly in counter
-  order (the relay preserves order per recipient).
+  with the pinned key; the counter is new to the sender's replay window;
+  the ciphertext decrypts; the frame's id matches the header's `stream`.
+  The counter is recorded (on the host: persisted under the store's lock)
+  only after all of this.
+- Counters are sequences (1, 2, 3…), persisted by the sender: the host
+  reserves blocks of 256 on disk before use, so even after a crash it never
+  repeats one; devices keep theirs next to their identity (sync-js
+  `PersistentSequence`, incremented under a Web Lock so tabs sharing an
+  identity do not collide). The receiver keeps a 64-counter replay window
+  (highest seen plus a bitmap), so envelopes reordered between tabs or
+  resent after a reconnection are accepted once. A device that lost its
+  sequence pairs again, which resets its window.
 
 **Pairing**:
 
@@ -72,25 +77,46 @@ message):
   signature with the presented key and the MAC in constant time, spends
   the offer, and refuses revoked keys and changed keys for known devices
   (with a warning).
-- SAS: the first four bytes of `SHA256("hame-sas" ‖ secret ‖ host_ed ‖
-  client_ed)` as a big-endian number, modulo 1 000 000, six digits.
+- After a valid request the host answers `pair_challenge {nonce}` (32
+  random bytes, chosen after the device committed to its keys).
+- SAS: the first eight bytes of `SHA256("hame-sas-v2" ‖ secret ‖ host_ed ‖
+  client_ed ‖ host_nonce)` as a big-endian number, modulo 10^8, eight digits
+  (shown as `1234 5678`). Nobody can search for keys that give chosen
+  digits, since the nonce is unknown until the keys are fixed.
+- `hame connect` shows the offer as a QR code only; `--show-uri` also prints
+  the text (it holds the secret).
 - After the user confirms on the host: a grant `{v, host, device, ed, x,
   label, issued}`, signed as `Ed25519(host, "hame-sync v1 grant" ‖ JSON
   bytes)`, travels back in a `paired` frame.
-- Published grant list (`POST /v1/hosts/{id}/grants {document, signature}`):
-  `document` is the JSON `{"kind":"hame-sync/grants","v":1,"host","devices":[…],"issued"}`
-  and `signature` a plain Ed25519 signature over those bytes, which the
-  relay verifies with the host's registered key. The `kind` field keeps it
-  apart from everything else the host key signs (all other messages start
-  with a `hame-sync v1 …` or `hame-relay-rebind` prefix).
+- Published grant list (`POST /v1/hosts/{id}/grants {version, document,
+  signature}`): `document` is the JSON
+  `{"kind":"hame-sync/grants","v":1,"host","version","devices":[…],"issued"}`
+  and `signature` is Ed25519 over `"hame-grants:v1\n{host_id}\n{version}\n"
+  ‖ document`, the relay's format, which it verifies with the host's
+  registered key; `version` increases with every list (persisted in the
+  allowlist; on `409 stale_version` the host publishes again above the
+  relay's). Labels are left out unless `hame connect --publish-labels`.
 
-**Approvals**: the hame web API's approval event carries `tool_call_id` and
-`args_sha256` (sha256 of the JSON arguments as serialised by the host). A
-remote answer must be `{id, allow, tool_call_id, args_sha256}` naming the
-question the connector relayed; anything else is answered 409 and never
-reaches the agent. A path that might reach the approval route in another
-form (query string variants are normalised; percent-encoded or otherwise
-odd forms) is refused.
+**Approvals**: the hame web API's approval event carries `tool_call_id`,
+`tool` and the exact `arguments`; the connector adds `args_sha256`, the
+sha256 of the arguments' canonical JSON (RFC 8785, `jcs` module; sync-js
+`canonicalJson`/`argsSha256`, shared vectors). The device shows the
+arguments and recomputes the hash (`approvalAnswer`). A remote answer must
+be `{id, allow, tool_call_id, args_sha256}` naming the question the
+connector relayed; anything else is answered 409 and never reaches the
+agent. A path that might reach the approval route in another form (query
+string variants are normalised; percent-encoded or otherwise odd forms) is
+refused.
+
+**Interim remote policy** (until hame-web enforces its own for requests
+carrying `RemoteCaller`): `hame connect` builds the router with `yes`
+off and refuses to start when `[approval] reviewer = true`,
+`[approval] default = "allow"` or a full-access sandbox is configured; the
+connector refuses any remote request whose body asks for full access
+(403), limits each device to 32 running requests, 8 subscriptions and 10
+new sessions a minute. When hame-web's policy lands, replace the
+`RemoteCaller` struct in `connector.rs` with its type (or convert in
+`mark_remote`) and relax `check_remote_policy` in `hame connect`.
 
 ## What the host connector exposes
 
@@ -100,7 +126,8 @@ non-printable bytes. Responses go back as `res`; event streams as `evt`
 (records whose `seq` ≤ `after` skipped; non-record events carry the last
 record's seq, −1 before any); artifacts (`/api/artifacts/…`) as a `res`
 with `{"blob":{"sha256","mime","size","chunks"}}` followed by 256 KiB `blob`
-chunks, hash-checked by the device. Plus two control frames for enrolled
+chunks streamed as they are read (never buffered whole by the connector),
+hash-checked by the device against the content-addressed id. Plus two control frames for enrolled
 devices: `devices` and `revoke`. No shell, file or generic RPC.
 
 Every request the connector passes to the router carries a request
@@ -112,12 +139,36 @@ Until hame-web exposes its own type, `RemoteCaller` is defined here; switch
 ## Files
 
 `<home>/sync/` (0700) holds `identity.json` (private keys), `allowlist.json`
-(devices, pinned keys, last counters, revoked keys, host counter) and
-`relay.json` (relay URL, device id, tokens), each 0600, written atomically.
-Loading refuses a file or the directory if the group or others have any
-access. `hame connect revoke` edits the allowlist; a running connector picks
-the change up within two seconds and stops the device's streams. On Windows
-the permission check is skipped (the profile directory's ACL applies).
+(devices, pinned keys, replay windows, revoked keys, host counter
+reservation, grant list version), `revocations.log` (append-only: every
+revoked device id and key; a device listed there is never enrolled,
+whatever `allowlist.json` says), `relay.json` (relay URL, device id,
+tokens) and `lock`, each 0600, written atomically. Every read-modify-write,
+by the running connector and by `hame connect revoke` alike, holds an
+advisory lock on `lock` and re-reads under it, so a revocation is never
+lost. A running connector takes a revocation in before the next envelope
+and within half a second otherwise: the device's envelopes are refused, its
+requests and streams stop, and the turns it started are cancelled through
+the web API. Loading refuses a file or the directory if the group or others
+have any access. On Windows the permission check is skipped (the profile
+directory's ACL applies).
+
+## Relay connection and HTTP
+
+- `wss`/`https` only, except `localhost`, `127.0.0.1` and `[::1]` (dev).
+- Incoming WebSocket messages and frames are limited to 1.1 MiB; HTTP
+  answers are read up to 64 KiB, without following redirects.
+- The access token is renewed on the open socket with `{"op":"auth","token"}`
+  every 10 minutes (the relay's tokens live 15); an `unauthorized` error
+  closes the connection and the next one starts with a refreshed token.
+  `hame connect` refreshes one at a time, saves the rotated pair before
+  using it, and never falls back to an old token.
+- A send stays unconfirmed until the relay answers `sent` or an error with
+  the same recipient (`to`); the relay has no per-send id, so the oldest
+  unconfirmed send to that recipient is matched. Unconfirmed sends are
+  bounded to 1024 and 16 MiB.
+- Everything the relay or another device supplies is printed without
+  control or bidirectional formatting characters (`text::printable`).
 
 ## Dependencies added
 

@@ -20,6 +20,7 @@ export class MockRelay {
   private readonly nextSeq = new Map<string, number>();
   private readonly sockets = new Map<string, WebSocket>();
   readonly routed: { from: string; to: string; envelope: string }[] = [];
+  readonly renewals = new Map<string, number>();
   private server!: Server;
   private wss!: WebSocketServer;
   url = "";
@@ -152,6 +153,16 @@ export class MockRelay {
         case "ping":
           this.send(socket, { op: "pong" });
           return;
+        case "auth": {
+          if (frame.token && this.tokens.get(frame.token) === device) {
+            this.renewals.set(device, (this.renewals.get(device) ?? 0) + 1);
+            this.send(socket, { op: "auth", expires_at: Math.floor(Date.now() / 1000) + 900 });
+          } else {
+            this.send(socket, { op: "error", code: "unauthorized", message: "bad token" });
+            socket.close();
+          }
+          return;
+        }
         default:
           return;
       }

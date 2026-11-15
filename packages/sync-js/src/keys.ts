@@ -17,6 +17,11 @@ export interface PublicKeys {
 }
 
 export interface DeviceIdentity {
+  /**
+   * "webcrypto": non-extractable keys; "raw": seeds in memory and in the
+   * storage. The UI should say so when it is "raw".
+   */
+  readonly kind: "webcrypto" | "raw";
   readonly publicKeys: PublicKeys;
   /** Ed25519 signature of `message`. */
   sign(message: Uint8Array): Promise<Uint8Array>;
@@ -67,6 +72,7 @@ export function displayFingerprint(keys: PublicKeys): string {
 }
 
 export class RawIdentity implements DeviceIdentity {
+  readonly kind = "raw" as const;
   readonly publicKeys: PublicKeys;
 
   private constructor(
@@ -114,6 +120,7 @@ export interface StoredWebCryptoIdentity {
 export type StoredIdentity = StoredRawIdentity | StoredWebCryptoIdentity;
 
 export class WebCryptoIdentity implements DeviceIdentity {
+  readonly kind = "webcrypto" as const;
   private constructor(
     readonly publicKeys: PublicKeys,
     private readonly ed: CryptoKeyPair,
@@ -258,16 +265,36 @@ export async function restoreIdentity(stored: unknown): Promise<DeviceIdentity> 
 
 /**
  * The device's identity under `name`, created on first use: non-extractable
- * WebCrypto keys when the runtime and the storage support them, raw seeds
- * otherwise.
+ * WebCrypto keys when the runtime and the storage support them. Raw seeds
+ * (readable by code in the app) only with `allowRawKeys: true`, which a
+ * mobile app storing them in the OS keychain passes; the identity's `kind`
+ * tells the UI which it got.
  */
-export async function loadOrCreateIdentity(storage: KeyStorage, name = "identity"): Promise<DeviceIdentity> {
+export async function loadOrCreateIdentity(
+  storage: KeyStorage,
+  options: { name?: string; allowRawKeys?: boolean } = {},
+): Promise<DeviceIdentity> {
+  const name = options.name ?? "identity";
   const stored = await storage.get(name);
-  if (stored !== undefined && stored !== null) return restoreIdentity(stored);
+  if (stored !== undefined && stored !== null) {
+    const identity = await restoreIdentity(stored);
+    if (identity.kind === "raw" && !options.allowRawKeys) {
+      throw new SyncError("crypto", "the stored identity has raw keys; pass allowRawKeys to use it");
+    }
+    return identity;
+  }
   if (storage.storesCryptoKeys && (await WebCryptoIdentity.supported())) {
     const identity = await WebCryptoIdentity.generate();
     await storage.set(name, identity.toStored());
     return identity;
+  }
+  if (!options.allowRawKeys) {
+    throw new SyncError(
+      "crypto",
+      storage.storesCryptoKeys
+        ? "this runtime's WebCrypto lacks Ed25519/X25519; raw keys need allowRawKeys"
+        : "this storage cannot hold CryptoKeys; raw keys need allowRawKeys",
+    );
   }
   const identity = RawIdentity.generate();
   await storage.set(name, storage.storesCryptoKeys ? identity.toStored() : JSON.stringify(identity.toStored()));

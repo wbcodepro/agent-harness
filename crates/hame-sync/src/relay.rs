@@ -1,10 +1,13 @@
 //! A connection to the relay's WebSocket (`/v1/ws`, §3) that stays up:
 //! it sends `resume` with the last acknowledged `seq` as the first frame,
-//! pings every 25 seconds, reconnects with jittered exponential backoff when
-//! the socket fails or goes quiet. A `send` stays unconfirmed until the
-//! relay answers it with `sent` (or an error); unconfirmed sends are written
-//! again after a reconnection, since a socket can die with them in flight.
-//! A duplicate that reaches the recipient is refused there as a replay.
+//! pings every 25 seconds, renews its access token with an `auth` frame
+//! before it expires, and reconnects with jittered exponential backoff when
+//! the socket fails, goes quiet or is closed as `unauthorized`. A `send`
+//! stays unconfirmed until the relay answers it with `sent` (or an error
+//! naming the same recipient); unconfirmed sends are written again after a
+//! reconnection, since a socket can die with them in flight. A duplicate that
+//! reaches the recipient is refused there as a replay. Unconfirmed sends are
+//! bounded in count and bytes; incoming messages are limited to 1.1 MiB.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -22,6 +25,29 @@ use crate::SyncError;
 use crate::frames::RelayFrame;
 
 const MAX_UNCONFIRMED: usize = 1024;
+const MAX_UNCONFIRMED_BYTES: usize = 16 * 1024 * 1024;
+/// Largest WebSocket message or frame accepted from the relay: an envelope
+/// (at most 1 MiB of text) in its `deliver` frame.
+pub const MAX_MESSAGE: usize = 1024 * 1024 + 100 * 1024;
+
+/// Refuses relay addresses that are not encrypted, except on this machine
+/// (development): `https`/`wss` anywhere, `http`/`ws` only for
+/// `localhost`, `127.0.0.1` and `[::1]`.
+pub fn check_relay_url(url: &str) -> Result<(), SyncError> {
+    let parsed = url::Url::parse(url).map_err(|e| SyncError::Relay(e.to_string()))?;
+    match parsed.scheme() {
+        "https" | "wss" => Ok(()),
+        "http" | "ws" => match parsed.host() {
+            Some(url::Host::Domain("localhost")) => Ok(()),
+            Some(url::Host::Ipv4(ip)) if ip.is_loopback() => Ok(()),
+            Some(url::Host::Ipv6(ip)) if ip.is_loopback() => Ok(()),
+            _ => Err(SyncError::Relay(format!(
+                "{url}: an unencrypted relay address is only allowed on this machine; use https"
+            ))),
+        },
+        other => Err(SyncError::Relay(format!("unsupported scheme {other}"))),
+    }
+}
 
 /// Gives the bearer token to connect with; called before every connection
 /// attempt, so it can refresh an expired one.
@@ -52,6 +78,9 @@ pub struct RelayOptions {
     pub silence_limit: Duration,
     pub backoff_base: Duration,
     pub backoff_max: Duration,
+    /// Send a fresh access token this often (the relay's tokens live 15
+    /// minutes and it closes a socket whose token expired).
+    pub renew_every: Duration,
 }
 
 impl RelayOptions {
@@ -64,11 +93,13 @@ impl RelayOptions {
             silence_limit: Duration::from_secs(60),
             backoff_base: Duration::from_millis(500),
             backoff_max: Duration::from_secs(30),
+            renew_every: Duration::from_secs(10 * 60),
         }
     }
 
     /// `ws(s)://…/v1/ws?device=<id>`.
     pub fn ws_url(&self) -> Result<String, SyncError> {
+        check_relay_url(&self.url)?;
         let mut url = url::Url::parse(&self.url).map_err(|e| SyncError::Relay(e.to_string()))?;
         let scheme = match url.scheme() {
             "http" | "ws" => "ws",
@@ -177,7 +208,7 @@ async fn run(
     mut stop: watch::Receiver<bool>,
 ) {
     let mut last_acked: u64 = 0;
-    let mut unconfirmed: VecDeque<RelayFrame> = VecDeque::new();
+    let mut unconfirmed = Unconfirmed::default();
     let mut attempt: u32 = 0;
     loop {
         if *stop.borrow() {
@@ -209,6 +240,48 @@ async fn run(
     }
 }
 
+/// Sends written but not answered yet, oldest first, bounded in count and
+/// bytes (the oldest are dropped first; the recipient's stream resumes).
+#[derive(Default)]
+struct Unconfirmed {
+    frames: VecDeque<RelayFrame>,
+    bytes: usize,
+}
+
+impl Unconfirmed {
+    fn size(frame: &RelayFrame) -> usize {
+        match frame {
+            RelayFrame::Send { envelope, .. } => envelope.len(),
+            _ => 0,
+        }
+    }
+
+    fn push(&mut self, frame: RelayFrame) {
+        self.bytes += Self::size(&frame);
+        self.frames.push_back(frame);
+        while self.frames.len() > MAX_UNCONFIRMED || self.bytes > MAX_UNCONFIRMED_BYTES {
+            match self.frames.pop_front() {
+                Some(old) => self.bytes -= Self::size(&old),
+                None => break,
+            }
+        }
+    }
+
+    /// The relay answered the oldest send to `to` (it answers each send
+    /// once, in order per connection).
+    fn confirm(&mut self, to: &str) {
+        let at = self
+            .frames
+            .iter()
+            .position(|f| matches!(f, RelayFrame::Send { to: t, .. } if t == to));
+        if let Some(at) = at
+            && let Some(frame) = self.frames.remove(at)
+        {
+            self.bytes -= Self::size(&frame);
+        }
+    }
+}
+
 /// One connection, until it fails (`Err` with the reason) or is stopped.
 async fn session(
     options: &RelayOptions,
@@ -216,7 +289,7 @@ async fn session(
     events: &mpsc::Sender<RelayEvent>,
     stop: &mut watch::Receiver<bool>,
     last_acked: &mut u64,
-    unconfirmed: &mut VecDeque<RelayFrame>,
+    unconfirmed: &mut Unconfirmed,
     attempt: &mut u32,
 ) -> Result<(), String> {
     let token = (options.token)().await.map_err(|e| e.to_string())?;
@@ -226,9 +299,12 @@ async fn session(
         "authorization",
         HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| e.to_string())?,
     );
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE))
+        .max_frame_size(Some(MAX_MESSAGE));
     let (socket, _) = tokio::time::timeout(
         Duration::from_secs(20),
-        tokio_tungstenite::connect_async(request),
+        tokio_tungstenite::connect_async_with_config(request, Some(config), false),
     )
     .await
     .map_err(|_| "connection timed out".to_string())?
@@ -238,15 +314,25 @@ async fn session(
     sink.send(text(&RelayFrame::Resume { after: *last_acked }))
         .await
         .map_err(|e| e.to_string())?;
-    for frame in unconfirmed.iter() {
+    for frame in unconfirmed.frames.iter() {
         sink.send(text(frame)).await.map_err(|e| e.to_string())?;
     }
     let _ = events.send(RelayEvent::Connected).await;
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(options.ping_every);
     ping.tick().await;
+    let mut renew = tokio::time::interval(options.renew_every);
+    renew.tick().await;
     loop {
         tokio::select! {
+            _ = renew.tick() => {
+                // A token that cannot be renewed ends the connection: the
+                // next one starts from a fresh sign-in state.
+                let token = (options.token)().await.map_err(|e| e.to_string())?;
+                sink.send(text(&RelayFrame::Auth { token: Some(token), expires_at: None }))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             _ = stop.changed() => {
                 let _ = sink.send(Message::Close(None)).await;
                 return Ok(());
@@ -259,12 +345,7 @@ async fn session(
                 let written = sink.send(text(&frame)).await;
                 match frame {
                     RelayFrame::Ack { seq } => *last_acked = (*last_acked).max(seq),
-                    RelayFrame::Send { .. } => {
-                        unconfirmed.push_back(frame);
-                        if unconfirmed.len() > MAX_UNCONFIRMED {
-                            unconfirmed.pop_front();
-                        }
-                    }
+                    RelayFrame::Send { .. } => unconfirmed.push(frame),
                     _ => {}
                 }
                 written.map_err(|e| e.to_string())?;
@@ -302,17 +383,24 @@ async fn session(
                         RelayEvent::Deliver { seq, from, envelope }
                     }
                     RelayFrame::Sent { to, seq } => {
-                        unconfirmed.pop_front();
+                        unconfirmed.confirm(&to);
                         RelayEvent::Sent { to, seq }
                     }
                     RelayFrame::Presence { device, online } => RelayEvent::Presence { device, online },
                     RelayFrame::Error { code, message, to } => {
                         // A refused send is answered with an error naming
                         // its recipient instead of `sent`.
-                        if to.is_some() {
-                            unconfirmed.pop_front();
+                        if let Some(to) = &to {
+                            unconfirmed.confirm(to);
                         }
-                        RelayEvent::Error { code, message }
+                        let closing = code == "unauthorized";
+                        if events.send(RelayEvent::Error { code, message }).await.is_err() {
+                            return Ok(());
+                        }
+                        if closing {
+                            return Err("the relay refused the access token".into());
+                        }
+                        continue;
                     }
                     _ => continue,
                 };
@@ -337,6 +425,41 @@ mod tests {
         );
         let local = RelayOptions::new("http://127.0.0.1:9", "d", fixed_token("t"));
         assert_eq!(local.ws_url().unwrap(), "ws://127.0.0.1:9/v1/ws?device=d");
+    }
+
+    #[test]
+    fn unencrypted_relays_only_on_this_machine() {
+        assert!(check_relay_url("https://relay.example").is_ok());
+        assert!(check_relay_url("http://127.0.0.1:9").is_ok());
+        assert!(check_relay_url("http://localhost:9").is_ok());
+        assert!(check_relay_url("http://[::1]:9").is_ok());
+        assert!(check_relay_url("http://relay.example").is_err());
+        assert!(check_relay_url("ws://10.0.0.1").is_err());
+        assert!(check_relay_url("ftp://relay.example").is_err());
+    }
+
+    #[test]
+    fn sends_are_confirmed_by_recipient_and_bounded_by_bytes() {
+        let send = |to: &str, size: usize| RelayFrame::Send {
+            to: to.into(),
+            envelope: "e".repeat(size),
+            push: false,
+        };
+        let mut unconfirmed = Unconfirmed::default();
+        unconfirmed.push(send("a", 10));
+        unconfirmed.push(send("b", 20));
+        unconfirmed.push(send("a", 30));
+        unconfirmed.confirm("b");
+        assert_eq!(unconfirmed.frames.len(), 2);
+        assert_eq!(unconfirmed.bytes, 40);
+        unconfirmed.confirm("a");
+        assert_eq!(unconfirmed.bytes, 30, "the oldest send to a");
+        unconfirmed.push(send("c", MAX_UNCONFIRMED_BYTES));
+        assert_eq!(
+            unconfirmed.frames.len(),
+            1,
+            "older sends dropped to stay in bounds"
+        );
     }
 
     #[test]

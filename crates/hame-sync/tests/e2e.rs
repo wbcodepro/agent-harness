@@ -102,6 +102,7 @@ async fn start_host(
             confirm,
             notice: Arc::new(move |notice| seen.lock().unwrap().push(notice)),
             grants_changed: None,
+            publish_labels: false,
         },
         handle,
     )
@@ -162,7 +163,10 @@ async fn pair(
     offer: &PairingOffer,
     label: &str,
 ) -> Result<hame_sync::pairing::Grant, hame_sync::SyncError> {
-    let (sas, answered) = remote.start_pairing(offer, label).await?;
+    let mut pairing = remote.start_pairing(offer, label).await?;
+    // The digits exist only once the host's nonce arrived.
+    let sas = pairing.sas().await?;
+    assert_eq!(sas.len(), 8);
     let prompt = tokio::time::timeout(Duration::from_secs(10), host.prompts.recv())
         .await
         .expect("the host asks")
@@ -170,7 +174,7 @@ async fn pair(
     assert_eq!(prompt.sas, sas, "both screens show the same digits");
     assert_eq!(prompt.label, label);
     assert_eq!(prompt.fingerprint, remote.public().display_fingerprint());
-    remote.paired(answered).await
+    remote.paired(pairing).await
 }
 
 /// Nothing comes back within a while.
@@ -248,7 +252,11 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
     .await;
     let question = before.last().unwrap().1.clone();
     assert_eq!(question["tool_call_id"], "c1");
-    let hash = args_sha256(&json!({"path": "a.txt", "content": "from afar"}));
+    // The device sees the exact arguments and can recompute the hash over
+    // their canonical JSON.
+    let arguments = json!({"path": "a.txt", "content": "from afar"});
+    assert_eq!(question["arguments"], arguments);
+    let hash = args_sha256(&arguments).unwrap();
     assert_eq!(question["args_sha256"], hash.as_str());
     assert!(!dir.path().join("work/a.txt").exists());
 
@@ -305,6 +313,30 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
     assert!(types.contains(&"tool/call") && types.contains(&"tool/result"));
     assert_eq!(types.last(), Some(&"turn/end"));
     let last_seq = rest.iter().map(|(seq, _)| *seq).max().unwrap();
+
+    // Interim remote policy: no full access, a limit on new sessions.
+    let full = phone
+        .request(
+            "POST",
+            "/api/sessions",
+            Some(json!({"sandbox": "danger-full-access"})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full.status, 403, "{:?}", full.body);
+    let mut limited = false;
+    for _ in 0..hame_sync::connector::SESSIONS_PER_MINUTE {
+        let created = phone
+            .request("POST", "/api/sessions", Some(json!({})))
+            .await
+            .unwrap();
+        if created.status == 429 {
+            limited = true;
+            break;
+        }
+        assert_eq!(created.status, 200);
+    }
+    assert!(limited, "session creation is rate-limited");
 
     // Cancelling the subscription ends it.
     phone.cancel(sub).await.unwrap();
@@ -530,7 +562,7 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
     silent(&laptop, "GET", "/api/sessions").await;
     // The revoked key cannot pair again.
     let offer = host.connector.offer_pairing(&relay.url);
-    let again = laptop.start_pairing(&offer, "Laptop").await.unwrap().1;
+    let again = laptop.start_pairing(&offer, "Laptop").await.unwrap();
     assert!(laptop.paired(again).await.is_err());
     assert!(
         host.connector
@@ -546,6 +578,6 @@ async fn a_paired_device_runs_a_turn_remotely_and_everything_else_is_refused() {
         .allowlist()
         .unwrap();
     assert_eq!(allowlist.devices.len(), 1);
-    assert!(allowlist.devices[0].last_counter > 0);
+    assert!(allowlist.devices[0].window.last > 0);
     assert_eq!(allowlist.revoked.len(), 1);
 }
