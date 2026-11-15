@@ -260,16 +260,37 @@ fn install_from(
 
 /// Prints what a scan found and whether the thing was installed.
 fn report((installed, findings): Outcome) -> Result<ExitCode, String> {
+    // Every DANGER line is shown; notices too while there are few of them,
+    // otherwise counted by kind (a large plugin has thousands of links).
+    let notices = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Notice)
+        .count();
+    let list_notices = notices <= 60;
+    let mut kinds: Vec<(String, usize)> = Vec::new();
     for finding in &findings {
         let place = match finding.line {
             0 => finding.file.clone(),
             line => format!("{}:{line}", finding.file),
         };
-        let label = match finding.severity {
-            Severity::Danger => "DANGER",
-            Severity::Notice => "notice",
-        };
-        eprintln!("{label}  {place}  {}", finding.what);
+        match finding.severity {
+            Severity::Danger => eprintln!("DANGER  {place}  {}", finding.what),
+            Severity::Notice if list_notices => eprintln!("notice  {place}  {}", finding.what),
+            Severity::Notice => {
+                let kind = finding.what.split(':').next().unwrap_or("").to_string();
+                match kinds.iter_mut().find(|(k, _)| *k == kind) {
+                    Some((_, n)) => *n += 1,
+                    None => kinds.push((kind, 1)),
+                }
+            }
+        }
+    }
+    if !list_notices {
+        kinds.sort_by(|a, b| b.1.cmp(&a.1));
+        eprintln!("{notices} notices, by kind:");
+        for (kind, n) in kinds {
+            eprintln!("  {n:>6}  {kind}");
+        }
     }
     match installed {
         Some(installed) => {

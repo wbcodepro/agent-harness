@@ -425,6 +425,9 @@ pub fn marketplace_entry(dir: &Path, plugin: Option<&str>) -> Result<Option<Plug
 ///
 /// `force` installs in spite of dangerous findings; `replace` lets an
 /// installed plugin of the same name be overwritten, as an update does.
+/// Top-level plugin folders hame copies but never loads or runs.
+const NOT_LOADED: [&str; 6] = ["docs", "doc", "tests", "test", "examples", ".github"];
+
 pub fn install_plugin(
     source: &Path,
     root: &Path,
@@ -459,6 +462,20 @@ pub fn install_plugin(
         })
         .collect();
     let mut findings = scan(source);
+    // Documentation, tests and examples are copied but never loaded or run
+    // by hame, and security guides in them quote the very commands the
+    // scan looks for; there a danger is worth a look, not a refusal.
+    for finding in &mut findings {
+        let top = finding.file.split('/').next().unwrap_or("");
+        if finding.severity == Severity::Danger
+            && NOT_LOADED.contains(&top)
+            && !finding.what.starts_with("contains invisible")
+            && !finding.what.starts_with("is a symbolic link")
+        {
+            finding.severity = Severity::Notice;
+            finding.what = format!("{} (in {top}/, which hame does not load)", finding.what);
+        }
+    }
     // What a plugin runs by itself is worth saying outright.
     if source.join("hooks/hooks.json").is_file() {
         findings.push(Finding {
