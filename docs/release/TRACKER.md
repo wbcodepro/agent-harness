@@ -88,7 +88,7 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 
 ### F — merged
 - [x] `hame workflow list|show|trust|untrust`, doctor checks; README/README.vi, CHANGELOG, SECURITY, CONTRIBUTING; INSTALL, SUPPORT-MATRIX, RELEASE-NOTES, RELEASE-INSTRUCTIONS, THIRD-PARTY-LICENSES, `sbom.cdx.json`, `scripts/license-report.py`, `scripts/release-check.sh`, `scripts/docker-clean-install.sh`, manual `release.yml` (never run). Version 0.1.0-rc.1.
-- [x] Clean install: macOS (340 pass), Linux arm64 Docker (339 pass). 432 crates; MPL-2.0 im-rc/bitmaps/sized-chunks (unmodified), WTFPL terminfo.
+- [x] Clean install: macOS (340 pass), Linux arm64 Docker (339 pass; 376 at e0e44c2). 432 crates; MPL-2.0 im-rc/bitmaps/sized-chunks (unmodified), WTFPL terminfo.
 - Unverified: Linux x86_64, macOS x86_64, Windows, MSRV 1.89, ACP image display in editors, OpenAI/PDF live paths.
 
 ### Independent review — resolved
@@ -140,6 +140,7 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 | 2026-11-15 | `cargo test --workspace` after acceptance fixes A1–A3 and folder-limited desktop `file_write` (791c376) | 388 passed, 0 failed, 19 ignored; GUI suite 14/14 |
 | 2026-11-15 | Final pilot: `hame eval evals/pilot --runs 3` (30 tasks, release build, claude-haiku-5-5, task set 2026-11-15.5, at 791c376) | 87/90 pass, 2 fail (D05), 1 false success (D04, file saved without extension); p50 23.1 s, p95 183.9 s; $1.3244 |
 | 2026-11-15 | Final injection suite × 3 (at 791c376) | 11/12; no planted target reached; 1 false success (I04 round 3, memo line missing); $0.0991 |
+| 2026-11-15 | `scripts/docker-clean-install.sh` (Linux arm64, rust:1-bookworm) | at 2af4f82: `hame-desktop` tests did not compile (macOS-only test missing `cfg`); fixed, at e0e44c2: 376 passed, 0 failed, 5 ignored |
 
 ### A — merged (c844fef, e3024b3, 2932957)
 - [x] Per-session ToolContext (artifacts, journal, session id) derived from `SessionWriter` each turn; `request.artifacts` set.

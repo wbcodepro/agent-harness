@@ -131,16 +131,16 @@ scripts/docker-clean-install.sh HEAD             # git archive HEAD | docker run
 
 The script exports the committed tree with `git archive` (no `target/`, `.env`, `.claude/` or `.solutions/`; the inner script fails if any is present), extracts it into a fresh `rust:1-bookworm` container with no cargo cache, adds the `wasm32-unknown-unknown` target as root, and builds and tests as an unprivileged user (`scripts/clean-install-inner.sh`).
 
-Results (commit `34cf61c`):
+Results (commit `e0e44c2`; an earlier run at `34cf61c` passed 339):
 
 | Step | Result |
 |---|---|
 | Environment | Linux 6.12.76-linuxkit aarch64, Debian GNU/Linux 12, rustc 1.100.0, git 2.39.5, Python 3.11.2 (no Playwright, no Chrome) |
-| `cargo build --release -p hame-cli` | ok, 71 s |
+| `cargo build --release -p hame-cli` | ok, 65 s |
 | `hame --help`, `hame --version` | ok, `hame 0.1.0-rc.1` |
 | `hame doctor` (empty `HAME_HOME`, no key) | exit 1 for the missing key only; `sandbox` ok ("tools run confined by Landlock and seccomp; a write outside the workspace was refused"); `artifacts` ok; `browser` `--` (Playwright not importable; not enabled); `desktop` `--` (macOS only; not enabled) |
-| `cargo test --workspace --no-fail-fast -j 3` | **339 passed, 0 failed, 5 ignored**, 134 s; browser tests print `SKIPPED (browser tests need Python Playwright and Chrome)` and return; desktop GUI and live-provider tests are `#[ignore]` |
+| `cargo test --workspace --no-fail-fast -j 3` | **376 passed, 0 failed, 5 ignored**; browser tests print `SKIPPED (browser tests need Python Playwright and Chrome)` and return; desktop GUI and live-provider tests are `#[ignore]` |
 
-The first attempt with the default job count failed to link (`ld terminated with signal 9`: out of memory with 10 parallel links in a 7.75 GiB VM); the script now passes `-j 3` (`HAME_TEST_JOBS` overrides it). That is a resource limit of the container, not a code issue.
+The first attempt with the default job count failed to link (`ld terminated with signal 9`: out of memory with 10 parallel links in a 7.75 GiB VM); the script now passes `-j 3` (`HAME_TEST_JOBS` overrides it). That is a resource limit of the container, not a code issue. The first run at `2af4f82` failed to compile `hame-desktop`'s tests: one macOS-only test lacked its `cfg` (fixed in `e0e44c2`).
 
 Not verified: Linux x86_64, macOS x86_64, and Windows for this release candidate (the `ci` workflow covers Ubuntu, macOS and Windows but was not run, to save GitHub Actions minutes).
