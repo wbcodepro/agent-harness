@@ -12,6 +12,7 @@ hame-kernel.workspace = true
 hame-llm.workspace = true
 hame-session.workspace = true
 hame-tools.workspace = true
+hame-trace.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

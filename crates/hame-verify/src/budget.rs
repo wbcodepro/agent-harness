@@ -38,6 +38,28 @@ pub struct BudgetGuard {
     /// Records already in the session when the task began; only what comes
     /// after them counts.
     pub baseline: usize,
+    /// The model the session starts with, for pricing; `model/switched`
+    /// events change it.
+    pub model: Option<String>,
+}
+
+/// What the requests in `records` cost by the dated tariff, starting with
+/// `model`. `None` when any request's model has no known price: an
+/// unknown cost is not zero, and a cost budget then cannot be enforced.
+pub fn cost_of(records: &[Record], model: Option<&str>) -> Option<f64> {
+    let tariff = hame_trace::TariffTable::anthropic();
+    let mut model = model.map(String::from);
+    let mut total = 0.0;
+    for record in records {
+        match &record.event {
+            Event::ModelSwitched { model: next } => model = Some(next.clone()),
+            Event::AssistantMessage { usage, .. } | Event::Compaction { usage, .. } => {
+                total += tariff.cost(model.as_deref()?, usage, None)?;
+            }
+            _ => {}
+        }
+    }
+    Some(total)
 }
 
 impl BudgetGuard {
@@ -46,7 +68,13 @@ impl BudgetGuard {
             budget,
             started: Instant::now(),
             baseline: session.records().len(),
+            model: None,
         }
+    }
+
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
+        self
     }
 
     /// Why the task must stop, if it must.
@@ -58,6 +86,29 @@ impl BudgetGuard {
                 return Some(format!(
                     "{BUDGET_PREFIX} token budget exhausted: {used} of {max} tokens used"
                 ));
+            }
+        }
+        if let Some(max) = self.budget.max_cost_usd {
+            match cost_of(tail, self.model.as_deref()) {
+                Some(cost) if cost >= max => {
+                    return Some(format!(
+                        "{BUDGET_PREFIX} cost budget exhausted: ${cost:.4} of ${max:.4}"
+                    ));
+                }
+                Some(_) => {}
+                // Refusing to go on is the only way to keep a limit whose
+                // spending cannot be measured.
+                None if !tail.is_empty()
+                    && tail
+                        .iter()
+                        .any(|r| matches!(r.event, Event::AssistantMessage { .. })) =>
+                {
+                    return Some(format!(
+                        "{BUDGET_PREFIX} a cost budget is set, but the model's price is unknown, \
+                         so spending cannot be checked against it"
+                    ));
+                }
+                None => {}
             }
         }
         if let Some(deadline) = self.budget.deadline_ms {
@@ -117,6 +168,7 @@ mod tests {
             },
             started: Instant::now(),
             baseline: 1,
+            model: None,
         };
         // The first record predates the task and does not count.
         let records = vec![response(5000, 0), response(400, 100)];
@@ -132,7 +184,29 @@ mod tests {
             },
             started: Instant::now(),
             baseline: 0,
+            model: None,
         };
         assert!(late.exceeded(&[]).unwrap().contains("time budget"));
+
+        let pricey = BudgetGuard {
+            budget: Budget {
+                max_cost_usd: Some(0.001),
+                ..Budget::default()
+            },
+            started: Instant::now(),
+            baseline: 0,
+            model: Some("claude-haiku-5-5".into()),
+        };
+        assert!(pricey.exceeded(&[]).is_none());
+        let big = vec![response(1_000_000, 0)];
+        assert!(cost_of(&big, Some("claude-haiku-5-5")).unwrap() > 0.1);
+        assert!(pricey.exceeded(&big).unwrap().contains("cost budget"));
+        // Unknown price: the limit cannot be kept, so the task stops.
+        let unknown = BudgetGuard {
+            model: Some("someone-elses-model".into()),
+            ..pricey
+        };
+        assert!(cost_of(&big, Some("someone-elses-model")).is_none());
+        assert!(unknown.exceeded(&big).unwrap().contains("price is unknown"));
     }
 }

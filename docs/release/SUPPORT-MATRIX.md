@@ -58,7 +58,7 @@ The desktop helper needs macOS 14 or later (ScreenCaptureKit); only macOS 26.6.2
 
 - Desktop: scroll, drag, hover, text-range selection, choosing pop-up menu items by value, context menus; `click_at` on region screenshots; capturing minimized windows or windows on another Space; any platform other than macOS.
 - Browser: iframes and closed shadow roots are not expanded; Firefox/WebKit; filtering a page's own subresource requests (only top-level navigation is limited to granted origins); file uploads from outside the workspace.
-- Budgets: `max_cost_usd` is accepted and ignored.
+- Budgets: `max_cost_usd` is enforced for Anthropic models only (other providers have no tariff; such a task stops).
 - MCP: requests from server to client (sampling, elicitation, roots) and background tasks.
 - Sessions: no export command; no importer for Claude Code or Codex sessions (DeepSeek Harness only).
 - Windows: read and network confinement of tools.

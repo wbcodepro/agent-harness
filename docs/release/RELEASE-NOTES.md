@@ -49,7 +49,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 - Desktop control is macOS only and was tested with TextEdit on macOS 26.6.2; no scroll, drag, hover or text-range selection; US key layout for `key`.
 - The browser tool was verified on macOS arm64 with Chrome 157 only; only top-level navigation is limited to granted origins; commit detection is heuristic.
 - Browser and desktop tools act outside the shell sandbox with the user's permissions; grant narrowly.
-- `max_cost_usd` is not enforced; prices exist only for Anthropic models.
+- Prices exist only for Anthropic models; a `max_cost_usd` budget stops a task on other providers because its spending cannot be measured.
 - OpenAI image and PDF transport, and Anthropic PDFs, are tested against fixtures, not live.
 - Not verified for this release candidate: Linux x86_64, macOS x86_64, Windows (an earlier revision passed on Windows 11).
 - No prebuilt binaries; no security audit.

@@ -91,10 +91,10 @@ pub async fn task(home: &Path, store: &SessionStore, args: TaskArgs) -> Result<E
     // First, so a spent budget stops the turn before anything else runs.
     runtime.agent.hooks.insert(
         0,
-        Arc::new(hame_verify::BudgetGuard::new(
-            contract.budget.clone(),
-            &session,
-        )),
+        Arc::new(
+            hame_verify::BudgetGuard::new(contract.budget.clone(), &session)
+                .with_model(runtime.model.clone()),
+        ),
     );
     if !args.json {
         eprintln!("session: {}", session.id());

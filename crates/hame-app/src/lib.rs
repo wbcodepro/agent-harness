@@ -173,6 +173,9 @@ pub struct Runtime {
     pub steering: Steering,
     /// Browser and desktop tools, and the probe that reads their state.
     pub computer: computer::Computer,
+    /// The main model's name, when hame chose the provider (not for a
+    /// model passed in by the embedder). Used to price spending.
+    pub model: Option<String>,
 }
 
 /// The directory where checkpoints of `cwd` are kept.
@@ -236,6 +239,12 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             hosts: hosts.clone(),
         });
     }
+    let model = match &options.llm {
+        Some(_) => None,
+        None => choose_model(&config, &secrets, options)
+            .ok()
+            .map(|choice| choice.model),
+    };
     let Models {
         main: llm,
         summary: summarizer,
@@ -882,6 +891,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         secrets,
         steering,
         computer,
+        model,
     })
 }
 
