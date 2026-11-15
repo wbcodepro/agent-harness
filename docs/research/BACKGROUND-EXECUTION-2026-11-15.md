@@ -226,6 +226,23 @@ Verified by the GUI test `background_mode_types_without_taking_the_foreground`:
 a document opened with `open -g` behind Finder gets an insertion point
 after a phrase, Vietnamese text and a Return typed into it, cmd+s, a menu
 command and `focus` are refused, Finder stays frontmost, and nothing is
-saved. Not yet done: measuring the pilot's desktop tasks in this mode, and
-an announced foreground step (or an Apple Events save) for the saving that
-every such task ends with.
+saved.
+
+**Saving in the background: the `save` action.** Apple Events reach an
+app in the background without activating it. Checked by hand first:
+`save (document of window id W) in POSIX file …` wrote a background
+TextEdit document, and Numbers exported a background spreadsheet to a real
+`.xlsx` (`export … as Microsoft Excel`) and saved a `.numbers`, with Finder
+frontmost throughout. AppleScript window ids are the CGWindowIDs hame
+already uses. hame's desktop tool now has `save` (TextEdit, Numbers,
+Pages; in place, to a path, or exported as pdf, xlsx, csv or docx), with
+`commit` and `file_write`, the destination checked by its real path
+against the grant's folders, and no replacement of an existing file
+without `overwrite`. The GUI test above continues: save in place, save a
+copy into a granted folder, refusal for another folder and for an
+existing file, Finder still frontmost. A modal dialog left open in the app
+blocks Apple Events; `save` then times out and reports `outcome_unknown`
+(seen once with a TextEdit left in a bad state by a manual experiment).
+macOS asks once per app for the Automation permission of the process
+running hame. Still to measure: the pilot's desktop tasks in background
+mode.

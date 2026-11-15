@@ -138,6 +138,8 @@ pub fn required(action: &str, element: Option<&ElementFacts>, commit: bool) -> V
         "type" | "key" | "click_at" => vec![Capability::GlobalInput],
         "clipboard" => vec![Capability::Clipboard],
         "screenshot" => vec![Capability::Screen],
+        // Writes a file through the app's scripting interface.
+        "save" => vec![Capability::Commit, Capability::FileWrite],
         _ => vec![Capability::Interact],
     };
     if let Some(element) = element

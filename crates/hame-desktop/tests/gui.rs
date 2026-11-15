@@ -658,16 +658,74 @@ async fn background_mode_types_without_taking_the_foreground() {
                 out.text
             );
         }
-        if front_at_start != TEXTEDIT {
-            assert_ne!(frontmost_bundle(), TEXTEDIT, "TextEdit came to the front");
-        } else {
-            eprintln!("TextEdit was already frontmost; the foreground check was skipped");
-        }
         // Nothing was saved: the file still has its first content.
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "start of the note\n"
         );
+
+        // save writes through Apple Events, still in the background: in
+        // place, then a copy in a granted folder; a folder outside the
+        // grant is refused, and an existing file is not replaced.
+        let saved = call(json!({"action": "save", "app": TEXTEDIT, "window": doc})).await;
+        assert!(!saved.is_error, "{}", saved.text);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "start of the note – thêm từ nền\n\n"
+        );
+        let granted = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut limited_cfg = config(
+            gui._home.path(),
+            textedit_grants_in(all_caps(), &[granted.path()]),
+        );
+        limited_cfg.background = true;
+        let limited = DesktopTool::new(limited_cfg);
+        let copy = granted.path().join("copy.txt");
+        let out = limited
+            .call(
+                &json!({"action": "save", "app": TEXTEDIT, "window": doc,
+                           "path": copy.to_str().unwrap()}),
+                &gui.ctx,
+            )
+            .await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(
+            std::fs::read_to_string(&copy)
+                .unwrap()
+                .contains("thêm từ nền")
+        );
+        let refused = limited
+            .call(
+                &json!({"action": "save", "app": TEXTEDIT, "window": doc,
+                           "path": outside.path().join("x.txt").to_str().unwrap()}),
+                &gui.ctx,
+            )
+            .await;
+        assert!(
+            refused.is_error && refused.text.starts_with("not_authorized"),
+            "{}",
+            refused.text
+        );
+        assert!(!outside.path().join("x.txt").exists());
+        let again = limited
+            .call(
+                &json!({"action": "save", "app": TEXTEDIT, "window": doc,
+                           "path": copy.to_str().unwrap()}),
+                &gui.ctx,
+            )
+            .await;
+        assert!(
+            again.is_error && again.text.starts_with("exists"),
+            "{}",
+            again.text
+        );
+
+        if front_at_start != TEXTEDIT {
+            assert_ne!(frontmost_bundle(), TEXTEDIT, "TextEdit came to the front");
+        } else {
+            eprintln!("TextEdit was already frontmost; the foreground check was skipped");
+        }
     });
 }
 

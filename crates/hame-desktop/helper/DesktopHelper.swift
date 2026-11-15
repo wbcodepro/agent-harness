@@ -1219,6 +1219,52 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
             "occurrences_seen": count, "window": windowState(r)]
 }
 
+/// Saves or exports a window's document through the app's scripting
+/// dictionary (TextEdit, Numbers, Pages). Apple Events reach an app in
+/// the background without activating it.
+func scriptSave(_ req: [String: Any]) throws -> [String: Any] {
+    guard let bundle = req["bundle_id"] as? String, let wid = req["window_id"] as? Int else {
+        throw fail("invalid", "script_save needs bundle_id and window_id.")
+    }
+    func quoted(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+    var command = "save d"
+    if let path = req["path"] as? String {
+        if let format = req["format"] as? String {
+            command = "export d to POSIX file \(quoted(path)) as \(format)"
+        } else {
+            command = "save d in POSIX file \(quoted(path))"
+        }
+    }
+    let source = """
+    with timeout of 60 seconds
+    tell application id \(quoted(bundle))
+    set d to document of window id \(wid)
+    \(command)
+    end tell
+    end timeout
+    """
+    var error: NSDictionary?
+    guard let script = NSAppleScript(source: source) else {
+        throw fail("failed", "Could not build the script.")
+    }
+    _ = script.executeAndReturnError(&error)
+    if let error {
+        let number = error[NSAppleScript.errorNumber] as? Int ?? 0
+        let message = error[NSAppleScript.errorMessage] as? String ?? "unknown error"
+        switch number {
+        case -1743:
+            throw fail("not_authorized", "macOS has not allowed this process to control \(bundle) with Apple Events (System Settings > Privacy & Security > Automation). The user has to allow it once.")
+        case -1712:
+            throw fail("outcome_unknown", "The app did not answer within 60 seconds; the document may or may not have been saved.")
+        default:
+            throw fail("failed", "The app refused: \(message) (\(number)).")
+        }
+    }
+    return ["saved": true]
+}
+
 func frontmostPid() -> pid_t? {
     let system = AXUIElementCreateSystemWide()
     AXUIElementSetMessagingTimeout(system, 2.0)
@@ -2073,6 +2119,8 @@ func handle(_ req: [String: Any]) {
             let (app, appEl, window, _) = try resolveWindow(req)
             result = ["window": windowJSON(window, app: app, appEl: appEl) ?? [:],
                       "frontmost_pid": Int(frontmostPid() ?? 0)]
+        case "script_save":
+            result = try scriptSave(req)
         case "focus_context":
             // Only meaningful while the window would receive the input.
             let (app, appEl, window, wid) = try resolveWindow(req)
