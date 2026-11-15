@@ -13,10 +13,17 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 - A request refused because the prompt exceeds the context window is compacted and sent again once.
 - When the summary model is the main model, compaction reuses the conversation's cached prefix.
 - English README, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md` and issue templates.
+- `hame setup --allow-partial`: accept write-only confinement on Windows when setup runs without a terminal.
 
 ### Changed
 
 - The message for a missing API key names every provider's key, where to put it, and `hame setup`.
+
+### Fixed
+
+- Windows: confined tools can no longer read hame's own keys, settings, sessions and MCP tokens (a "no read up" integrity label, set without administrator rights). Before, a tool could read the key `hame setup` saves.
+- Windows: stopping a background job ends every process it started; Git's bash starts programs in a way `taskkill /T` could not follow.
+- A background job whose hame process has exited is reported as no longer running instead of "still running".
 
 ## 0.0.1
 
