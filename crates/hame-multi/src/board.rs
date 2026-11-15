@@ -16,6 +16,30 @@ struct Task {
     status: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     note: String,
+    /// Tasks that must be done before this one can start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<u64>,
+    /// Who took it, by `task_claim` or `task_update`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    owner: String,
+}
+
+impl Task {
+    /// The dependencies not done yet.
+    fn waiting_on(&self, tasks: &[Task]) -> Vec<u64> {
+        self.depends_on
+            .iter()
+            .copied()
+            .filter(|dep| tasks.iter().any(|t| t.id == *dep && t.status != "done"))
+            .collect()
+    }
+}
+
+fn ids(list: &[u64]) -> String {
+    list.iter()
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 const STATUSES: &[&str] = &["pending", "in_progress", "done", "blocked"];
@@ -80,7 +104,20 @@ impl TaskBoard {
                 } else {
                     format!(" — {}", task.note)
                 };
-                format!("#{} [{}] {}{note}", task.id, task.status, task.title)
+                let after = if task.depends_on.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (after {})", ids(&task.depends_on))
+                };
+                let owner = if task.owner.is_empty() {
+                    String::new()
+                } else {
+                    format!(" @{}", task.owner)
+                };
+                format!(
+                    "#{} [{}] {}{after}{owner}{note}",
+                    task.id, task.status, task.title
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -91,6 +128,7 @@ enum Action {
     Create,
     Update,
     List,
+    Claim,
 }
 
 struct BoardTool {
@@ -98,9 +136,9 @@ struct BoardTool {
     action: Action,
 }
 
-/// `task_create`, `task_update` and `task_list` over one board.
+/// `task_create`, `task_update`, `task_list` and `task_claim` over one board.
 pub fn board_tools(board: &TaskBoard) -> Vec<Arc<dyn Tool>> {
-    [Action::Create, Action::Update, Action::List]
+    [Action::Create, Action::Update, Action::List, Action::Claim]
         .into_iter()
         .map(|action| {
             Arc::new(BoardTool {
@@ -117,24 +155,39 @@ impl Tool for BoardTool {
             Action::Create => (
                 "task_create",
                 "Add a task to the board shared with your subagents and later sessions in this \
-                 workspace. Use the board to plan work that has several parts.",
-                json!({"type": "object", "properties": {"title": {"type": "string"}},
+                 workspace. Use the board to plan work that has several parts; depends_on lists \
+                 tasks that must be done first.",
+                json!({"type": "object", "properties": {
+                    "title": {"type": "string"},
+                    "depends_on": {"type": "array", "items": {"type": "integer"}}},
                     "required": ["title"], "additionalProperties": false}),
             ),
             Action::Update => (
                 "task_update",
                 "Change a task's status (pending, in_progress, done, blocked) and optionally \
-                 leave a note for whoever reads the board next.",
+                 leave a note for whoever reads the board next. A task cannot start or finish \
+                 before the tasks it depends on are done.",
                 json!({"type": "object", "properties": {
                     "id": {"type": "integer"},
                     "status": {"type": "string", "enum": STATUSES},
-                    "note": {"type": "string"}},
+                    "note": {"type": "string"},
+                    "owner": {"type": "string"}},
                     "required": ["id", "status"], "additionalProperties": false}),
             ),
             Action::List => (
                 "task_list",
                 "Show the shared task board.",
                 json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            ),
+            Action::Claim => (
+                "task_claim",
+                "Take a task to work on: the given id, or else the first pending task nobody \
+                 has taken whose dependencies are done. It becomes in_progress under your name; \
+                 two agents never get the same task.",
+                json!({"type": "object", "properties": {
+                    "owner": {"type": "string", "description": "Your name on the board."},
+                    "id": {"type": "integer"}},
+                    "required": ["owner"], "additionalProperties": false}),
             ),
         };
         ToolSpec {
@@ -166,15 +219,33 @@ impl Tool for BoardTool {
                     else {
                         return ToolOutput::error("Invalid input: title is required.");
                     };
+                    let depends_on: Vec<u64> = input["depends_on"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_u64)
+                        .collect();
                     self.board.update(|tasks| {
+                        if let Some(missing) = depends_on
+                            .iter()
+                            .find(|d| !tasks.iter().any(|t| t.id == **d))
+                        {
+                            return Err(format!("There is no task #{missing} to depend on."));
+                        }
                         let id = tasks.iter().map(|task| task.id).max().unwrap_or(0) + 1;
                         tasks.push(Task {
                             id,
                             title: title.trim().to_string(),
                             status: "pending".into(),
                             note: String::new(),
+                            depends_on: depends_on.clone(),
+                            owner: String::new(),
                         });
-                        Ok(format!("Created task #{id}."))
+                        Ok(if depends_on.is_empty() {
+                            format!("Created task #{id}.")
+                        } else {
+                            format!("Created task #{id}, after {}.", ids(&depends_on))
+                        })
                     })
                 }
                 Action::Update => {
@@ -189,18 +260,89 @@ impl Tool for BoardTool {
                         ));
                     }
                     self.board.update(|tasks| {
+                        let snapshot = tasks.clone();
                         let task = tasks
                             .iter_mut()
                             .find(|task| task.id == id)
                             .ok_or(format!("There is no task #{id}."))?;
+                        let waiting = task.waiting_on(&snapshot);
+                        if matches!(status, "in_progress" | "done") && !waiting.is_empty() {
+                            return Err(format!(
+                                "Task #{id} waits on {} (not done yet).",
+                                ids(&waiting)
+                            ));
+                        }
                         task.status = status.to_string();
                         if let Some(note) = input["note"].as_str() {
                             task.note = note.to_string();
                         }
-                        Ok(format!("Task #{id} is now {status}."))
+                        if let Some(owner) = input["owner"].as_str() {
+                            task.owner = owner.trim().to_string();
+                        }
+                        let mut text = format!("Task #{id} is now {status}.");
+                        if status == "done" {
+                            let now = tasks.clone();
+                            let freed: Vec<u64> = now
+                                .iter()
+                                .filter(|t| {
+                                    t.status == "pending"
+                                        && t.depends_on.contains(&id)
+                                        && t.waiting_on(&now).is_empty()
+                                })
+                                .map(|t| t.id)
+                                .collect();
+                            if !freed.is_empty() {
+                                text.push_str(&format!(" Ready now: {}.", ids(&freed)));
+                            }
+                        }
+                        Ok(text)
                     })
                 }
                 Action::List => self.board.update(|tasks| Ok(TaskBoard::render(tasks))),
+                Action::Claim => {
+                    let Some(owner) = input["owner"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|o| !o.is_empty())
+                    else {
+                        return ToolOutput::error("Invalid input: owner is required.");
+                    };
+                    let wanted = input["id"].as_u64();
+                    self.board.update(|tasks| {
+                        let snapshot = tasks.clone();
+                        let free = |t: &Task| {
+                            t.status == "pending"
+                                && t.owner.is_empty()
+                                && t.waiting_on(&snapshot).is_empty()
+                        };
+                        let task = match wanted {
+                            Some(id) => {
+                                let task = tasks
+                                    .iter_mut()
+                                    .find(|t| t.id == id)
+                                    .ok_or(format!("There is no task #{id}."))?;
+                                if !free(task) {
+                                    let why = if !task.owner.is_empty() {
+                                        format!("{} has it", task.owner)
+                                    } else if task.status != "pending" {
+                                        format!("it is {}", task.status)
+                                    } else {
+                                        format!("it waits on {}", ids(&task.waiting_on(&snapshot)))
+                                    };
+                                    return Err(format!("Task #{id} cannot be taken: {why}."));
+                                }
+                                task
+                            }
+                            None => match tasks.iter_mut().find(|t| free(t)) {
+                                Some(task) => task,
+                                None => return Ok("No task is free to take now.".to_string()),
+                            },
+                        };
+                        task.status = "in_progress".into();
+                        task.owner = owner.to_string();
+                        Ok(format!("You have task #{}: {}", task.id, task.title))
+                    })
+                }
             };
             match result {
                 Ok(text) => ToolOutput::ok(text),
@@ -213,6 +355,54 @@ impl Tool for BoardTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dependencies_gate_work_and_claims_never_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(dir.path());
+        let a = board_tools(&TaskBoard::new(dir.path().join("tasks.json")));
+        let b = board_tools(&TaskBoard::new(dir.path().join("tasks.json")));
+        let (create, update, list, claim) = (&a[0], &a[1], &a[2], &a[3]);
+        create.call(&json!({"title": "Schema"}), &ctx).await;
+        create
+            .call(&json!({"title": "API", "depends_on": [1]}), &ctx)
+            .await;
+        create.call(&json!({"title": "Docs"}), &ctx).await;
+        assert!(
+            create
+                .call(&json!({"title": "X", "depends_on": [9]}), &ctx)
+                .await
+                .is_error
+        );
+
+        let first = claim.call(&json!({"owner": "ann"}), &ctx).await;
+        assert_eq!(first.text, "You have task #1: Schema");
+        // #2 waits on #1, so the next free one is #3, for the other agent.
+        let second = b[3].call(&json!({"owner": "bob"}), &ctx).await;
+        assert_eq!(second.text, "You have task #3: Docs");
+        let blocked = b[3].call(&json!({"owner": "bob", "id": 2}), &ctx).await;
+        assert!(
+            blocked.is_error && blocked.text.contains("waits on #1"),
+            "{}",
+            blocked.text
+        );
+        let early = update.call(&json!({"id": 2, "status": "done"}), &ctx).await;
+        assert!(early.is_error, "{}", early.text);
+        let done = update.call(&json!({"id": 1, "status": "done"}), &ctx).await;
+        assert_eq!(done.text, "Task #1 is now done. Ready now: #2.");
+        assert_eq!(
+            b[3].call(&json!({"owner": "bob"}), &ctx).await.text,
+            "You have task #2: API"
+        );
+        assert_eq!(
+            claim.call(&json!({"owner": "ann"}), &ctx).await.text,
+            "No task is free to take now."
+        );
+        assert_eq!(
+            list.call(&json!({}), &ctx).await.text,
+            "#1 [done] Schema @ann\n#2 [in_progress] API (after #1) @bob\n#3 [in_progress] Docs @bob"
+        );
+    }
 
     #[tokio::test]
     async fn agents_share_one_board_through_a_file() {
