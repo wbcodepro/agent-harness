@@ -28,6 +28,10 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 
 ### Added
 
+- A new web interface (`apps/ui`, React + TypeScript, built into `crates/hame-web/ui-dist` and embedded in the binary, so building hame still needs no Node): a session list grouped by folder with search, status and rename/pin/delete; streamed answers; reasoning and tool calls folded into work groups with a summary; diff cards from edit calls; screenshots with a lightbox; an approval card in place of the composer (Enter allows once, Esc denies, "always" for the session); messages queued while a turn runs; permission modes and models per session; a Changes/Files/Terminal/Screens/Tasks panel; light and dark themes; phone layout down to 390 px. See `docs/design/UI.md` and `apps/ui/README.md`.
+- `hame web` API: `GET /api/info`; session titles, status and last activity in `GET /api/sessions`; `GET/PATCH/DELETE /api/sessions/{id}`; `PUT /api/sessions/{id}/settings` (permission mode, provider, model); `POST /api/sessions/{id}/steer` and `/steer/withdraw`; `POST /api/sessions/{id}/attachments` (images to the artifact store, other files to `.hame/attachments` in the session's folder, 20 MiB each); event streams resume with `?after=` or `Last-Event-ID`, and pending approval questions reach a page that connects later. The page is served with a strict Content-Security-Policy and `frame-ancestors 'none'`.
+- `Options::approval_default` in `hame-app`, and `Steering::pending`, `withdraw` and `take` in `hame-agent`, for interfaces that offer permission modes and removable queued messages.
+
 - Grants take `folders`: a confirmed desktop save or export panel may write only into them (default the workspace; `"*"` for any folder). Before, `file_write` on an app let it save anywhere (a pilot run exported into `~/Documents`). The desktop helper protocol is now 3.
 
 - Desktop: `select` (table cells by address, text by occurrence), cell addresses and the Numbers and Pages canvases in observations, typing that follows Numbers' formula editor; an Export button in a save panel needs `commit` and `file_write` like Save.
