@@ -387,6 +387,11 @@ async fn spans_nest_under_the_code_that_started_them_with_monotonic_times() {
     assert_eq!(reads.len(), 2);
     assert!(reads.iter().all(|read| read.parent == Some(script.span_id)));
     assert_eq!(bash.status, SpanStatus::Error);
+    // Times are whole microseconds shown as f64 milliseconds, and end_ms()
+    // adds two of them: a span that ends in the same microsecond as its
+    // parent (or as its next sibling starts) can come out one rounding step
+    // later, so compare to well under a microsecond.
+    const ROUNDING: f64 = 1e-6;
     for span in &all {
         assert!(span.dur_ms >= 0.0);
         if let Some(parent) = span.parent {
@@ -396,15 +401,15 @@ async fn spans_nest_under_the_code_that_started_them_with_monotonic_times() {
                 "{span:?} starts before {parent:?}"
             );
             assert!(
-                span.end_ms() <= parent.end_ms(),
+                span.end_ms() <= parent.end_ms() + ROUNDING,
                 "{span:?} ends after {parent:?}"
             );
         }
     }
     // Siblings in order: each starts after the previous one ended.
-    assert!(script.start_ms >= model.end_ms());
-    assert!(bash.start_ms >= script.end_ms());
-    assert!(reads[1].start_ms >= reads[0].end_ms());
+    assert!(script.start_ms + ROUNDING >= model.end_ms());
+    assert!(bash.start_ms + ROUNDING >= script.end_ms());
+    assert!(reads[1].start_ms + ROUNDING >= reads[0].end_ms());
 
     let run = account(&records, &TariffTable::anthropic());
     assert_eq!(run.tool_calls, 4);

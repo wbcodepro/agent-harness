@@ -100,11 +100,18 @@ const LOOKING: &[&str] = &[
     "windows",
 ];
 
-/// Whether a control request only looks at an application.
+/// Whether a control request only looks at an application. Two looking
+/// actions act when asked to: `wait` with `download` saves a file into the
+/// workspace, and `extract` with `next` clicks through to further pages.
 fn only_looks(request: &ToolRequest) -> bool {
-    request.input["action"]
-        .as_str()
-        .is_some_and(|action| LOOKING.contains(&action))
+    let input = &request.input;
+    let given = |key: &str| !input[key].is_null() && input[key].as_bool() != Some(false);
+    match input["action"].as_str() {
+        Some("wait") => !given("download"),
+        Some("extract") => !given("next"),
+        Some(action) => LOOKING.contains(&action),
+        None => false,
+    }
 }
 
 /// Deny outranks ask, which outranks allow.
@@ -333,6 +340,34 @@ mod tests {
                 layer.decide(&request(tool, action)),
                 RuleAction::Allow,
                 "{tool} {action}"
+            );
+        }
+        // Looking actions that act when asked to are asked about too.
+        let acting = |input: serde_json::Value| ToolRequest {
+            call_id: "c".into(),
+            name: "browser".into(),
+            input,
+            effect: Effect::Control,
+        };
+        for input in [
+            json!({"action": "wait", "download": true, "path": "out/"}),
+            json!({"action": "extract", "next": "Next page"}),
+        ] {
+            assert_eq!(
+                layer.decide(&acting(input.clone())),
+                RuleAction::Ask,
+                "{input}"
+            );
+        }
+        for input in [
+            json!({"action": "wait", "text": "Done"}),
+            json!({"action": "wait", "download": false, "text": "Done"}),
+            json!({"action": "extract", "selector": "table"}),
+        ] {
+            assert_eq!(
+                layer.decide(&acting(input.clone())),
+                RuleAction::Allow,
+                "{input}"
             );
         }
         // A local turn leaves application actions to their grants.
