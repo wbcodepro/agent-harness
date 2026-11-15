@@ -77,6 +77,10 @@ pub struct ComputerConfig {
     /// `{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact"] }`.
     #[serde(rename = "grant")]
     pub grants: Vec<hame_session::contract::Grant>,
+    /// Offer the browser's and desktop's `batch` action, which runs several
+    /// known steps without a model round trip. On by default; turning it
+    /// off is for measuring what batching saves.
+    pub batch: bool,
 }
 
 impl Default for ComputerConfig {
@@ -88,6 +92,7 @@ impl Default for ComputerConfig {
             profiles_dir: None,
             browser_channel: None,
             grants: Vec::new(),
+            batch: true,
         }
     }
 }
@@ -672,5 +677,8 @@ mod computer_tests {
         assert!(auth.permits(&editor, Capability::GlobalInput));
         assert!(!auth.permits(&editor, Capability::Commit));
         assert!(Config::parse("[computer]\nbogus = 1").is_err());
+        assert!(config.computer.batch, "batching is on unless turned off");
+        let off = Config::parse("[computer]\nbatch = false").unwrap();
+        assert!(!off.computer.batch);
     }
 }

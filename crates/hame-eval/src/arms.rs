@@ -137,6 +137,40 @@ pub fn build_arms(
         .collect()
 }
 
+/// An arm's configuration with a task's own settings (`config` in the
+/// manifest) merged in. The arm wins where both set the same key, so an
+/// experiment's setting is never undone by a task; arrays are joined, so a
+/// task's grants add to the arm's.
+pub fn merge_task_config(arm: &str, task: &toml::Table) -> Result<String, String> {
+    if task.is_empty() {
+        return Ok(arm.to_string());
+    }
+    let mut table: toml::Table = arm
+        .parse()
+        .map_err(|e| format!("invalid configuration: {e}"))?;
+    fn merge(into: &mut toml::Table, from: &toml::Table) {
+        for (key, value) in from {
+            match (into.get_mut(key), value) {
+                (None, value) => {
+                    into.insert(key.clone(), value.clone());
+                }
+                (Some(toml::Value::Table(mine)), toml::Value::Table(theirs)) => {
+                    merge(mine, theirs);
+                }
+                (Some(toml::Value::Array(mine)), toml::Value::Array(theirs)) => {
+                    let mut joined = theirs.clone();
+                    joined.append(mine);
+                    *mine = joined;
+                }
+                // The arm's own value stays.
+                (Some(_), _) => {}
+            }
+        }
+    }
+    merge(&mut table, task);
+    toml::to_string(&table).map_err(|e| e.to_string())
+}
+
 /// The order runs are made in: every run index, every task, every arm,
 /// with the arm order rotated from one task and run to the next so no arm
 /// always goes first (provider load drifts over time). Returns
@@ -205,6 +239,35 @@ mod tests {
         assert_eq!(default[0].name, "default");
         assert!(build_arms("", &["a".into(), "a".into()], &[], read).is_err());
         assert!(build_arms("", &["a".into()], &["z:x=1".into()], read).is_err());
+    }
+
+    #[test]
+    fn task_settings_merge_under_the_arms() {
+        let task: toml::Table = r#"
+            [computer]
+            browser = true
+            batch = true
+            grant = [{ channel = "browser", capabilities = ["observe"] }]
+            [limits]
+            max_steps = 60
+        "#
+        .parse()
+        .unwrap();
+        let arm =
+            "[computer]\nbatch = false\ngrant = [{ channel = \"desktop\", capabilities = [] }]\n";
+        let merged: toml::Table = merge_task_config(arm, &task).unwrap().parse().unwrap();
+        assert_eq!(merged["computer"]["browser"].as_bool(), Some(true));
+        assert_eq!(
+            merged["computer"]["batch"].as_bool(),
+            Some(false),
+            "the arm's setting wins"
+        );
+        let grants = merged["computer"]["grant"].as_array().unwrap();
+        assert_eq!(grants.len(), 2, "grants are joined");
+        assert_eq!(grants[0]["channel"].as_str(), Some("browser"));
+        assert_eq!(merged["limits"]["max_steps"].as_integer(), Some(60));
+        assert_eq!(merge_task_config(arm, &toml::Table::new()).unwrap(), arm);
+        assert!(merge_task_config("not toml [", &task).is_err());
     }
 
     #[test]

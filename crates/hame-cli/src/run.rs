@@ -213,6 +213,9 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
             None => hame_trace::SpanStatus::Cancelled,
         });
     }
+    // Close browsers cleanly so their profiles (cookies, local storage)
+    // are written to disk; dropping the helper would kill them instead.
+    runtime.computer.shutdown().await;
     if let Some(proxy) = &runtime.proxy {
         for decision in proxy.decisions().iter().filter(|d| !d.allowed) {
             eprintln!("network: blocked {}:{}", decision.host, decision.port);

@@ -152,6 +152,23 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Copies the directories and regular files under `from`, skipping links,
+/// sockets and anything else.
+fn copy_regular_files(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_regular_files(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// Runs a shell command in `cwd` with `env` added. Returns whether it
 /// exited 0 within [`SHELL_LIMIT`] and the last lines it printed.
 async fn shell_with(command: &str, cwd: &Path, env: &[(&str, OsString)]) -> (bool, String) {
@@ -186,10 +203,110 @@ async fn shell_with(command: &str, cwd: &Path, env: &[(&str, OsString)]) -> (boo
     }
 }
 
-/// Runs a task's setup command. One that does not finish in five minutes
-/// counts as failed.
-async fn shell(command: &str, cwd: &Path) -> bool {
-    shell_with(command, cwd, &[]).await.0
+/// A process started for a run beside the agent (a fixture server, a fault
+/// injector), in a process group of its own so everything it starts is
+/// stopped with it.
+struct Companion {
+    child: tokio::process::Child,
+}
+
+impl Companion {
+    fn spawn(
+        command: &str,
+        cwd: &Path,
+        env: &[(&str, OsString)],
+        log: &Path,
+        stdout: Stdio,
+    ) -> std::io::Result<Self> {
+        let log = std::fs::File::create(log)?;
+        let mut cmd = tokio::process::Command::new(hame_kernel::bash_program());
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(cwd)
+            .envs(env.iter().map(|(name, value)| (*name, value)))
+            .stdin(Stdio::piped())
+            .stdout(stdout)
+            .stderr(log)
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        cmd.process_group(0);
+        Ok(Self {
+            child: cmd.spawn()?,
+        })
+    }
+
+    /// Closes its input (a fixture server exits on that), then stops the
+    /// whole group.
+    async fn stop(mut self) {
+        drop(self.child.stdin.take());
+        if tokio::time::timeout(Duration::from_secs(2), self.child.wait())
+            .await
+            .is_err()
+        {
+            #[cfg(unix)]
+            if let Some(pid) = self.child.id() {
+                let _ = std::process::Command::new("kill")
+                    .args(["-TERM", &format!("-{pid}")])
+                    .status();
+                if tokio::time::timeout(Duration::from_secs(2), self.child.wait())
+                    .await
+                    .is_ok()
+                {
+                    return;
+                }
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &format!("-{pid}")])
+                    .status();
+            }
+            let _ = self.child.kill().await;
+        }
+        // Whatever the group left behind.
+        #[cfg(unix)]
+        if let Some(pid) = self.child.id() {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .status();
+        }
+    }
+}
+
+/// How long a fixture server has to say where it listens.
+const SERVER_START: Duration = Duration::from_secs(20);
+
+/// Starts a task's fixture server and reads its address from the first
+/// line it prints: `PORT <n>` or `URL <url>`.
+async fn start_server(
+    command: &str,
+    cwd: &Path,
+    env: &[(&str, OsString)],
+    log: &Path,
+) -> Result<(Companion, String), String> {
+    use tokio::io::AsyncBufReadExt;
+    let mut server = Companion::spawn(command, cwd, env, log, Stdio::piped())
+        .map_err(|e| format!("could not start the fixture server: {e}"))?;
+    let stdout = server.child.stdout.take().ok_or("no server output")?;
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let first = tokio::time::timeout(SERVER_START, lines.next_line()).await;
+    // The rest of its output is not needed, but must not block it.
+    let line = match first {
+        Ok(Ok(Some(line))) => line,
+        _ => {
+            server.stop().await;
+            return Err("the fixture server did not print its address".into());
+        }
+    };
+    tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+    let url = if let Some(port) = line.trim().strip_prefix("PORT ") {
+        format!("http://127.0.0.1:{}", port.trim())
+    } else if let Some(url) = line.trim().strip_prefix("URL ") {
+        url.trim().to_string()
+    } else {
+        server.stop().await;
+        return Err(format!(
+            "the fixture server printed {line:?}, not PORT or URL"
+        ));
+    };
+    Ok((server, url))
 }
 
 /// Stops an agent past its limit: an interrupt first, so it can close its
@@ -223,6 +340,8 @@ struct SessionFacts {
     final_text: String,
     system_prompt: Option<String>,
     receipts: Vec<String>,
+    /// Browser and desktop calls that return a structured observation.
+    observations: u64,
 }
 
 fn session_facts(home: &Path) -> SessionFacts {
@@ -244,7 +363,15 @@ fn session_facts(home: &Path) -> SessionFacts {
                     facts.cached_tokens += usage.cache_read_tokens;
                     facts.output_tokens += usage.output_tokens;
                 }
-                Event::ToolCall { .. } => facts.tool_calls += 1,
+                Event::ToolCall { name, input, .. } => {
+                    facts.tool_calls += 1;
+                    let action = input.get("action").and_then(|a| a.as_str());
+                    if matches!(name.as_str(), "browser" | "desktop")
+                        && matches!(action, Some("observe" | "open" | "navigate" | "back"))
+                    {
+                        facts.observations += 1;
+                    }
+                }
                 Event::ModelSwitched { .. } => facts.escalated = true,
                 Event::UserMessage { content }
                     if matches!(content.first(), Some(Block::Text { text })
@@ -356,6 +483,86 @@ struct Context<'a> {
     hardware: Option<String>,
     tariffs: TariffTable,
     traces: Option<PathBuf>,
+    /// Computer channels this machine provides beyond files and shell.
+    available: Vec<&'static str>,
+    /// Versions of what the tasks drive, by name; recorded per task.
+    app_versions: BTreeMap<String, String>,
+}
+
+/// The first line a command prints, if it runs.
+fn first_line(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+}
+
+/// What the browser and desktop tasks run against, for the record.
+fn app_versions(available: &[&str]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    if cfg!(target_os = "macos") {
+        if let Some(v) = first_line("sw_vers", &["-productVersion"]) {
+            out.insert("macos".into(), v);
+        }
+        if available.contains(&"browser")
+            && let Some(v) = first_line(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                &["--version"],
+            )
+        {
+            out.insert("chrome".into(), v);
+        }
+        if available.contains(&"desktop")
+            && let Some(v) = first_line(
+                "defaults",
+                &[
+                    "read",
+                    "/System/Applications/TextEdit.app/Contents/Info",
+                    "CFBundleShortVersionString",
+                ],
+            )
+        {
+            out.insert("textedit".into(), v);
+        }
+    }
+    if available.contains(&"browser")
+        && let Some(python) = hame_kernel::python_program()
+        && let Some(v) = first_line(
+            python,
+            &[
+                "-I",
+                "-c",
+                "import importlib.metadata as m; print(m.version('playwright'))",
+            ],
+        )
+    {
+        out.insert("playwright".into(), v);
+    }
+    out
+}
+
+/// The machine, as precisely as it says: CPU model and memory on macOS.
+fn hardware() -> Option<String> {
+    let cpus = std::thread::available_parallelism().ok()?;
+    let mut out = format!("{} {} cpus", std::env::consts::ARCH, cpus);
+    if cfg!(target_os = "macos") {
+        if let Some(cpu) = first_line("sysctl", &["-n", "machdep.cpu.brand_string"]) {
+            out = format!("{cpu}, {out}");
+        }
+        if let Some(bytes) =
+            first_line("sysctl", &["-n", "hw.memsize"]).and_then(|b| b.parse::<u64>().ok())
+        {
+            out.push_str(&format!(", {} GB", bytes >> 30));
+        }
+    }
+    Some(out)
 }
 
 impl<'a> Context<'a> {
@@ -364,6 +571,7 @@ impl<'a> Context<'a> {
         args: &'a EvalArgs,
         task_set_version: String,
         traces: Option<PathBuf>,
+        needs_computer: bool,
     ) -> Result<Self, String> {
         // Each task gets an empty data directory, so the user's credentials
         // are handed over through the environment instead.
@@ -383,7 +591,17 @@ impl<'a> Context<'a> {
                 .filter(|output| output.status.success())
                 .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         });
+        // Only probed when a task asks for a computer channel: checking
+        // costs a Python start and is pointless for file tasks.
+        let available = if needs_computer {
+            hame_app::computer::available_channels(home)
+        } else {
+            Vec::new()
+        };
+        let app_versions = app_versions(&available);
         Ok(Self {
+            available,
+            app_versions,
             args,
             keys,
             scratch,
@@ -393,9 +611,7 @@ impl<'a> Context<'a> {
                 .unwrap_or_else(|| uuid::Uuid::now_v7().simple().to_string()),
             task_set_version,
             hame_commit,
-            hardware: std::thread::available_parallelism()
-                .ok()
-                .map(|cpus| format!("{} {} cpus", std::env::consts::ARCH, cpus)),
+            hardware: hardware(),
             tariffs: TariffTable::anthropic(),
             traces,
         })
@@ -427,10 +643,158 @@ impl<'a> Context<'a> {
                 .or_else(|| self.args.model.clone()),
             // Approval questions are answered by --yes; nobody intervenes.
             human_interventions: Some(0),
+            app_versions: {
+                let relevant: BTreeMap<String, String> = self
+                    .app_versions
+                    .iter()
+                    .filter(|(app, _)| match app.as_str() {
+                        "chrome" | "playwright" => task.requires.iter().any(|r| r == "browser"),
+                        "textedit" => task.requires.iter().any(|r| r == "desktop"),
+                        _ => true,
+                    })
+                    .map(|(a, v)| (a.clone(), v.clone()))
+                    .collect();
+                (!relevant.is_empty()).then_some(relevant)
+            },
+            network_profile: task.server.as_ref().map(|_| "loopback".to_string()),
             ..RunRecord::default()
         }
     }
 }
+
+/// The command that runs the agent once: hame itself, a continuation of
+/// its session, or the `--command` under comparison.
+fn agent_command(
+    ctx: &Context<'_>,
+    home: &Path,
+    work: &Path,
+    trace_path: &Path,
+    prompt: &str,
+    session: Option<&str>,
+) -> Result<tokio::process::Command, String> {
+    let args = ctx.args;
+    let mut command = match &args.command {
+        Some(external) => {
+            let mut command = tokio::process::Command::new(hame_kernel::bash_program());
+            command
+                .arg("-c")
+                .arg(external)
+                .env("HAME_EVAL_PROMPT", prompt);
+            command
+        }
+        None => {
+            let mut command =
+                tokio::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+            command.arg("--home").arg(home).args(["run", "--yes"]);
+            if let Some(session) = session {
+                command.args(["--session", session]);
+            }
+            if let Some(provider) = &args.provider {
+                command.args(["--provider", provider]);
+            }
+            if let Some(model) = &args.model {
+                command.args(["--model", model]);
+            }
+            if let Some(base_url) = &args.base_url {
+                command.args(["--base-url", base_url]);
+            }
+            command.arg("--trace").arg(trace_path);
+            command.arg(prompt);
+            command
+        }
+    };
+    command
+        .current_dir(work)
+        .envs(ctx.keys.iter().cloned())
+        .env_remove("HAME_TRACE")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    Ok(command)
+}
+
+/// How one agent process ended.
+struct AgentRun {
+    started: bool,
+    exited_ok: bool,
+    timed_out: bool,
+    elapsed: Duration,
+    note: String,
+}
+
+/// Runs the agent until it exits or `limit` passes. Its pid is written to
+/// `$HAME_RUN_DIR/agent.pid` for fault injectors.
+async fn run_agent(
+    mut command: tokio::process::Command,
+    limit: Duration,
+    run_dir: &Path,
+) -> AgentRun {
+    let started = Instant::now();
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            return AgentRun {
+                started: false,
+                exited_ok: false,
+                timed_out: false,
+                elapsed: started.elapsed(),
+                note: format!("could not run: {e}"),
+            };
+        }
+    };
+    if let Some(pid) = child.id() {
+        let _ = std::fs::write(run_dir.join("agent.pid"), pid.to_string());
+    }
+    let stderr = child.stderr.take();
+    let reader = tokio::spawn(async move {
+        let mut text = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_string(&mut text).await;
+        }
+        text
+    });
+    let mut timed_out = false;
+    let status = match tokio::time::timeout(limit, child.wait()).await {
+        Ok(status) => status.ok(),
+        Err(_) => {
+            timed_out = true;
+            interrupt(&mut child).await;
+            None
+        }
+    };
+    let elapsed = started.elapsed();
+    let _ = std::fs::remove_file(run_dir.join("agent.pid"));
+    // Something the agent started may still hold its stderr.
+    let stderr = tokio::time::timeout(GRACE, reader)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    let exited_ok = status.is_some_and(|s| s.success());
+    let note = if timed_out {
+        "timed out".to_string()
+    } else if !exited_ok {
+        stderr
+            .lines()
+            .rev()
+            .find(|line| line.starts_with("hame:"))
+            .unwrap_or("the agent exited with an error")
+            .to_string()
+    } else {
+        String::new()
+    };
+    AgentRun {
+        started: true,
+        exited_ok,
+        timed_out,
+        elapsed,
+        note,
+    }
+}
+
+/// The marker a fault injector leaves when it killed the agent.
+const KILLED_MARKER: &str = "agent.killed";
 
 async fn run_task(
     ctx: &Context<'_>,
@@ -456,7 +820,7 @@ async fn run_task(
         reviewed: false,
         evidence: "no-change",
     };
-    let missing = task.missing_capabilities();
+    let missing = task.missing_capabilities(&ctx.available);
     if !missing.is_empty() {
         record.outcome = Outcome::Unsupported;
         record.failure_category = Some("unsupported".into());
@@ -470,125 +834,163 @@ async fn run_task(
         .join(&arm.name)
         .join(name)
         .join(format!("run-{run_index}"));
-    let (home, work) = (dir.join("home"), dir.join("work"));
+    // The run directory holds what setup, fault injection, checker and
+    // teardown share; like the task set, the agent cannot read it.
+    let (home, work, run_dir) = (dir.join("home"), dir.join("work"), dir.join("run"));
+    // A folder outside the workspace that the agent's shell and file tools
+    // can neither read nor write: what lands there was put there by an
+    // application (a save panel, a download), which is what desktop tasks
+    // ask for.
+    let outbox = dir.join("outbox");
     let trace_path = dir.join(TRACE_FILE);
+    let resume_trace = dir.join(format!("resume.{TRACE_FILE}"));
 
     // Setup: a fresh workspace and data directory, the fixture, the
-    // task's setup command.
+    // fixture server, the task's setup command.
     let setup_started = Instant::now();
-    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    for path in [&home, &work, &run_dir, &outbox] {
+        std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    }
+    let (home, work, run_dir, outbox) = (
+        home.canonicalize().unwrap_or(home),
+        work.canonicalize().unwrap_or(work),
+        run_dir.canonicalize().unwrap_or(run_dir),
+        outbox.canonicalize().unwrap_or(outbox),
+    );
     // The agent must not be able to read how it will be graded: the task
     // set, with every checker and solution, is put out of its tools'
     // sight. (Where the sandbox confines only writes, this does nothing;
     // an agent run by `--command` is outside the sandbox altogether.)
-    let config = with_unreadable(&arm.config, &task.hidden_root);
+    let config = hame_eval::arms::merge_task_config(&arm.config, &task.config)
+        .map_err(|e| format!("{name}: {e}"))?;
+    let config = [task.hidden_root.as_path(), &run_dir, &outbox]
+        .into_iter()
+        .fold(config, |config, path| with_unreadable(&config, path));
     if !config.is_empty() {
         std::fs::write(home.join("config.toml"), &config).map_err(|e| e.to_string())?;
     }
     if let Some(fixture) = &task.fixture {
         copy_tree(fixture, &work).map_err(|e| e.to_string())?;
     }
-    let setup_ok = match &task.setup {
-        Some(setup) => shell(setup, &work).await,
-        None => true,
+    let absolute = |path: &Path| {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .into_os_string()
     };
+    // A fresh secret per run: the fixture's state endpoint answers only to
+    // it, and only the checker gets it, not the agent.
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut env: Vec<(&str, OsString)> = vec![
+        ("HAME_TASK_ID", task.id.clone().into()),
+        ("HAME_SUITE_DIR", absolute(&task.hidden_root)),
+        ("HAME_TASK_DIR", absolute(&task.dir)),
+        ("HAME_RUN_DIR", run_dir.clone().into_os_string()),
+        ("HAME_WORKSPACE", work.clone().into_os_string()),
+        ("HAME_AGENT_HOME", home.clone().into_os_string()),
+        ("HAME_OUTBOX", outbox.clone().into_os_string()),
+        ("HAME_FIXTURE_TOKEN", token.into()),
+    ];
+    if let Some(check_dir) = &task.check_dir {
+        env.push(("HAME_CHECK_DIR", absolute(check_dir)));
+    }
+    let mut setup_ok = true;
+    let mut server = None;
+    let mut fixture_url = String::new();
+    if let Some(command) = &task.server {
+        match start_server(command, &run_dir, &env, &run_dir.join("server.log")).await {
+            Ok((child, url)) => {
+                server = Some(child);
+                fixture_url = url;
+                env.push(("HAME_FIXTURE_URL", fixture_url.clone().into()));
+            }
+            Err(e) => {
+                setup_ok = false;
+                tally.note = e;
+            }
+        }
+    }
+    if setup_ok && let Some(setup) = &task.setup {
+        let (ok, tail) = shell_with(setup, &work, &env).await;
+        if !ok {
+            setup_ok = false;
+            tally.note = format!("setup failed: {tail}");
+        }
+    }
     let before = file_hashes(&work).unwrap_or_default();
     record.initial_state_id = tree_hash(&work).ok();
     record.setup_ms = ms(setup_started.elapsed());
 
-    let timeout = args
-        .timeout
-        .or(task.timeout_secs)
-        .unwrap_or(DEFAULT_TIMEOUT_SECS);
-    let prompt = task.prompt_for(args.lang.as_deref()).to_string();
+    let timeout = Duration::from_secs(
+        args.timeout
+            .or(task.timeout_secs)
+            .unwrap_or(DEFAULT_TIMEOUT_SECS),
+    );
+    let workspace = work.to_string_lossy().into_owned();
+    let outbox_text = outbox.to_string_lossy().into_owned();
+    let vars = [
+        ("fixture_url", fixture_url.as_str()),
+        ("workspace", workspace.as_str()),
+        ("outbox", outbox_text.as_str()),
+    ];
+    let prompt = manifest::substitute(task.prompt_for(args.lang.as_deref()), &vars);
     let mut agent_started = false;
     let mut exited_ok = false;
     let mut timed_out = false;
+    let mut resumed = false;
     if setup_ok {
-        let mut command = match &args.command {
-            Some(external) => {
-                let mut command = tokio::process::Command::new(hame_kernel::bash_program());
-                command
-                    .arg("-c")
-                    .arg(external)
-                    .env("HAME_EVAL_PROMPT", &prompt);
-                command
-            }
-            None => {
-                let mut command = tokio::process::Command::new(
-                    std::env::current_exe().map_err(|e| e.to_string())?,
-                );
-                command.arg("--home").arg(&home).args(["run", "--yes"]);
-                if let Some(provider) = &args.provider {
-                    command.args(["--provider", provider]);
-                }
-                if let Some(model) = &args.model {
-                    command.args(["--model", model]);
-                }
-                if let Some(base_url) = &args.base_url {
-                    command.args(["--base-url", base_url]);
-                }
-                command.arg("--trace").arg(&trace_path);
-                command.arg(&prompt);
-                command
-            }
-        };
-        command
-            .current_dir(&work)
-            .envs(ctx.keys.iter().cloned())
-            .env_remove("HAME_TRACE")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let started = Instant::now();
-        match command.spawn() {
-            Err(e) => tally.note = format!("could not run: {e}"),
-            Ok(mut child) => {
-                agent_started = true;
-                let stderr = child.stderr.take();
-                let reader = tokio::spawn(async move {
-                    let mut text = String::new();
-                    if let Some(mut stderr) = stderr {
-                        let _ = stderr.read_to_string(&mut text).await;
+        let background = match &task.background {
+            Some(command) => {
+                match Companion::spawn(
+                    command,
+                    &run_dir,
+                    &env,
+                    &run_dir.join("background.log"),
+                    Stdio::null(),
+                ) {
+                    Ok(child) => Some(child),
+                    Err(e) => {
+                        tally.note = format!("could not start the background process: {e}");
+                        None
                     }
-                    text
-                });
-                let status =
-                    match tokio::time::timeout(Duration::from_secs(timeout), child.wait()).await {
-                        Ok(status) => status.ok(),
-                        Err(_) => {
-                            timed_out = true;
-                            interrupt(&mut child).await;
-                            None
-                        }
-                    };
-                record.agent_ms = ms(started.elapsed());
-                // Something the agent started may still hold its stderr.
-                let stderr = tokio::time::timeout(GRACE, reader)
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .unwrap_or_default();
-                exited_ok = status.is_some_and(|s| s.success());
-                tally.note = if timed_out {
-                    "timed out".to_string()
-                } else if !exited_ok {
-                    stderr
-                        .lines()
-                        .rev()
-                        .find(|line| line.starts_with("hame:"))
-                        .unwrap_or("the agent exited with an error")
-                        .to_string()
-                } else {
-                    String::new()
-                };
+                }
+            }
+            None => None,
+        };
+        let command = agent_command(ctx, &home, &work, &trace_path, &prompt, None)?;
+        let first = run_agent(command, timeout, &run_dir).await;
+        let mut elapsed = first.elapsed;
+        let mut last = first;
+        // A crash injected on purpose: the user continues the session, once.
+        if let (Some(resume), true) = (&task.resume, run_dir.join(KILLED_MARKER).exists())
+            && !last.timed_out
+            && args.command.is_none()
+        {
+            let session = SessionStore::new(home.join("sessions"))
+                .list()
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|header| header.id.to_string());
+            if let Some(session) = session {
+                resumed = true;
+                let resume = manifest::substitute(resume, &vars);
+                let command =
+                    agent_command(ctx, &home, &work, &resume_trace, &resume, Some(&session))?;
+                let again = run_agent(command, timeout.saturating_sub(elapsed), &run_dir).await;
+                elapsed += again.elapsed;
+                last = again;
             }
         }
-    } else {
-        tally.note = "setup failed".into();
+        if let Some(background) = background {
+            background.stop().await;
+        }
+        record.agent_ms = ms(elapsed);
+        agent_started = last.started;
+        exited_ok = last.exited_ok;
+        timed_out = last.timed_out;
+        if tally.note.is_empty() {
+            tally.note = last.note;
+        }
     }
 
     // Verification: what changed, the protected files, the hidden check.
@@ -605,13 +1007,6 @@ async fn run_task(
         if let Some(overlay) = &task.overlay {
             copy_tree(overlay, &work).map_err(|e| e.to_string())?;
         }
-        let mut env: Vec<(&str, OsString)> = vec![("HAME_TASK_ID", task.id.clone().into())];
-        if let Some(check_dir) = &task.check_dir {
-            let absolute = check_dir
-                .canonicalize()
-                .unwrap_or_else(|_| check_dir.clone());
-            env.push(("HAME_CHECK_DIR", absolute.into_os_string()));
-        }
         let (passed, tail) = shell_with(&task.check, &work, &env).await;
         check_passed = passed;
         if !passed && tally.note.is_empty() {
@@ -621,10 +1016,24 @@ async fn run_task(
                 format!("check failed: {tail}")
             };
         }
+        if passed && !tail.is_empty() {
+            // A passing checker may still report what it saw.
+            record.note = tail;
+        }
     }
     record.verification_ms = ms(verify_started.elapsed());
     record.total_ms = record.agent_ms + record.verification_ms;
     record.check_passed = check_passed;
+    // Putting the machine back is not part of the task's time.
+    if let Some(teardown) = &task.teardown {
+        let (ok, tail) = shell_with(teardown, &work, &env).await;
+        if !ok {
+            eprintln!("hame: {name}: teardown failed: {tail}");
+        }
+    }
+    if let Some(server) = server {
+        server.stop().await;
+    }
 
     // What the agent's logs say.
     let facts = session_facts(&home);
@@ -637,6 +1046,7 @@ async fn run_task(
     tally.reviewed = facts.reviewed;
     tally.evidence = facts.evidence;
     record.receipt_ids = facts.receipts.clone();
+    record.semantic_observations = Some(facts.observations);
     record.prompt_version = facts
         .system_prompt
         .as_ref()
@@ -647,8 +1057,15 @@ async fn run_task(
     } else {
         !timed_out && claims_success(exited_ok, facts.last_turn_completed, &facts.final_text)
     };
+    if resumed {
+        // The simulated user who continued the session after the crash.
+        record.human_interventions = Some(1);
+    }
     if trace_path.is_file() {
-        let records = read_trace(&trace_path).map_err(|e| e.to_string())?;
+        let mut records = read_trace(&trace_path).map_err(|e| e.to_string())?;
+        if resume_trace.is_file() {
+            records.extend(read_trace(&resume_trace).map_err(|e| e.to_string())?);
+        }
         record.apply_account(&account(&records, &ctx.tariffs));
         if let Some(traces) = &ctx.traces {
             let kept = traces
@@ -658,7 +1075,11 @@ async fn run_task(
             if let Some(parent) = kept.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if std::fs::copy(&trace_path, &kept).is_ok() {
+            let mut bytes = std::fs::read(&trace_path).unwrap_or_default();
+            if let Ok(more) = std::fs::read(&resume_trace) {
+                bytes.extend(more);
+            }
+            if std::fs::write(&kept, bytes).is_ok() {
                 record.trace_reference = Some(kept.to_string_lossy().into_owned());
             }
         }
@@ -680,14 +1101,28 @@ async fn run_task(
     if !record.forbidden_effects.is_empty() && tally.note.is_empty() {
         tally.note = format!("forbidden: {}", record.forbidden_effects.join(", "));
     }
-    record.note = tally.note.clone();
+    if resumed {
+        tally.note = if tally.note.is_empty() {
+            "resumed after the injected crash".into()
+        } else {
+            format!("resumed after the injected crash; {}", tally.note)
+        };
+    }
+    if !tally.note.is_empty() {
+        record.note = if record.note.is_empty() {
+            tally.note.clone()
+        } else {
+            format!("{}; {}", tally.note, record.note)
+        };
+    }
     tally.passed = outcome == Outcome::Pass;
     tally.seconds = record.total_ms / 1000.0;
 
     if let (false, Some(keep)) = (tally.passed, keep) {
         let kept = keep.join(name);
         let _ = std::fs::remove_dir_all(&kept);
-        if let Err(e) = copy_tree(&dir, &kept) {
+        // Browser profiles hold sockets and lock links; they are skipped.
+        if let Err(e) = copy_regular_files(&dir, &kept) {
             eprintln!("hame: could not keep {name}: {e}");
         }
     }
@@ -803,7 +1238,7 @@ async fn run_suite(
     config: &str,
     keep: Option<&Path>,
 ) -> Result<Vec<Tally>, String> {
-    let ctx = Context::new(home, args, "probe".into(), None)?;
+    let ctx = Context::new(home, args, "probe".into(), None, false)?;
     let arm = Arm {
         name: "probe".into(),
         config: with_accepted_partial_sandbox(home, config),
@@ -962,7 +1397,11 @@ pub async fn run(home: &Path, args: EvalArgs) -> Result<ExitCode, String> {
         .traces
         .clone()
         .or_else(|| args.json.as_ref().map(|json| json.with_extension("traces")));
-    let ctx = Context::new(home, &args, set.version.clone(), traces)?;
+    let needs_computer = set
+        .tasks
+        .iter()
+        .any(|task| !task.missing_capabilities(&[]).is_empty());
+    let ctx = Context::new(home, &args, set.version.clone(), traces, needs_computer)?;
     let runs = args.runs.max(1) as u32;
 
     let mut attempts: Vec<Attempt> = Vec::new();

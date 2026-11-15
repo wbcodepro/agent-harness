@@ -95,6 +95,9 @@ pub struct DesktopConfig {
     pub authorization: Authorization,
     /// Test hook: the helper reports Accessibility as not granted.
     pub simulate_untrusted: bool,
+    /// Offer the `batch` action. On by default; off for an ablation that
+    /// measures one action per model decision.
+    pub batch: bool,
 }
 
 impl DesktopConfig {
@@ -108,6 +111,7 @@ impl DesktopConfig {
             lease_wait: Duration::from_secs(2),
             authorization,
             simulate_untrusted: false,
+            batch: true,
         }
     }
 
@@ -1882,7 +1886,7 @@ impl DesktopTool {
 
 impl Tool for DesktopTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
+        let mut spec = ToolSpec {
             name: DESKTOP_TOOL.into(),
             description: "Observe and operate native macOS applications through accessibility. \
                 Start with observe (app, optional window or title) to get refs like o3:e12; refs \
@@ -1931,7 +1935,23 @@ impl Tool for DesktopTool {
                 "required": ["action"],
                 "additionalProperties": false
             }),
+        };
+        if !self.config.batch {
+            spec.description = spec.description.replace(
+                " batch runs up to 20 steps and stops at the first failure, unexpected dialog or \
+                 failed expect.",
+                "",
+            );
+            let properties = &mut spec.input_schema["properties"];
+            if let Some(actions) = properties["action"]["enum"].as_array_mut() {
+                actions.retain(|a| a != "batch");
+            }
+            if let Some(properties) = properties.as_object_mut() {
+                properties.remove("steps");
+                properties.remove("expect");
+            }
         }
+        spec
     }
 
     fn effect(&self) -> Effect {
@@ -1950,6 +1970,12 @@ impl Tool for DesktopTool {
         Box::pin(async move {
             self.cancel.flag.store(false, Ordering::SeqCst);
             if input["action"] == "batch" {
+                if !self.config.batch {
+                    return ToolOutput::error(
+                        "invalid: batch is turned off in this configuration; send one action per \
+                         call.",
+                    );
+                }
                 if !supported() {
                     return ToolOutput::error(
                         "unsupported: Desktop control is available only on macOS.",
@@ -2045,6 +2071,33 @@ mod tests {
         let t = tool(Authorization::default());
         assert_eq!(t.effect(), Effect::Control);
         assert!(t.host_side() && !t.concurrent());
+    }
+
+    #[tokio::test]
+    async fn batch_can_be_turned_off() {
+        let mut config = DesktopConfig::new("/nonexistent-hame-home", Authorization::default());
+        config.batch = false;
+        let t = DesktopTool::new(config);
+        let spec = t.spec();
+        let actions = spec.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap();
+        assert_eq!(actions.len(), ACTIONS.len() - 1);
+        assert!(!actions.contains(&json!("batch")));
+        assert!(!spec.description.contains("batch"), "{}", spec.description);
+        assert!(spec.input_schema["properties"].get("steps").is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let out = t
+            .call(
+                &json!({"action": "batch", "steps": []}),
+                &ToolContext::new(dir.path()),
+            )
+            .await;
+        assert!(
+            out.is_error && out.text.contains("turned off"),
+            "{}",
+            out.text
+        );
     }
 
     #[test]

@@ -22,9 +22,10 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-/// What hame's eval runner can provide today. Tasks that need anything
-/// else (a browser fixture, a desktop session) are reported as unsupported
-/// rather than run and failed.
+/// What hame's eval runner can always provide. `browser` and `desktop` are
+/// added by the runner when this machine has them (see
+/// [`TaskSpec::missing_capabilities`]); tasks that need anything else are
+/// reported as unsupported rather than run and failed.
 pub const SUPPORTED_CAPABILITIES: &[&str] = &["files", "shell"];
 
 /// The categories of the pilot diagnostic suite. Others are accepted, for
@@ -84,6 +85,27 @@ pub struct TaskSpec {
     pub timeout_secs: Option<u64>,
     /// Hidden from the agent's tools.
     pub hidden_root: PathBuf,
+    /// The task's own directory (`$HAME_TASK_DIR`).
+    pub dir: PathBuf,
+    /// A live fixture: a shell command started before setup that prints
+    /// `PORT <n>` (or `URL <url>`) as its first line and serves until its
+    /// standard input closes. Its address is `$HAME_FIXTURE_URL` and
+    /// `{fixture_url}` in the prompt. Started fresh for every run, so its
+    /// state is reset; stopped after the check.
+    pub server: Option<String>,
+    /// Started beside the agent and stopped when it finishes: fault
+    /// injection and interference (a modal, a cancelled dialog, a kill).
+    pub background: Option<String>,
+    /// Run after the check whatever happened, to put the machine back
+    /// (close windows, quit an application the run started).
+    pub teardown: Option<String>,
+    /// When the background process killed the agent (it touched
+    /// `$HAME_RUN_DIR/agent.killed`), the session is continued once with
+    /// this prompt, as a user would after a crash.
+    pub resume: Option<String>,
+    /// Merged into the agent's config.toml for this task (the arm's own
+    /// settings win; arrays are joined), e.g. the `[computer]` grants.
+    pub config: toml::Table,
 }
 
 impl TaskSpec {
@@ -93,11 +115,15 @@ impl TaskSpec {
             .map_or(self.prompt.as_str(), String::as_str)
     }
 
-    /// The required capabilities the runner cannot provide.
-    pub fn missing_capabilities(&self) -> Vec<String> {
+    /// The required capabilities that neither [`SUPPORTED_CAPABILITIES`]
+    /// nor `available` (what this machine offers besides) provide.
+    pub fn missing_capabilities(&self, available: &[&str]) -> Vec<String> {
         self.requires
             .iter()
-            .filter(|need| !SUPPORTED_CAPABILITIES.contains(&need.as_str()))
+            .filter(|need| {
+                !SUPPORTED_CAPABILITIES.contains(&need.as_str())
+                    && !available.contains(&need.as_str())
+            })
             .cloned()
             .collect()
     }
@@ -121,6 +147,8 @@ struct Defaults {
     requires: Option<Vec<String>>,
     timeout_secs: Option<u64>,
     check: Option<String>,
+    server: Option<String>,
+    teardown: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +175,12 @@ struct ManifestTask {
     #[serde(default)]
     unchanged: Vec<String>,
     timeout_secs: Option<u64>,
+    server: Option<String>,
+    background: Option<String>,
+    teardown: Option<String>,
+    resume: Option<String>,
+    #[serde(default)]
+    config: toml::Table,
 }
 
 fn file_category() -> String {
@@ -235,6 +269,12 @@ pub fn parse_manifest(text: &str, root: &Path) -> Result<TaskSet, String> {
             unchanged: task.unchanged,
             timeout_secs: task.timeout_secs.or(manifest.defaults.timeout_secs),
             hidden_root: root.to_path_buf(),
+            server: task.server.or_else(|| manifest.defaults.server.clone()),
+            background: task.background,
+            teardown: task.teardown.or_else(|| manifest.defaults.teardown.clone()),
+            resume: task.resume,
+            config: task.config,
+            dir,
             id: task.id,
         });
     }
@@ -295,6 +335,12 @@ fn load_legacy(suite: &Path) -> Result<TaskSet, String> {
             unchanged: Vec::new(),
             timeout_secs: None,
             hidden_root: suite.to_path_buf(),
+            dir: dir.clone(),
+            server: None,
+            background: None,
+            teardown: None,
+            resume: None,
+            config: toml::Table::new(),
         });
     }
     Ok(TaskSet {
@@ -306,6 +352,16 @@ fn load_legacy(suite: &Path) -> Result<TaskSet, String> {
         root: suite.to_path_buf(),
         tasks,
     })
+}
+
+/// Replaces `{name}` in `text` with each variable's value; anything else
+/// in braces is left as it is.
+pub fn substitute(text: &str, vars: &[(&str, &str)]) -> String {
+    let mut out = text.to_string();
+    for (name, value) in vars {
+        out = out.replace(&format!("{{{name}}}"), value);
+    }
+    out
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -368,6 +424,7 @@ version = "2026-11-15.1"
 [defaults]
 timeout_secs = 300
 check = "python3 \"$HAME_CHECK_DIR/check.py\""
+teardown = "true"
 
 [[task]]
 id = "F02"
@@ -385,6 +442,9 @@ channels = ["browser"]
 requires = ["browser"]
 check = "true"
 timeout_secs = 60
+server = "python3 app.py"
+resume = "Continue."
+config = { computer = { browser = true } }
 "#;
 
     #[test]
@@ -411,11 +471,18 @@ timeout_secs = 60
         assert_eq!(f02.check_dir, Some(dir.path().join("F02/check")));
         assert_eq!(f02.solution, None);
         assert_eq!(f02.unchanged, ["input/orders.csv"]);
-        assert!(f02.missing_capabilities().is_empty());
+        assert!(f02.missing_capabilities(&[]).is_empty());
         let b01 = &set.tasks[0];
         assert_eq!(b01.timeout_secs, Some(60));
-        assert_eq!(b01.missing_capabilities(), ["browser"]);
+        assert_eq!(b01.missing_capabilities(&[]), ["browser"]);
+        assert!(b01.missing_capabilities(&["browser"]).is_empty());
         assert_eq!(b01.fixture, None);
+        assert_eq!(b01.server.as_deref(), Some("python3 app.py"));
+        assert_eq!(b01.resume.as_deref(), Some("Continue."));
+        assert_eq!(b01.teardown.as_deref(), Some("true"), "from the defaults");
+        assert_eq!(b01.config["computer"]["browser"].as_bool(), Some(true));
+        assert_eq!(b01.dir, dir.path().join("B01"));
+        assert_eq!(f02.server, None);
 
         let twice = format!("{MANIFEST}\n[[task]]\nid = \"F02\"\nprompt = \"again\"\n");
         assert!(
@@ -447,6 +514,18 @@ timeout_secs = 60
         assert_eq!(set.tasks[0].overlay, Some(task.join("check")));
         assert!(set.version.starts_with("sha256:"));
         assert!(load(dir.path(), Some("nothing")).is_err());
+    }
+
+    #[test]
+    fn prompt_variables_are_substituted() {
+        let vars = [("fixture_url", "http://127.0.0.1:5"), ("workspace", "/w")];
+        assert_eq!(
+            substitute(
+                "Open {fixture_url}/form, save in {workspace}/out {x}",
+                &vars
+            ),
+            "Open http://127.0.0.1:5/form, save in /w/out {x}"
+        );
     }
 
     #[test]

@@ -87,6 +87,9 @@ pub struct BrowserConfig {
     pub headless: bool,
     /// Per-operation timeout when the call gives none.
     pub default_timeout_ms: u64,
+    /// Offer the `batch` action. On by default; off for an ablation that
+    /// measures one action per model decision.
+    pub batch: bool,
 }
 
 impl BrowserConfig {
@@ -99,6 +102,7 @@ impl BrowserConfig {
             executable: None,
             headless: true,
             default_timeout_ms: 10_000,
+            batch: true,
         }
     }
 
@@ -2356,7 +2360,11 @@ impl BrowserTool {
 
 impl Tool for BrowserTool {
     fn spec(&self) -> ToolSpec {
-        schema::spec()
+        if self.config.batch {
+            schema::spec()
+        } else {
+            schema::spec_without_batch()
+        }
     }
 
     fn effect(&self) -> Effect {
@@ -2374,6 +2382,15 @@ impl Tool for BrowserTool {
     fn call<'a>(&'a self, input: &'a Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             if input["action"] == json!("batch") {
+                if !self.config.batch {
+                    return ToolOutput::error(
+                        Failure::new(
+                            "invalid_input",
+                            "batch is turned off in this configuration; send one action per call",
+                        )
+                        .render(),
+                    );
+                }
                 return match Args::deserialize(input) {
                     Ok(args) => self.batch(&args, ctx).await,
                     Err(e) => ToolOutput::error(
@@ -2421,6 +2438,45 @@ mod tests {
         assert_eq!(a, idempotency_key("http://h", "http://h/form?x=2", &facts));
         let other = json!({"form": "order", "action": "http://h/submit", "fields": ["a=2"], "control": "|button|Send|"});
         assert_ne!(a, idempotency_key("http://h", "http://h/form", &other));
+    }
+
+    #[test]
+    fn batch_can_be_left_out_of_the_schema() {
+        let full = schema::spec();
+        let lean = schema::spec_without_batch();
+        let actions = |spec: &ToolSpec| -> Vec<String> {
+            spec.input_schema["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert!(actions(&full).contains(&"batch".to_string()));
+        assert!(!actions(&lean).contains(&"batch".to_string()));
+        assert_eq!(actions(&lean).len() + 1, actions(&full).len());
+        assert!(lean.input_schema["properties"].get("steps").is_none());
+        assert!(!lean.description.contains("batch"));
+    }
+
+    #[tokio::test]
+    async fn a_batch_is_refused_when_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrowserConfig::new(dir.path(), Authorization::default());
+        config.batch = false;
+        let tool = BrowserTool::new(config);
+        assert!(!tool.spec().description.contains("batch"));
+        let out = tool
+            .call(
+                &json!({"action": "batch", "steps": [{"action": "observe"}]}),
+                &ToolContext::new(dir.path()),
+            )
+            .await;
+        assert!(
+            out.is_error && out.text.contains("turned off"),
+            "{}",
+            out.text
+        );
     }
 
     #[test]
