@@ -52,6 +52,9 @@ pub(crate) struct Running {
     pub stdout: Capture,
     pub stderr: Capture,
     pub shared_group: bool,
+    /// Windows: the job object holding the command and what it started.
+    #[cfg(windows)]
+    pub tree: Option<crate::process::CommandTree>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -194,6 +197,10 @@ async fn supervise(mut running: Running, dir: PathBuf) {
     // The command ended by itself; whatever it deliberately left running
     // in the background is let be, as for a command that ends in time.
     running.group.disarm();
+    #[cfg(windows)]
+    if let Some(tree) = running.tree.take() {
+        tree.release();
+    }
     let Running {
         command,
         stdout,
@@ -229,14 +236,11 @@ async fn kill(running: &mut Running) {
         // The group is this worker's own; it goes down with the command.
         drop(GroupGuard::new(Some(std::process::id())));
     }
+    // A parent's id does not find every descendant there (Git's bash
+    // starts programs through a process that exits at once); the job does.
     #[cfg(windows)]
-    if let Some(pid) = running.child.id() {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+    if let Some(tree) = running.tree.take() {
+        tree.end();
     }
     let _ = running.child.kill().await;
     // Outside a worker the armed guard kills the command's own group when
@@ -357,7 +361,7 @@ fn known_jobs() -> String {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::Bash;
@@ -401,7 +405,8 @@ mod tests {
         let ctx = ToolContext::new(dir.path());
         let started = Bash
             .call(
-                &json!({"command": "echo tick; sleep 30; touch survived", "timeout_ms": 100}),
+                // The subshell would leave a mark if anything outlived the stop.
+                &json!({"command": "echo tick; (sleep 2; touch survived) & sleep 30", "timeout_ms": 100}),
                 &ctx,
             )
             .await;
@@ -421,7 +426,7 @@ mod tests {
             "{}",
             stopped.text
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(3_500)).await;
         assert!(!dir.path().join("survived").exists());
     }
 

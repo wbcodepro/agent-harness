@@ -459,3 +459,54 @@ fn confined_tools_cannot_read_hames_own_data() {
     // The user's own programs still read them.
     assert!(fs::read_to_string(&env).unwrap().contains("topsecret123"));
 }
+
+/// A job stopped with `job_output` ends with everything it started, in the
+/// sandbox too. Git's bash starts programs through a process that exits at
+/// once, so their parent's id leads nowhere and `taskkill /T` missed them;
+/// the command's own job object, nested in the worker's, holds them all.
+#[tokio::test]
+async fn a_background_job_stopped_in_the_sandbox_leaves_nothing_running() {
+    use hame_tools::{Tool, ToolRunner};
+    use std::sync::Arc;
+
+    let fx = Fixture::new();
+    let mut policy = hame_sandbox::SandboxPolicy::workspace(&fx.work);
+    policy.unreadable.clear();
+    policy.hide_env_files = false;
+    policy.network = hame_sandbox::Network::Open;
+    hame_sandbox::prepare(&policy).unwrap();
+    let runner = hame_sandbox::SandboxedRunner {
+        helper: PathBuf::from(env!("CARGO_BIN_EXE_hame")),
+        policy,
+        env: Vec::new(),
+        background: Default::default(),
+    };
+    let ctx = hame_tools::ToolContext::new(&fx.work);
+    let (bash, jobs): (Arc<dyn Tool>, Arc<dyn Tool>) =
+        (Arc::new(hame_tools::Bash), Arc::new(hame_tools::JobOutput));
+
+    // The subshell would leave a mark if anything outlived the stop.
+    let started = runner
+        .run(
+            &bash,
+            &json!({"command": "echo tick; (sleep 3; echo x > survived.txt) & sleep 60", "timeout_ms": 1500}),
+            &ctx,
+        )
+        .await;
+    let id = hame_tools::moved_to_background(&started.text)
+        .unwrap_or_else(|| panic!("not moved to the background: {}", started.text))
+        .to_string();
+    let stopped = runner
+        .run(&jobs, &json!({"id": id, "kill": true}), &ctx)
+        .await;
+    assert!(
+        stopped.text.contains("[stopped on request]"),
+        "{}",
+        stopped.text
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(4500)).await;
+    assert!(
+        !fx.work.join("survived.txt").exists(),
+        "a process the job started outlived the stop"
+    );
+}

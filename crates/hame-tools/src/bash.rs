@@ -103,6 +103,10 @@ impl Tool for Bash {
             } else {
                 GroupGuard::new(child.id())
             };
+            // Windows has no process groups; a job object holds the command
+            // and everything it starts, inside a worker too.
+            #[cfg(windows)]
+            let tree = crate::process::CommandTree::new(child.id());
             let stdout = Capture::start(child.stdout.take().expect("stdout is piped"));
             let stderr = Capture::start(child.stderr.take().expect("stderr is piped"));
 
@@ -132,6 +136,8 @@ impl Tool for Bash {
                                 stdout,
                                 stderr,
                                 shared_group: ctx.shared_group,
+                                #[cfg(windows)]
+                                tree,
                             },
                             dir,
                         );
@@ -148,6 +154,10 @@ impl Tool for Bash {
             // in the background running, and do not wait for it to close the
             // output pipes.
             group.disarm();
+            #[cfg(windows)]
+            if let Some(tree) = tree {
+                tree.release();
+            }
             let (stdout, stderr) = tokio::join!(stdout.finish(), stderr.finish());
             render(&input.command, status, &stdout, &stderr)
         })
