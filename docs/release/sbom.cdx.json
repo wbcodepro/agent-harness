@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:e9f8c77d-fc26-591f-bb4b-991f53a7ff6c",
+  "serialNumber": "urn:uuid:4b0e059e-ca3a-5870-830c-a72f4637820c",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T08:41:30+07:00",
+    "timestamp": "2026-11-15T08:40:47+07:00",
     "tools": {
       "components": [
         {
@@ -28,8 +28,8 @@
       ],
       "properties": [
         {
-          "name": "hame:source-commit",
-          "value": "737553e29f3df22acd84c2ecbeae3c43b90a94f2"
+          "name": "hame:cargo-lock-sha256",
+          "value": "31afbee830c119a29168e9bd7768775e6c3f316fd20263003e9ef803b26f04ec"
         }
       ]
     }

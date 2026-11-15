@@ -309,8 +309,6 @@ def purl(rec):
 
 def write_sbom(root, crates, graph, version):
     path = os.path.join(root, "docs", "release", "sbom.cdx.json")
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
-                            text=True).stdout.strip()
     root_ref = f"pkg:cargo/hame-cli@{version}"
     components = []
     for pid, rec in sorted(crates.items(), key=lambda kv: (kv[1]["name"], kv[1]["version"])):
@@ -337,13 +335,14 @@ def write_sbom(root, crates, graph, version):
             "ref": purl(crates[pid]),
             "dependsOn": sorted({purl(crates[d]) for d in deps if d in crates}),
         })
-    # Reproducible: the serial number and timestamp derive from the commit
-    # and the lockfile, so regenerating an unchanged tree changes nothing.
+    # Reproducible: the serial number derives from the version and the
+    # lockfile, and the timestamp is the last commit that changed the
+    # lockfile, so regenerating after unrelated commits changes nothing.
     with open(os.path.join(root, "Cargo.lock"), "rb") as f:
-        lock = f.read()
-    serial = uuid.uuid5(uuid.NAMESPACE_URL, f"hame:{version}:{commit}:{hashlib.sha256(lock).hexdigest()}")
-    when = subprocess.run(["git", "log", "-1", "--format=%cI"], cwd=root, capture_output=True,
-                          text=True).stdout.strip() or datetime.datetime.now(
+        lock_sha = hashlib.sha256(f.read()).hexdigest()
+    serial = uuid.uuid5(uuid.NAMESPACE_URL, f"hame:{version}:{lock_sha}")
+    when = subprocess.run(["git", "log", "-1", "--format=%cI", "--", "Cargo.lock"], cwd=root,
+                          capture_output=True, text=True).stdout.strip() or datetime.datetime.now(
                               datetime.timezone.utc).isoformat()
     bom = {
         "bomFormat": "CycloneDX",
@@ -360,7 +359,7 @@ def write_sbom(root, crates, graph, version):
                 "version": version,
                 "purl": root_ref,
                 "licenses": [{"license": {"id": "MIT"}}],
-                "properties": [{"name": "hame:source-commit", "value": commit}],
+                "properties": [{"name": "hame:cargo-lock-sha256", "value": lock_sha}],
             },
         },
         "components": components,
