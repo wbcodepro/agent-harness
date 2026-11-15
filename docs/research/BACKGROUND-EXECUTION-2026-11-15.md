@@ -244,5 +244,54 @@ existing file, Finder still frontmost. A modal dialog left open in the app
 blocks Apple Events; `save` then times out and reports `outcome_unknown`
 (seen once with a TextEdit left in a bad state by a manual experiment).
 macOS asks once per app for the Automation permission of the process
-running hame. Still to measure: the pilot's desktop tasks in background
-mode.
+running hame.
+
+**A scripted save copies an untitled TextEdit document.** After `save …
+in POSIX file`, the window stays on the document's autosave draft in
+TextEdit's iCloud folder (`Untitled.rtf`), which the pilot's checker counts
+as a file written outside the requested folder (it failed D01 and D04 in
+the second run). Trashing the draft would delete the open document's
+backing file, so instead `new_document` takes `path` for TextEdit: hame
+creates the `.txt`/`.rtf` file (grant folders, never over an existing file)
+and opens it, so the document is its own file and `save` writes there.
+`open_file` opens a file from the grant's folders the same way (TextEdit,
+Numbers, Pages, Preview, Keynote).
+
+### The pilot's desktop tasks in background mode
+
+`hame eval evals/pilot --filter D0,O0 --config evals/pilot/arms/background.toml`,
+`claude-haiku-5-5`, one round, Finder made frontmost first, the frontmost
+app sampled every 0.5 s throughout. Reports:
+`docs/release/evidence/background-desktop-1.json` and `-3.json`.
+
+| Run | hame | Passed | False success | Notes |
+|---|---|---:|---:|---|
+| 1 | `74e3ab9` (`save` only) | 3/10 (O01–O03) | 1 (O04) | D01, D04: no way to create a document (File > New and cmd+n refused); D03: no way to open the file |
+| 2 | diagnostic only (the release binary was rebuilt during the run) | 4/10 | 2 | found the TextEdit draft problem above; Pages came to the front once during O03, not reproduced by probes |
+| 3 | `a3d3050` (`new_document` with path, `open_file`) | **6/10** (D01, D03, D04, O01–O03) | 1 recorded | see below |
+
+Run 3 in detail:
+- **The user's screen:** 1,004 samples Finder, 31 TextEdit, and all 31
+  TextEdit samples fall between tasks (the eval fixture quitting and
+  starting TextEdit), none while the agent worked.
+- **D02** (a TextEdit preference) needs the Settings window, opened only
+  through a menu or cmd+,; refused, and the agent said so.
+- **D05** (bold, size and centre on a line): the Bold button was pressed
+  through accessibility, but the saved RTF was not bold (the font is
+  Helvetica-Light); the agent checked a saved copy and gave up. Not a
+  background-mode limit as such.
+- **O04** (chart title and axis name): the chart was made, but the title
+  text is static text that accessibility will not select and clicking it
+  needs the foreground; the agent stopped before exporting and opened its
+  answer with "I've stopped before the export". The eval's success-claim
+  heuristic missed that phrasing and recorded a false success; on reading,
+  it is an honest stop (the heuristic now recognises it, commit
+  `db28397`; the run is not re-scored).
+- **O05**: the PDF export worked in the background, but `open_file` in
+  Preview was refused because the task grants Preview no folders (only
+  the workspace by default); the agent stopped and reported it. A correct
+  refusal under the task's grants.
+
+So with background mode the agent finished 6 of 10 desktop tasks without
+taking the user's screen, and stopped and said why on the rest, except
+for D05.
