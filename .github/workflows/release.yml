@@ -1,0 +1,56 @@
+name: release-artifacts
+# Started by hand only, and only with the owner's go-ahead: it uses Actions
+# minutes on five runners. It builds the release binary for each shipped
+# platform and keeps the archives as workflow artifacts for 7 days. It does
+# not create a GitHub release or publish anything; see
+# docs/release/RELEASE-INSTRUCTIONS.md.
+on:
+  workflow_dispatch:
+jobs:
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: python3 -I scripts/license-report.py --check
+      # The committed report and SBOM must match the lockfile.
+      - run: git diff --exit-code docs/release/THIRD-PARTY-LICENSES.md docs/release/sbom.cdx.json
+
+  build:
+    needs: licenses
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-13, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+      - name: Build
+        shell: bash
+        env:
+          # Keep the runner's paths out of the binary.
+          RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/src
+        run: cargo build --release --locked -p hame-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          name="hame-$version-${{ matrix.target }}"
+          mkdir "$name"
+          exe=hame; [ "${{ runner.os }}" = Windows ] && exe=hame.exe
+          cp "target/${{ matrix.target }}/release/$exe" "$name/"
+          cp LICENSE README.md CHANGELOG.md SECURITY.md docs/release/THIRD-PARTY-LICENSES.md docs/release/RELEASE-NOTES.md "$name/"
+          "$name/$exe" --version
+          tar -czf "$name.tar.gz" "$name"
+          if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hame-${{ matrix.target }}
+          path: hame-*.tar.gz*
+          retention-days: 7

@@ -65,7 +65,7 @@ It writes, under `dist/` (ignored by git):
 
 and fails if either archive contains `.env` files, key material (`sk-…`, `sk-ant-…`, `AKIA…`, `ghp_…`, Slack tokens, private key blocks), session logs, traces, action journals, trust lists, `target/`, `.claude/`, `.solutions/` or `.hame/`, if the binary contains the build machine's home directory, or if it does not run. `scripts/release-check.sh --skip-build` re-checks existing archives.
 
-Binaries for other targets are built on those platforms (or by the `ci` workflow, extended with an upload step, once authorized) with the same command; each run adds its own archive. Cross-compiling the desktop helper is not needed: it is compiled from source on the user's Mac at first use.
+Binaries for other targets are built on those platforms with the same command, or, once the owner authorizes the Actions minutes, by the manual `release-artifacts` workflow (`.github/workflows/release.yml`: license check, then a release build per shipped target, kept as 7-day workflow artifacts with `.sha256` files; it publishes nothing). That workflow has not been run yet. The secret and path checks of `release-check.sh` should be repeated on the downloaded archives (`--skip-build` after placing them in `dist/` with the source archive). Cross-compiling the desktop helper is not needed: it is compiled from source on the user's Mac at first use.
 
 macOS binaries are not signed or notarized yet; users who download one must clear the quarantine attribute (`xattr -d com.apple.quarantine hame`) or build from source. Signing needs an Apple Developer ID and is a decision for the owner.
 
@@ -92,3 +92,28 @@ Publishing to crates.io is not planned: the crates depend on each other by path 
 
 - Bump to the next development version if desired, and reopen `## Unreleased` in the changelog.
 - Announce where the owner chooses.
+
+## Record: 0.1.0-rc.1 release check
+
+`scripts/release-check.sh` on macOS 26.6.2 arm64, 2026-11-15, at commit `31e0bed` (the source archive and its checksum change with every later commit; rerun before publishing):
+
+```text
+== source archive
+== release binary for aarch64-apple-darwin
+    Finished `release` profile [optimized] target(s) in 1m 21s
+== contents
+ok:   hame-0.1.0-rc.1-src.tar.gz: 931 entries, none of .env, target/, .claude/, .solutions/, .hame/, session logs, traces, journals, key files
+ok:   hame-0.1.0-rc.1-aarch64-apple-darwin.tar.gz: 8 entries, none of .env, target/, .claude/, .solutions/, .hame/, session logs, traces, journals, key files
+== secrets
+ok:   hame-0.1.0-rc.1-src.tar.gz: no key patterns (sk-, sk-ant-, AKIA, ghp_, xox?-, private key blocks)
+ok:   hame-0.1.0-rc.1-aarch64-apple-darwin.tar.gz: no key patterns (sk-, sk-ant-, AKIA, ghp_, xox?-, private key blocks)
+== binary
+ok:   hame 0.1.0-rc.1 runs;  42M (Mach-O 64-bit executable arm64)
+ok:   no build-machine home directory in the binary
+== checksums
+860b72377c4b3456d8535eac90d9f3ece7006b2b3dff99cf67e863fc9eb63a1f  hame-0.1.0-rc.1-src.tar.gz
+72431249f21fb5e17b19b25ed27fdcbb86ed90ab6afc3464f56df1e4f99dc9ae  hame-0.1.0-rc.1-aarch64-apple-darwin.tar.gz
+all checks passed
+```
+
+The checker itself was tested by replacing the source archive with one holding a `.env` with an `sk-ant-…` key, a `.claude/` directory and a `session.v1.jsonl`: it reported all four paths and the key, and failed.
