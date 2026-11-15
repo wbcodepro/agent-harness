@@ -297,6 +297,10 @@ impl Failure {
                 "the browser cannot run on this machine; tell the user what is missing."
             }
             "origin_changed" => "observe the tab again.",
+            "exists" => {
+                "choose another path, or pass overwrite:true if replacing that file is what the \
+                 task wants."
+            }
             _ => "observe the page, then decide.",
         }
     }
@@ -429,6 +433,7 @@ struct Args {
     selector: Option<String>,
     load: Option<String>,
     download: bool,
+    overwrite: bool,
     next: Option<String>,
     max_pages: Option<u64>,
     accept: Option<bool>,
@@ -449,6 +454,15 @@ fn now_ms() -> u64 {
 fn origin_of(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     matches!(parsed.scheme(), "http" | "https").then(|| parsed.origin().ascii_serialization())
+}
+
+/// An http(s) URL as WHATWG serializes it (what Chrome loads), so the
+/// helper's own checks read the same host as the browser does: backslashes,
+/// extra slashes and other quirks are resolved here, not reinterpreted
+/// there.
+fn web_url(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    matches!(parsed.scheme(), "http" | "https").then(|| parsed.to_string())
 }
 
 fn valid_profile(name: &str) -> bool {
@@ -480,7 +494,21 @@ fn canonical(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| normalize(path))
 }
 
-/// An existing file inside the workspace.
+/// The components of `path` below `root`, both with links resolved.
+fn parts_below(root: &Path, path: &Path) -> Option<Vec<String>> {
+    path.strip_prefix(root)
+        .ok()?
+        .components()
+        .map(|c| match c {
+            Component::Normal(part) => part.to_str().map(String::from),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An existing file inside the workspace. The helper opens it again
+/// below the workspace root without following links and uploads a private
+/// copy, so a file swapped for a link after this check is refused too.
 fn workspace_file(ctx: &ToolContext, path: &str) -> Result<PathBuf, Failure> {
     let outside = || {
         Failure::new(
@@ -503,44 +531,129 @@ fn workspace_file(ctx: &ToolContext, path: &str) -> Result<PathBuf, Failure> {
     Ok(file)
 }
 
-/// A place to save a file inside the workspace: a file path, or a
-/// directory when `path` ends in a separator or names one.
-fn workspace_dest(ctx: &ToolContext, path: &str) -> Result<(PathBuf, bool), Failure> {
+/// Where a download is saved: a directory given as components below the
+/// workspace root (links resolved; the missing ones are created by the
+/// helper), and a file name, or none for the page's suggested name made
+/// safe by the helper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Dest {
+    root: PathBuf,
+    dir: Vec<String>,
+    name: Option<String>,
+}
+
+impl Dest {
+    fn fill(&self, req: &mut Value, overwrite: bool) {
+        req["dest_root"] = json!(self.root);
+        req["dest_dir"] = json!(self.dir);
+        req["dest_name"] = json!(self.name);
+        req["overwrite"] = json!(overwrite);
+    }
+}
+
+/// A place to save a download inside the workspace: a file path, or a
+/// directory when `path` ends in a separator or names one. Checked before
+/// anything is sent, for a clear refusal; the helper enforces the same
+/// rules again when it writes, without following links.
+///
+/// Refused: a path outside the workspace, through a link that leads
+/// outside it, a final component that is a symbolic link (wherever it
+/// points), and an existing file unless `overwrite`.
+fn workspace_dest(ctx: &ToolContext, path: &str, overwrite: bool) -> Result<Dest, Failure> {
     let outside = || {
         Failure::new(
             "unauthorized",
             format!("{path} is outside the workspace; downloads are saved inside it"),
         )
     };
-    let lexical_root = normalize(&ctx.cwd);
     let resolved = normalize(&ctx.resolve(path));
-    let is_dir = path.ends_with('/') || path.ends_with('\\') || resolved.is_dir();
-    let dir = if is_dir {
-        resolved.clone()
+    let lexical_root = normalize(&ctx.cwd);
+    if !resolved.starts_with(&lexical_root) {
+        return Err(outside());
+    }
+    let root = canonical(&ctx.cwd);
+    let link = resolved != lexical_root
+        && std::fs::symlink_metadata(&resolved).is_ok_and(|m| m.file_type().is_symlink());
+    if link {
+        return Err(Failure::new(
+            "unauthorized",
+            format!(
+                "{path} is a symbolic link; a download never writes through a link, which could \
+                 lead outside the workspace"
+            ),
+        ));
+    }
+    let as_dir = path.ends_with('/') || path.ends_with('\\') || resolved.is_dir();
+    let (dir, name) = if as_dir {
+        (resolved.clone(), None)
     } else {
-        resolved
-            .parent()
-            .map(Path::to_path_buf)
+        let name = resolved
+            .file_name()
             .ok_or_else(outside)?
-    };
-    if !dir.starts_with(&lexical_root) {
-        return Err(outside());
-    }
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        Failure::new(
-            "invalid_input",
-            format!("cannot create {}: {e}", dir.display()),
+            .to_str()
+            .ok_or_else(|| Failure::new("invalid_input", format!("{path} is not valid UTF-8")))?;
+        (
+            resolved.parent().ok_or_else(outside)?.to_path_buf(),
+            Some(name.to_string()),
         )
-    })?;
-    let dir = canonical(&dir);
-    if !dir.starts_with(canonical(&ctx.cwd)) {
-        return Err(outside());
+    };
+    // The deepest directory that exists, with links resolved, must be
+    // inside the workspace; the rest is created by the helper.
+    let mut existing = dir;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let part = existing
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(outside)?
+            .to_string();
+        missing.push(part);
+        existing = existing.parent().ok_or_else(outside)?.to_path_buf();
     }
-    if is_dir {
-        Ok((dir, true))
+    if !existing.is_dir() {
+        return Err(Failure::new(
+            "invalid_input",
+            format!("{} is not a directory", existing.display()),
+        ));
+    }
+    let mut parts = parts_below(&root, &canonical(&existing)).ok_or_else(outside)?;
+    parts.extend(missing.into_iter().rev());
+    if let Some(name) = &name {
+        let target = parts.iter().fold(root.clone(), |p, c| p.join(c)).join(name);
+        if let Ok(meta) = std::fs::symlink_metadata(&target) {
+            if !meta.is_file() {
+                return Err(Failure::new(
+                    "invalid_input",
+                    format!("{path} exists and is not a regular file"),
+                ));
+            }
+            if !overwrite {
+                return Err(Failure::new(
+                    "exists",
+                    format!(
+                        "{path} already exists; a download does not replace a file unless the \
+                         call passes overwrite:true"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(Dest {
+        root,
+        dir: parts,
+        name,
+    })
+}
+
+/// The bytes of a file the helper saved, read back for the artifact store
+/// only when they are what the helper wrote (`sha256`): the workspace may
+/// have swapped the file for a link in between.
+fn read_saved(path: &Path, sha256: &str) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    if sha256_hex(&bytes) == sha256 {
+        Ok(bytes)
     } else {
-        let name = resolved.file_name().ok_or_else(outside)?;
-        Ok((dir.join(name), false))
+        Err("it changed after it was saved".into())
     }
 }
 
@@ -1219,6 +1332,8 @@ impl BrowserTool {
         }
         let origin = origin_of(url)
             .ok_or_else(|| Failure::new("invalid_input", format!("{url} is not an http(s) URL")))?;
+        let url = web_url(url).unwrap_or_else(|| url.to_string());
+        let url = url.as_str();
         let target = Target {
             channel: Some(Channel::Browser),
             app: Some("chrome".into()),
@@ -1290,7 +1405,8 @@ impl BrowserTool {
             target.origin = Some(origin_of(url).ok_or_else(|| {
                 Failure::new("invalid_input", format!("{url} is not an http(s) URL"))
             })?);
-            target.document = Some(url.to_string());
+            let url = web_url(url).unwrap_or_else(|| url.to_string());
+            target.document = Some(url.clone());
             self.authorize(&target, Capability::Observe)?;
             json!({"op": "navigate", "tab": tab, "url": url, "timeout_ms": timeout})
         };
@@ -1361,8 +1477,22 @@ impl BrowserTool {
             "upload" => Some(workspace_file(ctx, args.path.as_deref().unwrap_or(""))?),
             _ => None,
         };
+        let upload_at = match &upload {
+            Some(file) => {
+                let root = canonical(&ctx.cwd);
+                let parts = parts_below(&root, file).ok_or_else(|| {
+                    Failure::new("unauthorized", "the file is outside the workspace")
+                })?;
+                Some((root, parts))
+            }
+            None => None,
+        };
         let dest = match kind {
-            "download" => Some(workspace_dest(ctx, args.path.as_deref().unwrap_or(""))?),
+            "download" => Some(workspace_dest(
+                ctx,
+                args.path.as_deref().unwrap_or(""),
+                args.overwrite,
+            )?),
             _ => None,
         };
         let tab = self.pick_tab(st, ctx, args)?;
@@ -1524,12 +1654,12 @@ impl BrowserTool {
             "value": args.value, "checked": args.checked.unwrap_or(true), "key": args.key,
             "timeout_ms": timeout,
         });
-        if let Some(path) = &upload {
-            act["path"] = json!(path);
+        if let Some((root, parts)) = &upload_at {
+            act["upload_root"] = json!(root);
+            act["upload_parts"] = json!(parts);
         }
-        if let Some((path, is_dir)) = &dest {
-            act["dest"] = json!(path);
-            act["dest_is_dir"] = json!(is_dir);
+        if let Some(dest) = &dest {
+            dest.fill(&mut act, args.overwrite);
         }
         let result = self.send(st, act, timeout + 15_000).await;
         let v = match result {
@@ -1617,7 +1747,8 @@ impl BrowserTool {
                 path.display()
             );
             receipt.evidence.push(format!("saved {}", path.display()));
-            match (&ctx.artifacts, std::fs::read(&path)) {
+            let sha = download["sha256"].as_str().unwrap_or("");
+            match (&ctx.artifacts, read_saved(&path, sha)) {
                 (Some(store), Ok(bytes)) => match store.put(&bytes, mime_for(&path)) {
                     Ok(mut artifact) => {
                         artifact.name = download["suggested"].as_str().map(String::from);
@@ -1719,10 +1850,9 @@ impl BrowserTool {
                 .path
                 .as_deref()
                 .ok_or_else(|| Failure::new("invalid_input", "wait for a download needs path"))?;
-            let (dest, is_dir) = workspace_dest(ctx, path)?;
+            let dest = workspace_dest(ctx, path, args.overwrite)?;
             req["download"] = json!(true);
-            req["dest"] = json!(dest);
-            req["dest_is_dir"] = json!(is_dir);
+            dest.fill(&mut req, args.overwrite);
             let target = self.target(st, ctx, &tab)?;
             self.authorize(&target, Capability::FileWrite)?;
             let mut receipt = self.begin(
@@ -1755,7 +1885,14 @@ impl BrowserTool {
                 d["sha256"].as_str().unwrap_or(""),
                 path.display()
             ));
-            if let (Some(store), Ok(bytes)) = (&ctx.artifacts, std::fs::read(&path))
+            let sha = d["sha256"].as_str().unwrap_or("");
+            if !canonical(&path).starts_with(canonical(&ctx.cwd)) {
+                return Err(Failure::new(
+                    "unauthorized",
+                    "the download would land outside the workspace",
+                ));
+            }
+            if let (Some(store), Ok(bytes)) = (&ctx.artifacts, read_saved(&path, sha))
                 && let Ok(mut artifact) = store.put(&bytes, mime_for(&path))
             {
                 artifact.name = d["suggested"].as_str().map(String::from);
@@ -2506,14 +2643,101 @@ mod tests {
             workspace_file(&ctx, "missing.txt").unwrap_err().code,
             "not_found"
         );
-        let (path, is_dir) = workspace_dest(&ctx, "out/report.csv").unwrap();
-        assert!(!is_dir && path.ends_with("out/report.csv"));
-        let (_, is_dir) = workspace_dest(&ctx, "exports/").unwrap();
-        assert!(is_dir);
+        let root = canonical(dir.path());
+        let dest = workspace_dest(&ctx, "out/report.csv", false).unwrap();
         assert_eq!(
-            workspace_dest(&ctx, "../../x.csv").unwrap_err().code,
+            dest,
+            Dest {
+                root: root.clone(),
+                dir: vec!["out".into()],
+                name: Some("report.csv".into()),
+            }
+        );
+        // Nothing is created before the helper saves.
+        assert!(!dir.path().join("out").exists());
+        let dest = workspace_dest(&ctx, "exports/", false).unwrap();
+        assert_eq!((dest.dir, dest.name), (vec!["exports".to_string()], None));
+        assert!(workspace_dest(&ctx, ".", false).unwrap().dir.is_empty());
+        assert_eq!(
+            workspace_dest(&ctx, "../../x.csv", false).unwrap_err().code,
             "unauthorized"
         );
+        // An existing file is replaced only when asked.
+        assert_eq!(
+            workspace_dest(&ctx, "a.txt", false).unwrap_err().code,
+            "exists"
+        );
+        assert!(workspace_dest(&ctx, "a.txt", true).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_download_never_goes_through_a_link() {
+        let base = tempfile::tempdir().unwrap();
+        let work = base.path().join("work");
+        let outside = base.path().join("outside");
+        std::fs::create_dir_all(work.join("real")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("rc"), "secret").unwrap();
+        let ctx = ToolContext::new(&work);
+        let link = |target: &Path, name: &str| {
+            std::os::unix::fs::symlink(target, work.join(name)).unwrap();
+        };
+        link(&outside.join("rc"), "out.csv");
+        link(&base.path().join("missing"), "dangling.csv");
+        link(&outside, "away");
+        link(&work.join("real"), "inside");
+        for (path, overwrite) in [
+            ("out.csv", false),
+            ("out.csv", true),
+            ("dangling.csv", true),
+            ("away/x.csv", false),
+            ("away/new/x.csv", false),
+            ("away/", false),
+            ("inside", false),
+        ] {
+            assert_eq!(
+                workspace_dest(&ctx, path, overwrite).unwrap_err().code,
+                "unauthorized",
+                "{path}"
+            );
+        }
+        // A link to a directory inside, in the middle of the path, is
+        // resolved: the helper gets a path without links.
+        let dest = workspace_dest(&ctx, "inside/x.csv", false).unwrap();
+        assert_eq!(dest.dir, ["real"]);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("rc")).unwrap(),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn a_saved_file_is_read_back_only_when_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.csv");
+        std::fs::write(&path, "a,b\n").unwrap();
+        let sha = sha256_hex(b"a,b\n");
+        assert_eq!(read_saved(&path, &sha).unwrap(), b"a,b\n");
+        std::fs::write(&path, "other").unwrap();
+        assert!(read_saved(&path, &sha).is_err());
+    }
+
+    #[test]
+    fn urls_reach_the_helper_as_the_browser_reads_them() {
+        assert_eq!(
+            web_url("http://127.0.0.1:8080\\x").as_deref(),
+            Some("http://127.0.0.1:8080/x")
+        );
+        assert_eq!(
+            web_url("http:\\\\evil.example/x").as_deref(),
+            Some("http://evil.example/x")
+        );
+        assert_eq!(
+            origin_of("http://evil.example\\@127.0.0.1/").as_deref(),
+            Some("http://evil.example")
+        );
+        assert_eq!(web_url("file:///etc/passwd"), None);
     }
 
     #[test]

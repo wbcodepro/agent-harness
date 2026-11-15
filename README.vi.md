@@ -186,7 +186,7 @@ Một quyền cấp có `channel` (`browser`, `desktop`, hoặc `visual` cho ả
 | `observe` | đọc trang, cửa sổ và cây accessibility; chờ; trích dữ liệu |
 | `interact` | bấm, điền, chọn, nhấn phím trên phần tử, đặt giá trị, mục menu chỉ mở thêm thứ gì đó |
 | `commit` | thao tác gửi, lưu, xóa, thanh toán, mua (nhận ra theo tên nút, phương thức của form, hoặc model khai `commit: true`) |
-| `file_write` | tải file về workspace; xác nhận hộp thoại lưu file |
+| `file_write` | tải file về workspace (xem bên dưới); xác nhận hộp thoại lưu file |
 | `clipboard` | đọc và đặt clipboard (desktop; nội dung cũ được khôi phục) |
 | `global_input` | sự kiện bàn phím, tổ hợp phím và cú bấm theo điểm ảnh; cần cửa sổ đích ở trên cùng và giữ một khóa liên tiến trình |
 | `screen` | ảnh chụp màn hình (lưu thành artifact) |
@@ -195,12 +195,13 @@ Mô hình an toàn:
 
 - **Quyền chỉ đến từ bạn**: `[computer]` trong `~/.hame/config.toml`, hoặc file tác vụ bạn đưa cho `hame task`. `.hame/config.toml` của dự án không cấp được quyền (nó chỉ được đặt `[verify]`).
 - **Quyền điều khiển desktop và trình duyệt tách biệt với sandbox của shell và không bị sandbox giam.** Các helper chạy dưới tài khoản của bạn, với quyền riêng tư macOS (Accessibility, Screen Recording) của terminal và cookie trong hồ sơ trình duyệt. Seatbelt, Landlock và danh sách mạng cho phép áp dụng cho `bash` và các tool bị giam khác, không cho hai tool này. Hãy cấp hẹp: mẫu app hoặc origin, và chỉ những năng lực tác vụ cần.
-- Helper trình duyệt chặn điều hướng cấp trang tới origin không có quyền, trước khi request rời máy. Các request của chính trang (script, ảnh, gọi API) không bị lọc, và trình duyệt không đi qua proxy của hame.
+- Helper trình duyệt chặn điều hướng cấp trang tới origin không có quyền, trước khi request rời máy. Mỗi lần chuyển hướng được kiểm hai lần: `Location` được phân giải theo cách Chrome phân giải (dấu gạch ngược tính như gạch chéo, nên `/\evil.example/` dẫn tới evil.example; đích nào không phân giải chắc chắn được thì bị từ chối), rồi request mà Chrome tạo ra sau đó được kiểm tại chính URL Chrome đã tính. Các request của chính trang (script, ảnh, gọi API) không bị lọc, và trình duyệt không đi qua proxy của hame.
+- File tải về chỉ được lưu trong workspace và không bao giờ đi qua symlink: đích là một symlink (dù trỏ đi đâu), hoặc đường dẫn thư mục đi ra ngoài qua một symlink, đều bị từ chối. File có sẵn chỉ bị thay khi lời gọi có `overwrite: true`, và chỉ khi nó là file thường; nội dung được ghi vào một file tạm mới rồi đổi tên vào chỗ, nên không bao giờ ghi vào một file có sẵn, một symlink hay một hard link khác của nó. Khi đường dẫn là thư mục, tên file trang đề nghị được rút về một tên file đơn (không dấu phân cách, `..`, dấu chấm đầu tên, ký tự điều khiển hay tên mà Windows dành riêng; tối đa 120 byte). Upload chỉ đọc file thường trong workspace, không qua symlink và không có hard link khác, và trình duyệt nhận một bản sao riêng.
 - Mọi thao tác có tác động đều được ghi nhật ký (`not_started`, `dispatched`, rồi `completed`, `failed` hoặc `outcome_unknown`) trước và sau khi gửi. Thao tác commit mang khóa idempotency; một thao tác có thể đã có hiệu lực sẽ không được lặp lại cho tới khi trang hay cửa sổ được quan sát lại và agent nêu thao tác trước đó (`reconciled`). Sau crash, các thao tác đã gửi đi thành `outcome_unknown` và agent được dặn kiểm tra trạng thái; hame không bao giờ tự làm lại chúng.
 - Ref (`e12`, `o3:e7`) thuộc về một lần quan sát. Ref mà trang đã chuyển đi, phần tử đã đổi hoặc bị xóa, hay cửa sổ đã đóng đều bị từ chối (`stale_ref`, `stale_window`), hai đích cùng khớp bị từ chối là `ambiguous`; tool không bao giờ tự nhắm sang một phần tử "giống giống". Nhập liệu vật lý dừng khi focus chuyển đi (`interference`) hoặc có hộp thoại bật lên (`unexpected_dialog`) và báo chính xác đã gõ được gì.
 - Việc nhận ra commit là heuristic theo tên nút và phương thức form: một nút gửi dữ liệu bằng JavaScript có thể bị tính là `interact`. Đừng chỉ dựa vào việc không cấp `commit` để bảo vệ một trang mà một cú bấm có thể gây hại.
 
-Hồ sơ trình duyệt là thư mục lâu dài (`~/.hame/browser-profiles/<tên>`), nên hồ sơ đã đăng nhập sẽ giữ đăng nhập; hãy coi nó như hồ sơ trình duyệt của chính bạn. File tải về nằm trong workspace. Helper desktop là một chương trình Swift được biên dịch ở lần dùng đầu vào `~/.hame/helpers/` (khoảng 4 giây). Chi tiết từng tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
+Hồ sơ trình duyệt là thư mục lâu dài (`~/.hame/browser-profiles/<tên>`), nên hồ sơ đã đăng nhập sẽ giữ đăng nhập; hãy coi nó như hồ sơ trình duyệt của chính bạn. File tải về nằm trong workspace, theo các luật ở trên. Helper desktop là một chương trình Swift được biên dịch ở lần dùng đầu vào `~/.hame/helpers/` (khoảng 4 giây). Chi tiết từng tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
 
 ## Workflow
 
