@@ -8,6 +8,7 @@
 //! policy, the call is refused rather than run unconfined.
 
 mod intercept;
+pub mod internal;
 mod policy;
 mod proxy;
 mod worker;

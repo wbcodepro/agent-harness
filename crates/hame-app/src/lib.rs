@@ -1666,6 +1666,39 @@ pub fn expand_command(home: &Path, cwd: &Path, prompt: &str) -> String {
     hame_ext::commands::expand(&commands(home, cwd), prompt).unwrap_or_else(|| prompt.to_string())
 }
 
+/// hame's data directory when none is given: `$HAME_HOME`, else
+/// `~/.hame`, else `~/.zcode` where a data directory from before the rename
+/// still is (`legacy`, so the caller can suggest renaming it). `None` when
+/// there is no home folder.
+pub fn default_home() -> Option<DataDir> {
+    if let Some(home) = std::env::var_os("HAME_HOME") {
+        return Some(DataDir {
+            path: PathBuf::from(home),
+            legacy: false,
+        });
+    }
+    let user = std::env::home_dir()?;
+    let home = user.join(".hame");
+    let before = user.join(".zcode");
+    if !home.exists() && before.is_dir() {
+        return Some(DataDir {
+            path: before,
+            legacy: true,
+        });
+    }
+    Some(DataDir {
+        path: home,
+        legacy: false,
+    })
+}
+
+/// See [`default_home`].
+pub struct DataDir {
+    pub path: PathBuf,
+    /// The directory from when hame was called zcode.
+    pub legacy: bool,
+}
+
 pub fn session_store(home: &Path) -> SessionStore {
     SessionStore::new(home.join("sessions"))
 }

@@ -172,37 +172,27 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
     });
     match &command {
         Command::ToolWorker => {
-            let code = hame_sandbox::worker_main(&hame_tools::ToolSet::every()).await;
-            // On Windows a program the tool left running still holds the
-            // pipes its output was read from, and the runtime would wait for
-            // those reads before returning. The answer is written; leave.
-            #[cfg(windows)]
-            std::process::exit(code.into());
-            #[cfg(not(windows))]
-            return Ok(ExitCode::from(code));
+            return Ok(ExitCode::from(hame_sandbox::internal::tool_worker().await));
         }
-        Command::SandboxExec { policy, command } => return sandbox_exec(policy, command),
+        Command::SandboxExec { policy, command } => {
+            return hame_sandbox::internal::sandbox_exec(policy, command).map(ExitCode::from);
+        }
         _ => {}
     }
     let home = cli
         .home
-        .or_else(|| std::env::var_os("HAME_HOME").map(PathBuf::from))
         .or_else(|| {
-            let user = std::env::home_dir()?;
-            let home = user.join(".hame");
+            let found = hame_app::default_home()?;
             // The project was called zcode before; a data directory from
             // then is used where it is until the user moves it.
-            let before = user.join(".zcode");
-            if !home.exists() && before.is_dir() {
+            if found.legacy {
                 eprintln!(
                     "hame: using {}, the data directory from when this was zcode. Rename it \
-                     to {} when convenient.",
-                    before.display(),
-                    home.display()
+                     to ~/.hame when convenient.",
+                    found.path.display()
                 );
-                return Some(before);
             }
-            Some(home)
+            Some(found.path)
         })
         .ok_or("cannot find a home directory; pass --home or set HAME_HOME")?;
     let store = SessionStore::new(home.join("sessions"));
@@ -333,45 +323,6 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         }
     }
     Ok(ExitCode::SUCCESS)
-}
-
-#[cfg(target_os = "linux")]
-fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
-    use std::os::unix::process::CommandExt;
-    let policy: hame_sandbox::SandboxPolicy =
-        serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
-    hame_sandbox::apply_to_current_process(&policy).map_err(display)?;
-    let error = std::process::Command::new(&command[0])
-        .args(&command[1..])
-        .exec();
-    Err(format!(
-        "cannot execute {}: {error}",
-        command[0].to_string_lossy()
-    ))
-}
-
-/// Windows has no `exec`: lower this process, run the program as a child
-/// (which inherits the lowered level), and pass its exit status on.
-#[cfg(windows)]
-fn sandbox_exec(policy: &str, command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
-    let policy: hame_sandbox::SandboxPolicy =
-        serde_json::from_str(policy).map_err(|e| format!("invalid sandbox policy: {e}"))?;
-    hame_sandbox::apply_to_current_process(&policy).map_err(display)?;
-    // The program gets copies of the standard handles; the originals must
-    // not travel along as well, or what it starts holds the caller's pipes.
-    hame_sandbox::keep_stdio_private();
-    let status = std::process::Command::new(&command[0])
-        .args(&command[1..])
-        .status()
-        .map_err(|e| format!("cannot execute {}: {e}", command[0].to_string_lossy()))?;
-    Ok(ExitCode::from(
-        status.code().unwrap_or(1).clamp(0, 255) as u8
-    ))
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn sandbox_exec(_policy: &str, _command: &[std::ffi::OsString]) -> Result<ExitCode, String> {
-    Err("sandbox-exec is not used on this platform".into())
 }
 
 fn parse_id(raw: &str) -> Result<SessionId, String> {
