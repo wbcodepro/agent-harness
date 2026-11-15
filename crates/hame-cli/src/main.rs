@@ -1,3 +1,4 @@
+mod connect;
 mod eval;
 mod run;
 mod setup;
@@ -49,6 +50,9 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         port: u16,
     },
+    /// Make this computer a host the hame apps can reach through the relay,
+    /// end-to-end encrypted: sign in, pair devices by QR code, serve them.
+    Connect(connect::ConnectArgs),
     /// Serve the Agent Client Protocol on stdin/stdout, for editors.
     Acp,
     /// Run a suite of tasks and report pass rate, time and token use.
@@ -240,6 +244,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 _ = tokio::signal::ctrl_c() => {}
             }
         }
+        Command::Connect(args) => return connect::connect(&home, args).await,
         Command::Acp => {
             let options = hame_app::Options {
                 max_steps: 0,

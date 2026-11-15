@@ -38,6 +38,8 @@ hame-tools.workspace = true
 hame-trace.workspace = true
 hame-tui.workspace = true
 hame-web.workspace = true
+hame-sync.workspace = true
+qrcode = { version = "0.14.1", default-features = false }
 serde_json.workspace = true
 tokio.workspace = true
 toml.workspace = true
@@ -45,6 +47,7 @@ serde.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+hame-sync = { workspace = true, features = ["mock-relay"] }
 agent-client-protocol = { version = "5.2.0", features = ["process"] }
 tempfile.workspace = true
 
