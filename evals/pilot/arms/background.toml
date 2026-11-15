@@ -1,0 +1,6 @@
+# The desktop tool in background mode: the user keeps the screen. Text and
+# plain keys go to the app's process, documents are saved with `save`
+# (Apple Events); focus, menus, pixel clicks and key equivalents are
+# refused as needs_foreground.
+[computer]
+desktop_background = true
