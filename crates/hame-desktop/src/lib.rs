@@ -762,12 +762,18 @@ impl DesktopTool {
         receipt.ts = now_ms();
         self.record(ctx, &receipt)
             .map_err(|e| HelperError::new("failed", e))?;
+        // A caller that describes what it sends (a redacted password) keeps
+        // that description: the helper's report of the typed text would put
+        // the secret in the journal and the log.
+        let described = !receipt.emitted.is_empty();
         let outcome = self.req(action, params, limit).await;
         receipt.ts = now_ms();
         match &outcome {
             Ok(result) => {
                 receipt.status = ActionStatus::Completed;
-                if let Some(text) = result["emitted"].as_str() {
+                if let Some(text) = result["emitted"].as_str()
+                    && !described
+                {
                     receipt.emitted = vec![text.to_string()];
                 }
             }
@@ -778,7 +784,11 @@ impl DesktopTool {
                     ActionStatus::Failed
                 };
                 if let Some(text) = e.emitted() {
-                    receipt.emitted = vec![text.to_string()];
+                    receipt.emitted = vec![if described {
+                        format!("[{} characters emitted, redacted]", text.chars().count())
+                    } else {
+                        text.to_string()
+                    }];
                 }
                 receipt.error = Some(format!("{}: {}", e.code, e.message));
             }
@@ -1281,7 +1291,11 @@ impl DesktopTool {
                 &caps,
                 observation_id,
                 idem,
-                Vec::new(),
+                if secure {
+                    vec![format!("[{} characters, redacted]", text.chars().count())]
+                } else {
+                    Vec::new()
+                },
                 params,
                 limit,
             )
@@ -2789,6 +2803,39 @@ mod tests {
             )
             .await;
         assert!(!out.is_error, "{}", out.text);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_password_typed_into_a_secure_field_stays_out_of_receipts() {
+        use scripted::*;
+        let secret = "hunter2-not-real";
+        let f = fixture(
+            &[
+                Capability::Observe,
+                Capability::Interact,
+                Capability::GlobalInput,
+            ],
+            &[],
+            &[
+                ("resolve", element("AXSecureTextField", "Password", false)),
+                ("type", json!({"emitted": secret, "chunks": 1})),
+            ],
+        );
+        let out = f
+            .call(
+                json!({"action": "type", "app": APP, "window": 7, "name": "Password",
+                         "role": "securetextfield", "text": secret}),
+            )
+            .await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(!out.text.contains(secret));
+        let receipts = &f.tool.state().receipts;
+        assert!(!receipts.is_empty());
+        for receipt in receipts.iter() {
+            let json = serde_json::to_string(receipt).unwrap();
+            assert!(!json.contains(secret), "{json}");
+        }
     }
 
     #[cfg(target_os = "macos")]
