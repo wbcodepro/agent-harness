@@ -1,0 +1,47 @@
+[package]
+name = "hame-relay"
+description = "Relay server for hame: accounts, devices and end-to-end encrypted message routing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "hame-relay"
+path = "src/main.rs"
+
+[dependencies]
+argon2 = "0.6.0"
+async-trait = "0.1.89"
+aws-lc-rs = "1.19"
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+base64.workspace = true
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "pool", "hostname", "tokio1", "tokio1-rustls", "rustls-platform-verifier", "aws-lc-rs"] }
+rand = "0.9"
+reqwest = { workspace = true, features = ["json", "form", "query"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+thiserror.workspace = true
+tokio.workspace = true
+tower-http = { version = "0.6.11", features = ["cors", "limit", "set-header", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+url.workspace = true
+uuid.workspace = true
+webauthn-rs = { version = "0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
+
+[dev-dependencies]
+futures-util = "0.3.34"
+openssl = "0.10"
+tempfile.workspace = true
+tokio-tungstenite = "0.29"
+webauthn-authenticator-rs = { version = "0.6.2", features = ["softpasskey"] }
+
+[lints]
+workspace = true
