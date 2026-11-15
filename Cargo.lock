@@ -1527,6 +1527,7 @@ name = "hame-acp"
 version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
+ "base64 0.22.1",
  "hame-agent",
  "hame-app",
  "hame-eval",
@@ -1560,6 +1561,7 @@ dependencies = [
 name = "hame-app"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
  "hame-agent",
  "hame-checkpoint",
  "hame-context",

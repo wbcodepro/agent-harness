@@ -11,6 +11,8 @@ mod condense;
 mod instructions;
 mod spill;
 
-pub use compact::{Compactor, context_sources, context_tokens};
+pub use compact::{
+    Compactor, DURABLE_FACTS_HEADING, context_sources, context_tokens, durable_facts,
+};
 pub use instructions::load_instructions;
 pub use spill::SpillLayer;

@@ -13,10 +13,10 @@ hame-kernel.workspace = true
 hame-llm.workspace = true
 hame-session.workspace = true
 hame-tools.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 hame-eval.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 

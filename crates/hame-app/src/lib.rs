@@ -34,7 +34,7 @@ use hame_verify::Verifier;
 pub use hame_policy::NetworkMode as NetworkChoice;
 pub use hame_policy::Prompter;
 pub use hame_sandbox::Mode as SandboxMode;
-pub use import::import_dsh;
+pub use import::{import_dsh, import_image};
 
 /// A model provider hame can talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
