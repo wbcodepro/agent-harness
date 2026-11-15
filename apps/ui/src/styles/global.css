@@ -1,0 +1,250 @@
+/* hame's design tokens (docs/design/UI.md) and base styles. */
+
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+  --text-body: 14px/22px var(--font-sans);
+  --text-small: 13px/20px var(--font-sans);
+  --text-code: 12.5px/19px var(--font-mono);
+  --text-h1: 20px;
+  --text-h2: 17px;
+  --text-h3: 15px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  --radius-control: 10px;
+  --radius-card: 14px;
+  --radius-bubble: 18px;
+  --radius-sheet: 22px;
+  --radius-pill: 999px;
+  --hairline: 1px;
+
+  --sidebar: 280px;
+  --rail: 56px;
+  --column: clamp(680px, 64%, 920px);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --panel-ms: 160ms;
+
+  --bg: #ffffff;
+  --bg-1: #f7f7f8;
+  --bg-2: #eff0f2;
+  --bg-3: #e4e6e9;
+  --fg: #16181b;
+  --fg-2: #4a4f57;
+  --fg-3: #7a808a;
+  --border: #e2e4e8;
+  --accent: #12805c;
+  --accent-fg: #ffffff;
+  --warn: #b7791f;
+  --error: #c93c37;
+  --success: #1e874b;
+  --diff-add: #e6f4ea;
+  --diff-del: #fce8e8;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 8px 24px rgb(16 24 40 / 8%);
+  --scrim: rgb(15 17 19 / 40%);
+  color-scheme: light;
+}
+
+@media (min-resolution: 2dppx) {
+  :root {
+    --hairline: 0.5px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1113;
+    --bg-1: #16191c;
+    --bg-2: #1d2125;
+    --bg-3: #262b30;
+    --fg: #ecedee;
+    --fg-2: #b4b8be;
+    --fg-3: #858b94;
+    --border: #2a2f35;
+    --accent: #3fc79a;
+    --accent-fg: #06130e;
+    --warn: #e3b341;
+    --error: #f0726b;
+    --success: #4cc38a;
+    --diff-add: #1a3a27;
+    --diff-del: #3d1f1f;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 35%);
+    --scrim: rgb(0 0 0 / 55%);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1113;
+  --bg-1: #16191c;
+  --bg-2: #1d2125;
+  --bg-3: #262b30;
+  --fg: #ecedee;
+  --fg-2: #b4b8be;
+  --fg-3: #858b94;
+  --border: #2a2f35;
+  --accent: #3fc79a;
+  --accent-fg: #06130e;
+  --warn: #e3b341;
+  --error: #f0726b;
+  --success: #4cc38a;
+  --diff-add: #1a3a27;
+  --diff-del: #3d1f1f;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 35%);
+  --scrim: rgb(0 0 0 / 55%);
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: var(--text-body);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--accent);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The one "live" animation: a light sweep over running text. */
+@keyframes shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, var(--fg-2) 0%, var(--fg-2) 40%, var(--fg) 50%, var(--fg-2) 60%, var(--fg-2) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  .shimmer {
+    color: var(--fg-2);
+    background: none;
+  }
+}
+
+/* highlight.js tokens on hame's palette. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-type {
+  color: color-mix(in srgb, var(--accent) 80%, var(--fg));
+  font-weight: 500;
+}
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-addition {
+  color: color-mix(in srgb, var(--warn) 75%, var(--fg));
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: var(--fg-2);
+  font-style: italic;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-variable {
+  color: color-mix(in srgb, var(--error) 70%, var(--fg));
+}
+.hljs-title,
+.hljs-section,
+.hljs-function .hljs-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+.hljs-deletion {
+  color: var(--error);
+}

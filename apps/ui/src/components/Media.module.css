@@ -1,0 +1,105 @@
+.thumb {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  min-height: 48px;
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  background: var(--bg-2);
+}
+
+.large {
+  width: 100%;
+}
+
+.thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumb:hover {
+  border-color: var(--fg-3);
+}
+
+.loading {
+  display: block;
+  height: 90px;
+}
+
+.missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--text-small);
+  color: var(--fg-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: var(--hairline) solid var(--border);
+  background: var(--bg-1);
+  color: var(--fg);
+  text-decoration: none;
+  font: var(--text-small);
+  max-width: 100%;
+}
+
+.chip span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  color: var(--fg-2);
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: max(var(--space-7), env(safe-area-inset-top)) var(--space-4) max(var(--space-7), env(safe-area-inset-bottom));
+  animation: fade-in 160ms var(--ease);
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: calc(100% - 40px);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow);
+  background: var(--bg);
+}
+
+.caption {
+  margin-top: var(--space-2);
+  color: #fff;
+  font: var(--text-small);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 60%);
+}
+
+.close {
+  position: absolute;
+  top: max(var(--space-4), env(safe-area-inset-top));
+  right: var(--space-4);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--fg);
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow);
+}

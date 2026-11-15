@@ -1,0 +1,79 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  animation: fade-in 140ms var(--ease);
+}
+
+.dialog {
+  width: min(440px, 100%);
+  border-radius: var(--radius-sheet);
+  background: var(--bg);
+  border: var(--hairline) solid var(--border);
+  box-shadow: var(--shadow);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.head h2 {
+  margin: 0;
+  font-size: var(--text-h2);
+}
+
+.head button {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-control);
+  display: grid;
+  place-items: center;
+  color: var(--fg-2);
+}
+
+.head button:hover {
+  background: var(--bg-2);
+}
+
+.dialog dl {
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font: var(--text-small);
+}
+
+.row dt {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.row dd {
+  margin: 0;
+  color: var(--fg-2);
+  text-align: right;
+}
+
+.row kbd {
+  font: 12px/20px var(--font-sans);
+  padding: 0 6px;
+  min-width: 22px;
+  text-align: center;
+  border-radius: 6px;
+  border: var(--hairline) solid var(--border);
+  background: var(--bg-1);
+}
