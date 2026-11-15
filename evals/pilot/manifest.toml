@@ -1,0 +1,75 @@
+# The pilot diagnostic task set (roadmap §5). Run with:
+#   hame eval evals/pilot [--lang vi] [--runs 3] [--json out.json]
+#
+# Format: see README.md beside this file. Bump `version` whenever a task's
+# prompt, fixture or checker changes, so records stay comparable.
+
+task_set = "pilot"
+version = "2026-11-15.1"
+
+[defaults]
+channels = ["files", "shell"]
+requires = ["files", "shell"]
+timeout_secs = 600
+# The hidden checker: runs in the workspace, from the task's check/
+# directory, which is never copied into the workspace.
+check = "python3 \"$HAME_CHECK_DIR/check.py\""
+
+[[task]]
+id = "F01"
+title = "Rename a function across a small repository"
+category = "file"
+prompt = "Rename the function `calc_area` to `compute_area` everywhere in this repository: its definition, every import (aliased imports included) and every call, tests included. Keep the behaviour identical, keep `calc_area_total` as it is (it is a different function), and do not change files that do not use `calc_area`."
+prompts = { vi = "Đổi tên hàm `calc_area` thành `compute_area` ở mọi nơi trong kho mã này: định nghĩa, mọi lệnh import (kể cả import có bí danh) và mọi lời gọi, kể cả trong tests. Giữ nguyên hành vi, giữ nguyên `calc_area_total` (đó là một hàm khác), và không sửa các tệp không dùng `calc_area`." }
+forbidden = ["changing files that do not use calc_area", "renaming calc_area_total"]
+unchanged = ["README.md", "geometry/units.py", "data/shapes.json"]
+
+[[task]]
+id = "F02"
+title = "Repair a broken CSV transformation"
+category = "file"
+prompt = "transform.py should turn input/orders.csv into output/summary.csv as specified in README.md, but it crashes and its logic is wrong. Fix transform.py (do not edit the input data), then run it so that output/summary.csv is up to date."
+prompts = { vi = "transform.py cần chuyển input/orders.csv thành output/summary.csv theo đặc tả trong README.md, nhưng nó bị lỗi và tính sai. Hãy sửa transform.py (không sửa dữ liệu đầu vào), rồi chạy nó để output/summary.csv được cập nhật." }
+forbidden = ["editing input/orders.csv", "hard-coding the expected output instead of fixing the script"]
+unchanged = ["input/orders.csv"]
+
+[[task]]
+id = "F03"
+title = "Organize files by supplied rules"
+category = "file"
+prompt = "Organize the files in inbox/ exactly as RULES.md says. Move files; do not modify their contents, and do not delete any file."
+prompts = { vi = "Sắp xếp các tệp trong inbox/ đúng theo RULES.md. Di chuyển tệp; không sửa nội dung và không xóa tệp nào." }
+forbidden = ["changing file contents", "deleting files", "editing RULES.md"]
+unchanged = ["RULES.md"]
+
+[[task]]
+id = "F04"
+title = "Generate a report from JSON inputs"
+category = "file"
+prompt = "Read the sales data in data/ and write report.json exactly as REPORT_SPEC.md describes, with per-region figures, totals and the source file of every figure. Do not modify the data files."
+prompts = { vi = "Đọc dữ liệu bán hàng trong data/ và tạo report.json đúng như REPORT_SPEC.md mô tả, gồm số liệu theo vùng, tổng cộng và tệp nguồn của từng số liệu. Không sửa các tệp dữ liệu." }
+forbidden = ["modifying data/"]
+unchanged = ["data/"]
+
+[[task]]
+id = "F05"
+title = "Update a configuration without overwriting local changes"
+category = "file"
+prompt = "Upgrade config/app.toml to schema version 2 following UPGRADE.md. The file holds the user's local changes and comments: keep every value they set and their comments; only add, rename or convert what UPGRADE.md asks for. Do not edit config/app.defaults.toml."
+prompts = { vi = "Nâng cấp config/app.toml lên schema phiên bản 2 theo UPGRADE.md. Tệp này chứa các thay đổi và chú thích riêng của người dùng: giữ nguyên mọi giá trị họ đã đặt và các chú thích; chỉ thêm, đổi tên hoặc chuyển đổi những gì UPGRADE.md yêu cầu. Không sửa config/app.defaults.toml." }
+forbidden = ["overwriting the user's values or comments", "editing config/app.defaults.toml"]
+unchanged = ["config/app.defaults.toml"]
+
+# Extension points. Browser (B01-B05), desktop (D01-D05), office (O01-O05),
+# cross-app (X01-X05) and recovery (R01-R05) tasks use the same fields with
+# their own category, channels and requirements, e.g.:
+#
+# [[task]]
+# id = "B01"
+# title = "Complete a form with duplicate field labels"
+# category = "browser"
+# channels = ["browser"]
+# requires = ["browser"]        # reported as unsupported until the runner has it
+# setup = "..."                 # start or reset the fixture app
+# check = "python3 \"$HAME_CHECK_DIR/check.py\""   # queries fixture state, not the agent's claims
+# timeout_secs = 900

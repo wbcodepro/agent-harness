@@ -1,0 +1,17 @@
+schema_version = 2
+
+[server]
+host = "127.0.0.1"
+port = 8080
+timeout_ms = 30000
+
+[log]
+level = "info"
+file = "app.log"
+
+[cache]
+enabled = true
+ttl_seconds = 300
+
+[telemetry]
+enabled = false

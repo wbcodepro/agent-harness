@@ -22,6 +22,7 @@ hame-sandbox.workspace = true
 hame-session.workspace = true
 serde_json.workspace = true
 hame-tools.workspace = true
+hame-trace.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

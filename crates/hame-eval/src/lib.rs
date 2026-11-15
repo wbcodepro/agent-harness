@@ -4,6 +4,14 @@
 //! response, in order. It can be written by hand, or lifted out of a real
 //! session log with [`Recording::from_log`] and played back through
 //! [`ScriptedLlm`] to re-run the harness without a network or a model.
+//!
+//! The rest is the evaluation record: task sets ([`manifest`]),
+//! configurations under comparison ([`arms`]), and per-attempt records,
+//! summaries and paired comparisons ([`report`]).
+
+pub mod arms;
+pub mod manifest;
+pub mod report;
 
 use std::collections::VecDeque;
 use std::fs;

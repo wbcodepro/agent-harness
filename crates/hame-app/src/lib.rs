@@ -122,6 +122,9 @@ pub struct Options {
     /// The queue of messages sent while a turn runs. Give the same one to
     /// every agent built for a session, so the interface keeps one handle.
     pub steering: Option<Steering>,
+    /// Record model attempts and tool calls in this trace. Given to
+    /// subagents too, so their work lands in the same trace.
+    pub tracer: Option<hame_trace::Tracer>,
 }
 
 type NoticeSink = Box<dyn Fn(&str) + Send + Sync>;
@@ -232,12 +235,15 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         summary_is_main,
         stronger,
     } = match &options.llm {
-        Some(llm) => Models {
-            main: Arc::clone(llm),
-            summary: Arc::clone(llm),
-            summary_is_main: true,
-            stronger: None,
-        },
+        Some(llm) => {
+            let llm = traced(options, Arc::clone(llm), "main", None);
+            Models {
+                main: Arc::clone(&llm),
+                summary: llm,
+                summary_is_main: true,
+                stronger: None,
+            }
+        }
         None => llm(&config, &secrets, options)?,
     };
 
@@ -392,6 +398,10 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     // settings, redact
     // (so refusals are covered too), then decide whether the call runs.
     let pipeline = Arc::new(ToolPipeline::new());
+    // Outermost, so a call's span covers every layer below it.
+    if let Some(tracer) = &options.tracer {
+        pipeline.push(hame_trace::trace_layer(tracer));
+    }
     pipeline.push(SpillLayer {
         dir: checkpoint_dir(home, cwd)
             .file_name()
@@ -1095,8 +1105,12 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
             .and_then(|ms| ms.parse().ok())
             .unwrap_or(0);
         let recording = Recording::load(&script).map_err(|e| e.to_string())?;
-        let scripted: Arc<dyn Llm> =
-            Arc::new(ScriptedLlm::new(recording).with_delay(Duration::from_millis(delay)));
+        let scripted: Arc<dyn Llm> = traced(
+            options,
+            Arc::new(ScriptedLlm::new(recording).with_delay(Duration::from_millis(delay))),
+            "main",
+            None,
+        );
         return Ok(Models {
             main: Arc::clone(&scripted),
             summary: scripted,
@@ -1138,27 +1152,34 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         pdf: config.model.pdf.unwrap_or(known.pdf),
         ..known
     };
-    let build = |model: String, effort: Option<String>| -> Arc<dyn Llm> {
-        match provider {
+    // Traced, the retrying moves from the adapter to the trace decorator,
+    // so that every attempt is seen.
+    let retry = adapter_retry(options);
+    let build = |model: String, effort: Option<String>, role: &str| -> Arc<dyn Llm> {
+        let adapter: Arc<dyn Llm> = match provider {
             Provider::Anthropic => {
-                let llm = hame_llm::Anthropic::new(&base_url, api_key.clone(), model)
-                    .with_effort(Some(effort.unwrap_or_else(|| "high".into())));
+                let llm = hame_llm::Anthropic::new(&base_url, api_key.clone(), model.clone())
+                    .with_effort(Some(effort.unwrap_or_else(|| "high".into())))
+                    .with_retry(retry);
                 let profile = tune(llm.profile());
                 Arc::new(llm.with_profile(profile))
             }
             Provider::Openai if !chat_only => {
-                let llm =
-                    hame_llm::Responses::new(&base_url, api_key.clone(), model).with_effort(effort);
+                let llm = hame_llm::Responses::new(&base_url, api_key.clone(), model.clone())
+                    .with_effort(effort)
+                    .with_retry(retry);
                 let profile = tune(llm.profile());
                 Arc::new(llm.with_profile(profile))
             }
             Provider::Deepseek | Provider::Openai => {
-                let llm = ChatCompletions::new(&base_url, api_key.clone(), model)
-                    .with_temperature(config.model.temperature);
+                let llm = ChatCompletions::new(&base_url, api_key.clone(), model.clone())
+                    .with_temperature(config.model.temperature)
+                    .with_retry(retry);
                 let profile = tune(llm.profile());
                 Arc::new(llm.with_profile(profile))
             }
-        }
+        };
+        traced(options, adapter, role, Some(&model))
     };
     let effort = config.model.effort.clone();
     let stronger_effort = config.model.escalate_effort.clone().or(effort.clone());
@@ -1184,16 +1205,19 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
             let llm: Arc<dyn Llm> = match other {
                 Provider::Anthropic => Arc::new(
                     hame_llm::Anthropic::new(other.base_url(), key, name.clone())
-                        .with_effort(Some(stronger_effort.unwrap_or_else(|| "high".into()))),
+                        .with_effort(Some(stronger_effort.unwrap_or_else(|| "high".into())))
+                        .with_retry(retry),
                 ),
                 Provider::Openai => Arc::new(
                     hame_llm::Responses::new(other.base_url(), key, name.clone())
-                        .with_effort(stronger_effort),
+                        .with_effort(stronger_effort)
+                        .with_retry(retry),
                 ),
-                Provider::Deepseek => {
-                    Arc::new(ChatCompletions::new(other.base_url(), key, name.clone()))
-                }
+                Provider::Deepseek => Arc::new(
+                    ChatCompletions::new(other.base_url(), key, name.clone()).with_retry(retry),
+                ),
             };
+            let llm = traced(options, llm, "stronger", Some(&name));
             Some(Stronger {
                 usual_name: model.clone(),
                 llm,
@@ -1202,7 +1226,7 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         }
         (None, Some(name)) => Some(Stronger {
             usual_name: model.clone(),
-            llm: build(name.clone(), stronger_effort),
+            llm: build(name.clone(), stronger_effort, "stronger"),
             name: name.clone(),
         }),
         // The same model thinking harder: work starts at the cheaper
@@ -1210,7 +1234,7 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         (None, None) => match &config.model.escalate_effort {
             Some(harder) if Some(harder) != effort.as_ref() => Some(Stronger {
                 usual_name: model.clone(),
-                llm: build(model.clone(), Some(harder.clone())),
+                llm: build(model.clone(), Some(harder.clone()), "stronger"),
                 name: format!("{model} (effort {harder})"),
             }),
             _ => None,
@@ -1218,10 +1242,38 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
     };
     Ok(Models {
         summary_is_main: summary_model == model,
-        main: build(model, effort.clone()),
-        summary: build(summary_model, effort),
+        main: build(model, effort.clone(), "main"),
+        summary: build(summary_model, effort, "summary"),
         stronger,
     })
+}
+
+/// `llm` with its attempts recorded in the run's trace, when there is one.
+fn traced(options: &Options, llm: Arc<dyn Llm>, role: &str, model: Option<&str>) -> Arc<dyn Llm> {
+    let Some(tracer) = &options.tracer else {
+        return llm;
+    };
+    let mut traced = hame_trace::TracedLlm::new(llm, tracer.clone(), role);
+    if let Some(model) = model {
+        // Only a provider adapter's retries move here; a scripted or
+        // embedded model is passed through as it is.
+        traced = traced
+            .with_model(model)
+            .with_retry(hame_llm::Retry::default());
+    }
+    Arc::new(traced)
+}
+
+/// The adapters' own retry policy: none when the trace decorator retries.
+fn adapter_retry(options: &Options) -> hame_llm::Retry {
+    if options.tracer.is_some() {
+        hame_llm::Retry {
+            max_retries: 0,
+            ..hame_llm::Retry::default()
+        }
+    } else {
+        hame_llm::Retry::default()
+    }
 }
 
 /// Gives every question the same answer.

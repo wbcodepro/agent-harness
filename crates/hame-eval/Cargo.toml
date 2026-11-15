@@ -1,6 +1,6 @@
 [package]
 name = "hame-eval"
-description = "Scripted model responses and deterministic replay for the hame harness."
+description = "Scripted model responses, task sets and evaluation records for the hame harness."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,9 @@ rust-version.workspace = true
 [dependencies]
 hame-llm.workspace = true
 hame-session.workspace = true
+hame-trace.workspace = true
+sha2.workspace = true
+toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

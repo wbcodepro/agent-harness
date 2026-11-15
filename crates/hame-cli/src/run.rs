@@ -77,6 +77,11 @@ pub struct RunArgs {
     /// What to print: text for people, json or stream-json for programs.
     #[arg(long, value_enum, default_value_t)]
     output: OutputArg,
+    /// Write a trace of model attempts, tool calls and their timings to
+    /// this file (`trace.v1.jsonl` format). Defaults to $HAME_TRACE. With
+    /// `session`, the trace goes beside the session log.
+    #[arg(long)]
+    trace: Option<PathBuf>,
 }
 
 pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<ExitCode, String> {
@@ -97,6 +102,11 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         base_url: args.base_url.clone(),
         max_steps: args.max_steps.unwrap_or(0),
         plan: args.plan,
+        tracer: args
+            .trace
+            .clone()
+            .or_else(|| std::env::var_os("HAME_TRACE").map(PathBuf::from))
+            .map(|_| hame_trace::Tracer::new()),
         ..Options::default()
     };
 
@@ -138,6 +148,27 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
     if let Some(id) = &existing {
         crate::warn_missing_artifacts(store, id);
     }
+    if let (Some(tracer), Some(path)) = (
+        &options.tracer,
+        args.trace
+            .clone()
+            .or_else(|| std::env::var_os("HAME_TRACE").map(PathBuf::from)),
+    ) {
+        let path = if path.as_os_str() == "session" {
+            home.join("sessions")
+                .join(session.id().as_str())
+                .join(hame_trace::TRACE_FILE)
+        } else {
+            path
+        };
+        if let Err(e) = tracer.attach_file(&path) {
+            eprintln!("hame: cannot write the trace to {}: {e}", path.display());
+        }
+    }
+    let mut turn_span = options
+        .tracer
+        .as_ref()
+        .map(|tracer| tracer.span(hame_trace::SpanKind::Turn, "turn"));
     match args.output {
         OutputArg::Text => {
             eprintln!("session: {}", session.id());
@@ -156,10 +187,32 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
     }
     let logged_before = session.records().len();
 
-    let outcome = tokio::select! {
-        result = runtime.agent.run_turn(&mut session, vec![Block::text(hame_app::expand_command(home, &cwd, &args.prompt))]) => Some(result),
-        _ = tokio::signal::ctrl_c() => None,
+    let turn = runtime.agent.run_turn(
+        &mut session,
+        vec![Block::text(hame_app::expand_command(
+            home,
+            &cwd,
+            &args.prompt,
+        ))],
+    );
+    let outcome = match &turn_span {
+        Some(span) => tokio::select! {
+            result = span.scope(turn) => Some(result),
+            _ = tokio::signal::ctrl_c() => None,
+        },
+        None => tokio::select! {
+            result = turn => Some(result),
+            _ = tokio::signal::ctrl_c() => None,
+        },
     };
+    if let Some(mut span) = turn_span.take() {
+        span.set("session", session.id().to_string());
+        span.end(match &outcome {
+            Some(Ok(())) => hame_trace::SpanStatus::Ok,
+            Some(Err(_)) => hame_trace::SpanStatus::Error,
+            None => hame_trace::SpanStatus::Cancelled,
+        });
+    }
     if let Some(proxy) = &runtime.proxy {
         for decision in proxy.decisions().iter().filter(|d| !d.allowed) {
             eprintln!("network: blocked {}:{}", decision.host, decision.port);

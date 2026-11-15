@@ -1,0 +1,5 @@
+[
+  {"name": "lawn", "kind": "rect", "w": 12, "h": 7.5},
+  {"name": "pond", "kind": "circle", "r": 2},
+  {"name": "bed", "kind": "triangle", "base": 4, "height": 3}
+]

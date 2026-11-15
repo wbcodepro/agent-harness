@@ -1574,6 +1574,7 @@ dependencies = [
  "hame-sandbox",
  "hame-session",
  "hame-tools",
+ "hame-trace",
  "hame-verify",
  "serde_json",
  "tempfile",
@@ -1629,6 +1630,7 @@ dependencies = [
  "hame-sandbox",
  "hame-session",
  "hame-tools",
+ "hame-trace",
  "hame-tui",
  "hame-verify",
  "hame-web",
@@ -1637,6 +1639,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
+ "uuid",
 ]
 
 [[package]]
@@ -1661,11 +1664,14 @@ version = "0.0.1"
 dependencies = [
  "hame-llm",
  "hame-session",
+ "hame-trace",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]
@@ -1798,6 +1804,22 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+]
+
+[[package]]
+name = "hame-trace"
+version = "0.0.1"
+dependencies = [
+ "hame-agent",
+ "hame-kernel",
+ "hame-llm",
+ "hame-session",
+ "hame-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
