@@ -29,6 +29,9 @@ const DEFAULT_WAIT_MS: u64 = 60_000;
 const MAX_WAIT_MS: u64 = 600_000;
 /// Bytes of a running job's output shown while it runs.
 const SO_FAR_SHOWN: usize = 4_000;
+/// A job with no word for this long has nobody supervising it: the
+/// supervisor writes its output so far every second.
+const SILENT_AFTER: Duration = Duration::from_secs(10);
 
 const PARTIAL: &str = "partial.txt";
 const RESULT: &str = "result.json";
@@ -330,6 +333,16 @@ impl Tool for JobOutput {
                         is_error: finished.is_error,
                     };
                 }
+                if supervisor_gone(&dir) {
+                    let so_far = std::fs::read_to_string(dir.join(PARTIAL)).unwrap_or_default();
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return ToolOutput::error(format!(
+                        "{so_far}[job {} is no longer running: the hame process that supervised \
+                         it exited before it finished, and jobs end with it. The output so far \
+                         is above; run the command again if you still need it.]",
+                        input.id
+                    ));
+                }
                 if Instant::now() >= deadline {
                     break;
                 }
@@ -344,6 +357,19 @@ impl Tool for JobOutput {
             ))
         })
     }
+}
+
+/// Whether a job without a result has stopped being looked after: no
+/// snapshot of its output has been written for [`SILENT_AFTER`].
+fn supervisor_gone(dir: &Path) -> bool {
+    let touched = |path: PathBuf| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
+    let last = touched(dir.join(PARTIAL)).or_else(|| touched(dir.to_path_buf()));
+    last.and_then(|last| last.elapsed().ok())
+        .is_some_and(|silent| silent > SILENT_AFTER)
 }
 
 fn known_jobs() -> String {
@@ -428,6 +454,31 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(3_500)).await;
         assert!(!dir.path().join("survived").exists());
+    }
+
+    #[tokio::test]
+    async fn a_job_whose_supervisor_is_gone_is_not_called_running() {
+        // What a job looks like after the hame that ran it exited: output
+        // so far, no result, and nothing written for a while.
+        let id = format!("jgone{}", std::process::id());
+        let dir = jobs_dir().join(&id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(PARTIAL), "halfway\n").unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.join(PARTIAL))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let ctx = ToolContext::new(std::env::temp_dir());
+        let out = JobOutput
+            .call(&json!({"id": id, "wait_ms": 5_000}), &ctx)
+            .await;
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.starts_with("halfway"), "{}", out.text);
+        assert!(out.text.contains("no longer running"), "{}", out.text);
+        assert!(!dir.exists());
     }
 
     #[tokio::test]
