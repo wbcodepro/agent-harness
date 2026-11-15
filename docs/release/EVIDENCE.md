@@ -2,7 +2,11 @@
 
 What the pilot task set measured on real models, how to reproduce it, and
 what it does not show. Every number here comes from the `hame eval` JSON
-reports listed under each table; nothing is extrapolated. Backend
+reports listed under each table; nothing is extrapolated. Those reports
+are in [evidence/](evidence/) exactly as `hame eval` wrote them, except
+that local paths are replaced by `<scratch>`, `<tmp>` and `~`; the tables
+can be recomputed from them with `python3 evals/pilot/report.py
+docs/release/evidence/pilot-haiku.json` (and the same for the others). Backend
 comparisons that led to ADR-4 and ADR-5 are in
 [EVIDENCE-browser.md](EVIDENCE-browser.md) and
 [EVIDENCE-desktop.md](EVIDENCE-desktop.md).
