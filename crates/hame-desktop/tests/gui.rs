@@ -729,6 +729,90 @@ async fn background_mode_types_without_taking_the_foreground() {
     });
 }
 
+/// Background mode creates a document and opens a file through Apple
+/// Events, and a file outside the granted folders is not opened.
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
+async fn background_mode_creates_and_opens_documents() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        let granted = gui._home.path().join("granted");
+        std::fs::create_dir_all(&granted).unwrap();
+        let existing = granted.join("existing.txt");
+        std::fs::write(&existing, "already here\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("other.txt"), "no\n").unwrap();
+        let front_at_start = frontmost_bundle();
+        let mut cfg = config(
+            gui._home.path(),
+            textedit_grants_in(all_caps(), &[&granted]),
+        );
+        cfg.background = true;
+        let tool = DesktopTool::new(cfg);
+        let call = |input: Value| {
+            let tool = &tool;
+            let ctx = &gui.ctx;
+            async move { tool.call(&input, ctx).await }
+        };
+        let made = call(json!({"action": "new_document", "app": TEXTEDIT})).await;
+        assert!(!made.is_error, "{}", made.text);
+        let new_id: u64 = made
+            .text
+            .split("window ")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        gui.created.push(new_id);
+        let typed = call(json!({"action": "type", "app": TEXTEDIT, "window": new_id,
+                                "text": "made in the background"}))
+        .await;
+        assert!(!typed.is_error, "{}", typed.text);
+        let out = granted.join("made.txt");
+        let saved = call(json!({"action": "save", "app": TEXTEDIT, "window": new_id,
+                                "path": out.to_str().unwrap()}))
+        .await;
+        assert!(!saved.is_error, "{}", saved.text);
+        assert!(plain_text(&out).contains("made in the background"));
+
+        let opened = call(json!({"action": "open_file", "app": TEXTEDIT,
+                                 "path": existing.to_str().unwrap()}))
+        .await;
+        assert!(
+            !opened.is_error && opened.text.contains("existing.txt"),
+            "{}",
+            opened.text
+        );
+        let open_id: u64 = opened
+            .text
+            .split("window ")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        gui.created.push(open_id);
+        let refused = call(json!({"action": "open_file", "app": TEXTEDIT,
+                                  "path": outside.path().join("other.txt").to_str().unwrap()}))
+        .await;
+        assert!(
+            refused.is_error && refused.text.starts_with("not_authorized"),
+            "{}",
+            refused.text
+        );
+        if front_at_start != TEXTEDIT {
+            assert_ne!(frontmost_bundle(), TEXTEDIT, "TextEdit came to the front");
+        } else {
+            eprintln!("TextEdit was already frontmost; the foreground check was skipped");
+        }
+    });
+}
+
 /// The screenshot-loop configuration: no accessibility observations or
 /// refs; every acting call comes back with a screenshot, and click_at and
 /// typing work from it.

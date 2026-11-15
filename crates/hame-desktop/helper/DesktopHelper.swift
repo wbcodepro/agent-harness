@@ -1219,6 +1219,69 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
             "occurrences_seen": count, "window": windowState(r)]
 }
 
+/// Runs AppleScript source, turning its errors into helper failures.
+func runAppleScript(_ source: String, bundle: String) throws {
+    var error: NSDictionary?
+    guard let script = NSAppleScript(source: source) else {
+        throw fail("failed", "Could not build the script.")
+    }
+    _ = script.executeAndReturnError(&error)
+    if let error {
+        let number = error[NSAppleScript.errorNumber] as? Int ?? 0
+        let message = error[NSAppleScript.errorMessage] as? String ?? "unknown error"
+        switch number {
+        case -1743:
+            throw fail("not_authorized", "macOS has not allowed this process to control \(bundle) with Apple Events (System Settings > Privacy & Security > Automation). The user has to allow it once.")
+        case -1712:
+            throw fail("outcome_unknown", "The app did not answer within 60 seconds; the command may or may not have taken effect.")
+        default:
+            throw fail("failed", "The app refused: \(message) (\(number)).")
+        }
+    }
+}
+
+func appleScriptString(_ s: String) -> String {
+    "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+}
+
+/// Creates a new document, or opens a file, through the app's scripting
+/// dictionary, without activating the app; returns the window it shows.
+func scriptDocument(_ req: [String: Any]) throws -> [String: Any] {
+    guard let bundle = req["bundle_id"] as? String, let pidValue = req["pid"] as? Int,
+          let mode = req["mode"] as? String else {
+        throw fail("invalid", "script_document needs bundle_id, pid and mode.")
+    }
+    guard let app = runningApp(pid: pid_t(pidValue)) else { throw fail("stale_window", "The app is no longer running.") }
+    let appEl = appElement(app.processIdentifier)
+    let before = Set(axWindows(appEl).compactMap { windowID(of: $0) })
+    let command: String
+    switch mode {
+    case "make": command = "make new document"
+    case "open":
+        guard let path = req["path"] as? String else { throw fail("invalid", "open needs path.") }
+        command = "open POSIX file \(appleScriptString(path))"
+    default: throw fail("invalid", "mode is make or open.")
+    }
+    try runAppleScript("""
+    with timeout of 60 seconds
+    tell application id \(appleScriptString(bundle)) to \(command)
+    end timeout
+    """, bundle: bundle)
+    let wanted = req["path"] as? String
+    let deadline = Date().addingTimeInterval(10)
+    while Date() < deadline {
+        for w in axWindows(appEl) {
+            guard let id = windowID(of: w) else { continue }
+            let doc = (strAttr(w, kAXDocumentAttribute)).flatMap { URL(string: $0)?.path }
+            if (mode == "make" && !before.contains(id)) || (mode == "open" && (doc == wanted || !before.contains(id))) {
+                return ["window": windowJSON(w, app: app, appEl: appEl) ?? [:]]
+            }
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+    return ["window": NSNull()]
+}
+
 /// Saves or exports a window's document through the app's scripting
 /// dictionary (TextEdit, Numbers, Pages). Apple Events reach an app in
 /// the background without activating it.
@@ -2121,6 +2184,12 @@ func handle(_ req: [String: Any]) {
                       "frontmost_pid": Int(frontmostPid() ?? 0)]
         case "script_save":
             result = try scriptSave(req)
+        case "app_info":
+            let app = try resolveApp(req)
+            result = ["pid": Int(app.processIdentifier), "bundle_id": app.bundleIdentifier ?? "",
+                      "app": app.localizedName ?? ""]
+        case "script_document":
+            result = try scriptDocument(req)
         case "focus_context":
             // Only meaningful while the window would receive the input.
             let (app, appEl, window, wid) = try resolveWindow(req)
