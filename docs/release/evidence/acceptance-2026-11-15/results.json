@@ -1,0 +1,292 @@
+{
+  "date": "2026-11-15",
+  "audited_commit": "497fe24f3d10383466fb8e0f1ae545c4d6d6625a",
+  "decision": "hold",
+  "platform": {
+    "os": "macOS",
+    "version": "26.6.2",
+    "arch": "arm64",
+    "rustc": "1.99.1"
+  },
+  "checks": {
+    "fmt": {
+      "exit_code": 0,
+      "command": "cargo fmt --all -- --check"
+    },
+    "clippy": {
+      "exit_code": 0,
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings"
+    },
+    "workspace_tests": {
+      "exit_code": 0,
+      "passed": 380,
+      "failed": 0,
+      "ignored": 19,
+      "result_blocks": 63
+    },
+    "minimum_rust_check": {
+      "exit_code": 0,
+      "command": "cargo +1.89.0 check --workspace --locked --offline",
+      "tests_run": false
+    },
+    "live_api": {
+      "exit_code": 0,
+      "tests_passed": 4,
+      "tests_failed": 0,
+      "calls": [
+        {
+          "test": "tool_result_image",
+          "model": "claude-haiku-5-5",
+          "input_tokens": 460,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "output_tokens": 22,
+          "request_bytes": 17403,
+          "response_bytes": 2630,
+          "images": 1,
+          "image_bytes": 12420,
+          "ttft_ms": 1158,
+          "latency_ms": 1179
+        },
+        {
+          "test": "user_image",
+          "model": "claude-haiku-5-5",
+          "input_tokens": 59,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "output_tokens": 10,
+          "request_bytes": 16956,
+          "response_bytes": 1420,
+          "images": 1,
+          "image_bytes": 12420,
+          "ttft_ms": 642,
+          "latency_ms": 768
+        },
+        {
+          "test": "missing_image",
+          "model": "claude-haiku-5-5",
+          "input_tokens": 102,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "output_tokens": 75,
+          "request_bytes": 518,
+          "response_bytes": 3336,
+          "images": 0,
+          "image_bytes": 0,
+          "ttft_ms": 720,
+          "latency_ms": 1174
+        },
+        {
+          "test": "cache_first",
+          "model": "claude-haiku-5-5",
+          "input_tokens": 4,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 8417,
+          "output_tokens": 22,
+          "request_bytes": 24560,
+          "response_bytes": 1911,
+          "images": 0,
+          "image_bytes": 0,
+          "ttft_ms": 947,
+          "latency_ms": 1180
+        },
+        {
+          "test": "cache_second",
+          "model": "claude-haiku-5-5",
+          "input_tokens": 4,
+          "cache_read_tokens": 8417,
+          "cache_write_tokens": 0,
+          "output_tokens": 21,
+          "request_bytes": 24560,
+          "response_bytes": 1817,
+          "images": 0,
+          "image_bytes": 0,
+          "ttft_ms": 684,
+          "latency_ms": 1046
+        }
+      ],
+      "totals": {
+        "input_tokens": 629,
+        "cache_read_tokens": 8417,
+        "cache_write_tokens": 8417,
+        "output_tokens": 150,
+        "request_bytes": 83997,
+        "response_bytes": 11114,
+        "images": 2,
+        "image_bytes": 24840
+      },
+      "billed_cost_usd": null
+    },
+    "gui_first": {
+      "exit_code": 101,
+      "passed": 13,
+      "failed": 1,
+      "failure": "a_batch_stops_at_an_unexpected_save_sheet",
+      "stage": "TextEdit startup",
+      "error": "LSOpenURLsWithCompletionHandler error -600"
+    },
+    "gui_targeted_rerun": {
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "filtered_out": 13
+    },
+    "release_build": {
+      "exit_code": 0,
+      "command": "cargo build --release --locked -p hame-cli",
+      "version_output": "hame 0.1.0-rc.1"
+    },
+    "defect_reproduction": {
+      "exit_code": 0,
+      "expected_behavior": "reproduces defects, not acceptance success",
+      "sandbox_read_denied": true,
+      "sandbox_symlink_created": true,
+      "protected_marker_in_model_feedback": true,
+      "file_absent_passed_on_filesystem_loop": true,
+      "csv_one_record_reported_as_two": true,
+      "ragged_csv_accepted": true
+    }
+  },
+  "findings": [
+    {
+      "id": "A1",
+      "priority": "P1",
+      "file": "crates/hame-verify/src/outcome.rs",
+      "line": 133,
+      "summary": "Protected file contents enter outcome feedback through agent-controlled symlinks."
+    },
+    {
+      "id": "A2",
+      "priority": "P2",
+      "file": "crates/hame-verify/src/outcome.rs",
+      "line": 125,
+      "summary": "FileAbsent treats metadata errors as verified absence."
+    },
+    {
+      "id": "A3",
+      "priority": "P2",
+      "file": "crates/hame-verify/src/outcome.rs",
+      "line": 183,
+      "summary": "CSV shape counts physical lines instead of parsed records."
+    }
+  ],
+  "historical_evaluation": [
+    {
+      "file": "pilot-haiku.json",
+      "attempts": 57,
+      "outcomes": {
+        "pass": 56,
+        "fail": 1
+      },
+      "hame_commits": {
+        "74ba6e44f82a9d8c75560995e137b367dde4f41d": 57
+      }
+    },
+    {
+      "file": "g3-haiku.json",
+      "attempts": 33,
+      "outcomes": {
+        "pass": 29,
+        "fail": 3,
+        "false_success": 1
+      },
+      "hame_commits": {
+        "e6f2fea8767cf204c2a407564452395b066f044b": 33
+      }
+    },
+    {
+      "file": "g3-postfix-O04.json",
+      "attempts": 3,
+      "outcomes": {
+        "pass": 3
+      },
+      "hame_commits": {
+        "ccd27c071b3ef23ff5e98d30bfd2893e2116ec48": 3
+      }
+    },
+    {
+      "file": "g3-postfix-X02.json",
+      "attempts": 3,
+      "outcomes": {
+        "pass": 2,
+        "false_success": 1
+      },
+      "hame_commits": {
+        "ccd27c071b3ef23ff5e98d30bfd2893e2116ec48": 3
+      }
+    },
+    {
+      "file": "ablation.json",
+      "attempts": 45,
+      "outcomes": {
+        "pass": 42,
+        "fail": 1,
+        "false_success": 2
+      },
+      "hame_commits": {
+        "74ba6e44f82a9d8c75560995e137b367dde4f41d": 45
+      }
+    }
+  ],
+  "existing_packages": {
+    "source_archive_commit": "3698a107f233519697f93d2003b2f8d5fa7c90ca",
+    "checksums": [
+      {
+        "filename": "hame-0.1.0-rc.1-src.tar.gz",
+        "sha256": "08dd2b754c79de99c7a0399ea7b148751bb12839eab8e8c70e56cd0dc227474f",
+        "matches_manifest": true
+      },
+      {
+        "filename": "hame-0.1.0-rc.1-aarch64-apple-darwin.tar.gz",
+        "sha256": "aa59af1749f88fea0830cfb818498797d44d20876fc8933f2c4d4acc4b560e4b",
+        "matches_manifest": true
+      }
+    ],
+    "rebuilt_in_this_audit": false
+  },
+  "not_rerun": [
+    "full 30-task model-driven pilot",
+    "network ablations",
+    "Linux and Windows builds",
+    "clean installation",
+    "licensing generator",
+    "live MCP discovery"
+  ],
+  "published": false,
+  "implementation_modified_by_review": false,
+  "concurrent_workspace_edits": {
+    "observed_at_local": "2026-11-15T14:03:26",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "covered_by_recorded_checks": false,
+    "files": [
+      {
+        "path": "Cargo.lock",
+        "sha256": "3bb2e4bba46c35b8c594fe2ae7fbbdd33e0908db0c357242f000e755f423ed07"
+      },
+      {
+        "path": "crates/hame-app/src/lib.rs",
+        "sha256": "07c63a561be70dd56adb8fb182a8a15f4efb635f4449493c3256200058d591bd"
+      },
+      {
+        "path": "crates/hame-cli/Cargo.toml",
+        "sha256": "17d29ba276defcf2d86b597bf4235290c593f599f772df2c18cec3b835351329"
+      },
+      {
+        "path": "crates/hame-cli/src/run.rs",
+        "sha256": "84480c135841634ec394bb6a7b014ee7fea93853111f466851c841ac3aa38af6"
+      },
+      {
+        "path": "crates/hame-desktop/src/caps.rs",
+        "sha256": "933e794c09785eaacb06525276c7b0a8215a3cab4c2d08e779543fa0c84f69b7"
+      },
+      {
+        "path": "crates/hame-desktop/src/lib.rs",
+        "sha256": "65ea695abbfbef6bd6363c96aac6d88f308f609035a46e685ffbb2e59ad7ba41"
+      },
+      {
+        "path": "crates/hame-sandbox/src/seatbelt.rs",
+        "sha256": "6907ef1a32cd23605250b092f9dc61aba4485b0272317ce31bfb8c52715a5332"
+      }
+    ]
+  }
+}

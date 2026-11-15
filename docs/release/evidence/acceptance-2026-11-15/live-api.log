@@ -1,0 +1,27 @@
+   Compiling hyper-util v0.1.21
+   Compiling hame-session v0.1.0-rc.1 (<repo>/crates/hame-session)
+   Compiling tower-http v0.6.11
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling hame-llm v0.1.0-rc.1 (<repo>/crates/hame-llm)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running tests/live_anthropic.rs (target/debug/deps/live_anthropic-8149c21ba485644c)
+
+running 4 tests
+test live_an_image_in_a_tool_result_is_seen ... live: test=tool_result_image model=claude-haiku-5-5 input=460 cache_read=0 cache_write=0 output=22 request_bytes=17403 response_bytes=2630 images=1 image_bytes=12420 ttft_ms=1158 latency_ms=1179 stop=EndTurn raw_usage={"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"inference_geo":"global","input_tokens":460,"output_tokens":22,"output_tokens_details":{"thinking_tokens":18},"service_tier":"standard","speed":"standard"}
+live: test=tool_result_image answer="Red"
+ok
+test live_an_image_in_a_user_message_is_seen ... live: test=user_image model=claude-haiku-5-5 input=59 cache_read=0 cache_write=0 output=10 request_bytes=16956 response_bytes=1420 images=1 image_bytes=12420 ttft_ms=642 latency_ms=768 stop=EndTurn raw_usage={"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"inference_geo":"global","input_tokens":59,"output_tokens":10,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","speed":"standard"}
+live: test=user_image answer="left: blue, right: green"
+ok
+test live_an_image_missing_from_the_store_becomes_a_note ... live: test=missing_image model=claude-haiku-5-5 input=102 cache_read=0 cache_write=0 output=75 request_bytes=518 response_bytes=3336 images=0 image_bytes=0 ttft_ms=720 latency_ms=1174 stop=EndTurn raw_usage={"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"inference_geo":"global","input_tokens":102,"output_tokens":75,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","speed":"standard"}
+live: test=missing_image answer="I did not receive a picture. What came through is a note saying the image was not sent: it is missing from the artifact store, with artifact ID e3e3e3e3e3e3. So the reason given is that the image is missing from the artifact store."
+ok
+test live_cache_reads_and_writes_are_reported_apart ... live: test=cache_first model=claude-haiku-5-5 input=4 cache_read=0 cache_write=8417 output=22 request_bytes=24560 response_bytes=1911 images=0 image_bytes=0 ttft_ms=947 latency_ms=1180 stop=EndTurn raw_usage={"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":8417},"cache_creation_input_tokens":8417,"cache_read_input_tokens":0,"inference_geo":"global","input_tokens":4,"output_tokens":22,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","speed":"standard"}
+live: test=cache_first answer="Hello! It's lovely to meet you. How can I help today?"
+live: test=cache_second model=claude-haiku-5-5 input=4 cache_read=8417 cache_write=0 output=21 request_bytes=24560 response_bytes=1817 images=0 image_bytes=0 ttft_ms=684 latency_ms=1046 stop=EndTurn raw_usage={"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"cache_creation_input_tokens":0,"cache_read_input_tokens":8417,"inference_geo":"global","input_tokens":4,"output_tokens":21,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","speed":"standard"}
+live: test=cache_second answer="Hello! It's lovely to meet you. How can I help?"
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.35s
+

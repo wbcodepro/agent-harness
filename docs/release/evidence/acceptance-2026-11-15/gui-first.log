@@ -1,0 +1,33 @@
+
+running 14 tests
+test a_batch_is_cancelled_between_chunks_and_reports_its_prefix ... ok
+test a_batch_stops_at_an_unexpected_save_sheet ... _LSOpenURLsWithCompletionHandler() failed for the application /System/Applications/TextEdit.app with error -600.
+
+thread 'a_batch_stops_at_an_unexpected_save_sheet' (6377583) panicked at crates/hame-desktop/tests/gui.rs:177:13:
+assertion failed: status.success()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test a_missing_accessibility_permission_is_reported_explicitly ... ok
+test d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy ... ok
+test d03_the_open_panel_takes_keys_and_opens_the_chosen_file ... ok
+test d04_vietnamese_text_persists_exactly_through_set_value_and_type ... ok
+test numbers_cells_are_observed_selected_and_typed_into ... ok
+test return_in_the_save_panel_needs_commit_and_file_write ... ok
+test screenshots_are_scaled_correctly_and_click_at_maps_into_the_window ... ok
+test stale_refs_and_closed_windows_are_rejected ... ok
+test the_clipboard_is_saved_and_restored ... ok
+test tool_level_latency ... tool set_value (no journal): median 6.9 ms, p95 7.6 ms, n=12
+tool windows: median 1.5 ms, p95 2.1 ms, n=12
+tool observe: median 10.4 ms, p95 14.1 ms, n=12
+tool set_value (journalled): median 10.6 ms, p95 11.2 ms, n=12
+ok
+test two_windows_with_the_same_title_are_ambiguous ... ok
+test typing_stops_when_another_window_takes_focus ... ok
+
+failures:
+
+failures:
+    a_batch_stops_at_an_unexpected_save_sheet
+
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.08s
+

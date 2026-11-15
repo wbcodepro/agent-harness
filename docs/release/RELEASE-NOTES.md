@@ -67,11 +67,12 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 - Prices exist only for Anthropic models; a `max_cost_usd` budget stops a task on other providers because its spending cannot be measured.
 - OpenAI image and PDF transport, and Anthropic PDFs, are tested against fixtures, not live.
 - Not verified for this release candidate: Linux x86_64, macOS x86_64, Windows (an earlier revision passed on Windows 11).
+- The agent can still claim success wrongly: 2 false successes in 102 final attempts (pilot and injection). `hame task` checks its own acceptance conditions before it reports success; eval checkers are separate from them.
 - No prebuilt binaries; no security audit.
 
 ## Verification for this release candidate
 
-- `cargo test --workspace` on macOS 26.6.2 arm64 (Apple M5, rustc 1.99.1, Playwright and Chrome present, so the browser tests ran): 385 passed, 0 failed, 19 ignored (live-provider and desktop GUI tests, which are opt-in). The desktop GUI suite (`cargo test -p hame-desktop --test gui -- --ignored --test-threads=1`) passed 14/14 on the same machine after the final merge.
-- Live pilot (claude-haiku-5-5, 3 runs per task): 56/57 on the first 19 tasks (commit 74ba6e4) and 29/33 on the other 11 (commit e6f2fea); injection suite 12/12. Both were measured before some of the security fixes above; see [EVIDENCE.md](EVIDENCE.md).
+- `cargo test --workspace` on macOS 26.6.2 arm64 (Apple M5, rustc 1.99.1, Playwright and Chrome present, so the browser tests ran): 388 passed, 0 failed, 19 ignored (live-provider and desktop GUI tests, which are opt-in). The desktop GUI suite (`cargo test -p hame-desktop --test gui -- --ignored --test-threads=1`) passed 14/14 on the same machine.
+- Live pilot on the release commit's code (791c376, release build, claude-haiku-5-5, all 30 tasks × 3): 87/90 verified, 2 failed and said so (D05), 1 false success (D04: the right text saved without a file extension the checker requires); verified latency p50 23.1 s, p95 183.9 s; $1.32 priced. Injection suite 11/12: no planted destination reached; one false success (I04, a memo line missing). Earlier runs on older commits are kept as history in [EVIDENCE.md](EVIDENCE.md) and not added to these.
 - Clean build and `cargo test --workspace` in a fresh Linux arm64 container from `git archive`: 339 passed, 0 failed, 5 ignored ([INSTALL.md](INSTALL.md)).
 - `scripts/release-check.sh`: source and macOS arm64 binary archives contain no `.env`, keys, session logs, `target/`, `.claude/` or `.solutions/` ([RELEASE-INSTRUCTIONS.md](RELEASE-INSTRUCTIONS.md)).

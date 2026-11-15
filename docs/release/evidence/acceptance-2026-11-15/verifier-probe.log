@@ -1,0 +1,21 @@
+   Compiling tokio-rustls v0.26.6
+   Compiling hame-session v0.1.0-rc.1 (<repo>/crates/hame-session)
+   Compiling hame-kernel v0.1.0-rc.1 (<repo>/crates/hame-kernel)
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling rustls-native-certs v0.8.5
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling hame-tools v0.1.0-rc.1 (<repo>/crates/hame-tools)
+   Compiling hame-llm v0.1.0-rc.1 (<repo>/crates/hame-llm)
+   Compiling hame-agent v0.1.0-rc.1 (<repo>/crates/hame-agent)
+   Compiling hame-sandbox v0.1.0-rc.1 (<repo>/crates/hame-sandbox)
+   Compiling hame-trace v0.1.0-rc.1 (<repo>/crates/hame-trace)
+   Compiling hame-verify v0.1.0-rc.1 (<repo>/crates/hame-verify)
+   Compiling hame-acceptance-probe v0.0.0 (<audit-scratch>)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.18s
+     Running `target/debug/hame-acceptance-probe`
+protected_file: sandbox_read_denied=true, sandbox_symlink_created=true, marker_in_model_feedback=true
+file_absent: metadata_error=FilesystemLoop, actual_directory_entry_exists=true, verified=true
+csv_multiline: actual_records=1, requested_records=1, verified=false, evidence=2 data rows; header ["name", "note"]
+csv_multiline: actual_records=1, requested_records=2, verified=true, evidence=2 data rows; header ["name", "note"]
+csv_ragged: data_columns=1, header_columns=2, verified=true

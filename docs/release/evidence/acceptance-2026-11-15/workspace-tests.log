@@ -1,0 +1,781 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running unittests src/lib.rs (target/debug/deps/hame_acp-a56e2bfedcd15871)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/conformance.rs (target/debug/deps/conformance-86d4481ca34c279e)
+
+running 1 test
+test every_message_matches_the_official_protocol_types ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-707fb8881098ffc5)
+
+running 3 tests
+test tool_result_images_go_out_as_image_content_and_missing_ones_are_reported ... ok
+test a_prompt_streams_updates_and_asks_permission_for_changes ... ok
+test a_turn_can_be_cancelled_and_the_session_loaded_again ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_agent-9e06384441c31e14)
+
+running 1 test
+test tests::wrapped_arguments_are_recovered_and_unfinished_ones_are_not ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/durable.rs (target/debug/deps/durable-52342bcf95de9c82)
+
+running 4 tests
+test a_version_1_log_opens_derives_the_same_history_and_takes_new_turns ... ok
+test a_turn_cancelled_mid_action_reports_it_as_outcome_unknown ... ok
+test an_image_survives_tool_log_history_request_and_a_restart ... ok
+test each_step_logs_its_settled_receipts_once_in_the_session_that_made_them ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/turn.rs (target/debug/deps/turn-9d8b3ba8b7276efe)
+
+running 16 tests
+test a_prompt_too_long_for_the_window_is_compacted_and_sent_again ... ok
+test an_answer_cut_off_by_the_output_limit_is_asked_to_carry_on ... ok
+test a_message_sent_mid_turn_reaches_the_model_at_the_next_step ... ok
+test a_pipeline_layer_can_deny_a_tool_and_the_model_is_told ... ok
+test a_change_can_carry_the_command_that_checks_it ... ok
+test a_hook_that_speaks_first_does_not_hide_the_change_from_later_hooks ... ok
+test a_turn_runs_tools_and_feeds_their_results_back_to_the_model ... ok
+test a_hook_can_keep_the_turn_going_when_the_model_tries_to_stop ... ok
+test a_response_cut_off_midway_is_asked_for_again ... ok
+test deferred_tools_are_found_by_search_and_run_under_their_own_names ... ok
+test an_identical_long_result_is_pointed_at_not_repeated ... ok
+test truncated_tool_calls_are_not_run_and_step_limits_end_the_turn ... ok
+test read_only_calls_issued_together_overlap_and_writes_stay_in_order ... ok
+test the_model_is_warned_a_few_requests_before_the_turn_runs_out ... ok
+test replaying_the_recording_lifted_from_a_log_reproduces_the_log ... ok
+test a_failed_request_closes_the_turn_and_the_session_stays_usable ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.69s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_app-76e1a76dc224150d)
+
+running 4 tests
+test tests::a_rename_stops_at_a_file_a_rule_protects ... ok
+test tests::hames_own_data_is_hidden_from_tools_except_spill_and_worktrees ... ok
+test tests::command_checks_run_confined ... ok
+test import::tests::a_dsh_log_becomes_a_session_the_model_can_continue ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/multi.rs (target/debug/deps/multi-0bd3804952fd563e)
+
+running 6 tests
+test a_model_profile_narrows_the_tools_and_picks_the_edit_format ... ok
+test a_reviewing_model_approves_only_what_is_plainly_harmless ... ok
+test explorers_cannot_write_and_the_tree_budget_stops_everyone ... ok
+test hooks_written_for_claude_code_run_when_the_user_opts_in ... ok
+test a_plugin_packaged_for_claude_code_brings_its_skills_hooks_and_servers ... ok
+test an_isolated_subagent_works_on_its_own_branch_and_reports_back ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_browser-e935c8f6b71fa972)
+
+running 9 tests
+test tests::visual_observations_keep_only_actionable_lines ... ok
+test tests::batch_can_be_left_out_of_the_schema ... ok
+test tests::a_saved_file_is_read_back_only_when_unchanged ... ok
+test tests::the_schema_is_one_object_tool_with_an_action ... ok
+test tests::urls_reach_the_helper_as_the_browser_reads_them ... ok
+test tests::the_idempotency_key_ignores_when_and_follows_what ... ok
+test tests::a_batch_is_refused_when_turned_off ... ok
+test tests::paths_stay_inside_the_workspace ... ok
+test tests::a_download_never_goes_through_a_link ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/browser.rs (target/debug/deps/browser-81581f0bd540a614)
+
+running 15 tests
+test b03_the_right_file_is_uploaded_to_the_right_record ... ok
+test a_ref_is_stale_after_the_dom_changes_or_the_page_navigates ... ok
+test an_unexpected_dialog_stops_a_batch_and_reports_the_completed_prefix ... ok
+test a_redirect_written_with_backslashes_cannot_leave_the_granted_origins ... ok
+test b02_filtered_paginated_extraction_returns_all_and_only_matching_rows ... ok
+test b01_duplicate_label_form_is_submitted_exactly_once ... ok
+test b05_a_preference_changes_in_one_profile_only ... ok
+test a_submit_needs_a_commit_grant_and_a_screenshot_needs_screen ... ok
+test downloads_never_write_through_links_or_over_existing_files ... ok
+test b04_a_delayed_date_range_csv_download_completes_with_the_right_content ... ok
+test each_batch_step_goes_through_the_policy_pipeline ... ok
+test injected_page_text_changes_no_grant_and_other_origins_are_refused ... ok
+test a_crash_after_a_submit_leaves_the_outcome_unknown_and_blocks_a_blind_retry ... ok
+test vietnamese_text_is_filled_and_persisted_exactly ... ok
+test hidden_covered_or_disabled_controls_are_not_actionable ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.70s
+
+     Running tests/helper.rs (target/debug/deps/helper-73eca3befa97fae1)
+
+running 1 test
+test the_helper_saves_and_reads_files_without_following_links_and_resolves_redirects_like_chrome ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_checkpoint-a92460b042501acc)
+
+running 2 tests
+test tests::a_project_with_its_own_repository_is_left_untouched ... ok
+test tests::restore_brings_back_an_earlier_workspace_and_can_be_undone ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running unittests src/main.rs (target/debug/deps/hame-71ef94cd169d7f56)
+
+running 12 tests
+test run::tests::a_run_that_keeps_resending_uncached_history_is_called_out ... ok
+test eval::tests::the_setting_that_solves_more_wins_and_tokens_break_ties ... ok
+test setup::tests::a_saved_key_replaces_the_old_one_and_keeps_other_lines ... ok
+test setup::tests::the_artifact_store_must_be_writable_or_creatable ... ok
+test run::tests::inbox_messages_are_queued_once_in_name_order ... ok
+test eval::tests::the_suite_is_hidden_from_the_agent_whatever_the_config_says ... ok
+test eval::tests::changes_and_protected_paths_are_found_by_hash ... ok
+test eval::tests::tasks_inherit_the_users_acceptance_of_a_partial_sandbox ... ok
+test workflow::tests::invalid_missing_and_unsafe_names_are_refused ... ok
+test setup::tests::computer_requirements_fail_only_when_the_tools_are_turned_on ... ok
+test setup::tests::settings_are_merged_into_an_existing_config ... ok
+test workflow::tests::trust_records_the_exact_version_and_an_edit_revokes_it ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/acp.rs (target/debug/deps/acp-d49fc15da194c4a9)
+
+running 1 test
+test an_editor_can_run_a_confined_turn_over_stdio ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.16s
+
+     Running tests/acp_official_client.rs (target/debug/deps/acp_official_client-aef631d6739b82a2)
+
+running 1 test
+test the_official_client_runtime_can_run_a_turn_with_permission ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/pilot.rs (target/debug/deps/pilot-2910db621e3fa387)
+
+running 5 tests
+test live_fixtures_faults_and_resumption_run_around_the_agent ... ok
+test a_user_correction_reaches_the_running_turn_or_follows_it ... ok
+test office_and_cross_app_checkers_pass_their_offline_tests ... ok
+test eval_records_every_attempt_with_verification_in_its_time_and_compares_arms ... ok
+test every_pilot_checker_fails_the_fixture_and_passes_the_reference_solution ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.90s
+
+     Running tests/run.rs (target/debug/deps/run-4ae2f3fa14e96e22)
+
+running 7 tests
+test a_missing_api_key_is_reported_before_any_session_is_created ... ok
+test killed_mid_tool_the_model_is_told_the_call_may_have_taken_effect ... ok
+test unconfined_tools_need_approval_and_nobody_is_there_to_give_it ... ok
+test a_scripted_run_edits_the_workspace_and_prints_the_answer ... ok
+test programs_can_read_the_outcome_as_json ... ok
+test killed_mid_stream_the_session_resumes_with_the_partial_answer_kept_aside ... ok
+test setup_saves_a_key_that_doctor_then_finds ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
+
+     Running tests/sandbox.rs (target/debug/deps/sandbox-b03f3c9ca66dd985)
+
+running 10 tests
+    Finished `release` profile [optimized] target(s) in 0.07s
+test granted_secrets_reach_tools_but_never_the_log ... ok
+test large_outputs_are_spilled_to_a_file_the_tools_can_read ... ok
+test hash_anchored_reads_and_edits_run_in_the_confined_worker ... ok
+test the_network_is_limited_to_the_allowlist ... ok
+test checks_hold_the_turn_open_until_they_pass ... ok
+test read_only_mode_and_rules_are_enforced ... ok
+test rewind_restores_the_workspace_and_forks_the_session ... ok
+test confined_tools_cannot_write_outside_the_workspace_or_read_secrets ... ok
+test skills_hooks_mcp_servers_and_plugins_extend_one_agent ... ok
+test a_command_past_its_limit_runs_on_confined_and_ends_with_hame ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+
+     Running tests/sandbox_windows.rs (target/debug/deps/sandbox_windows-86ec842c179bc228)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_context-c4703ad48095342e)
+
+running 15 tests
+test compact::tests::transcripts_are_plain_text_with_clipped_results ... ok
+test condense::tests::ordinary_output_is_left_alone ... ok
+test condense::tests::other_runners_are_recognised ... ok
+test condense::tests::passing_lines_go_and_everything_else_stays_as_printed ... ok
+test spill::tests::long_output_is_saved_whole_and_previewed ... ok
+test instructions::tests::user_then_project_instructions_without_duplicates ... ok
+test compact::tests::token_estimates_prefer_the_provider_count ... ok
+test compact::tests::a_threshold_below_the_fixed_prompt_cost_does_not_compact_every_step ... ok
+test spill::tests::passing_tests_are_left_out_of_a_command_and_saved ... ok
+test compact::tests::a_summary_by_the_session_model_reuses_the_conversation_prefix ... ok
+test compact::tests::an_overflow_compacts_below_the_threshold_from_a_transcript ... ok
+test compact::tests::bulky_old_outputs_are_cleared_before_anything_is_summarized ... ok
+test compact::tests::a_summary_that_calls_a_tool_falls_back_to_a_transcript ... ok
+test compact::tests::compaction_summarizes_old_steps_and_keeps_recent_ones_verbatim ... ok
+test compact::tests::compaction_keeps_task_facts_receipts_and_artifact_provenance_verbatim ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/live_compaction.rs (target/debug/deps/live_compaction-df881bd2e319799d)
+
+running 1 test
+test a_summary_by_the_session_model_is_read_from_the_cache ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_desktop-fd9aae850a5ba1a7)
+
+running 40 tests
+test caps::tests::commit_names_are_whole_words ... ok
+test caps::tests::capability_mapping_follows_the_operation_and_the_control ... ok
+test caps::tests::the_helpers_answers_are_read_strictly ... ok
+test caps::tests::command_keys_follow_what_they_do ... ok
+test keys::tests::combos_parse_to_key_codes_and_ordered_modifiers ... ok
+test caps::tests::return_is_a_commit_except_in_a_document_text_area ... ok
+test caps::tests::newlines_and_spaces_in_typed_text_follow_the_key_rules ... ok
+test caps::tests::a_click_is_classified_by_the_control_under_the_point ... ok
+test caps::tests::space_and_delete_are_commits_unless_focus_takes_text ... ok
+test protocol::tests::requests_and_responses_are_single_json_lines ... ok
+test protocol::tests::the_handshake_checks_versions_channel_and_nested_usage ... ok
+test render::tests::table_cells_show_their_address_and_selections_read_back ... ok
+test render::tests::observations_render_full_refs_dialogs_and_untrusted_text_on_one_line ... ok
+test tests::a_path_is_refused_in_a_save_panels_name_field ... ok
+test tests::a_commit_with_a_prior_effect_is_refused_until_reconciled ... ok
+test protocol::tests::a_wrong_handshake_or_a_dead_helper_is_reported ... ok
+test tests::batch_can_be_turned_off ... ok
+test tests::failures_carry_candidates_and_the_emitted_prefix ... ok
+test tests::idempotency_keys_name_the_effect_not_the_time ... ok
+test tests::input_naming_only_the_app_stops_when_focus_moved_to_another_window ... ok
+test tests::refs_must_name_their_observation ... ok
+test tests::refusals_name_the_missing_capability ... ok
+test protocol::tests::the_cache_key_follows_the_source ... ok
+test lease::tests::only_one_holder_at_a_time_and_release_on_drop ... ok
+test tests::the_schema_is_one_compact_object_tool ... ok
+test visual::tests::a_window_with_a_title_bar_or_text_is_not_blank ... ok
+test visual::tests::downscaled_capture_maps_through_the_crop_not_the_pixels ... ok
+test visual::tests::flat_and_transparent_captures_are_blank ... ok
+test visual::tests::monitors_left_of_and_above_the_primary_have_negative_origins ... ok
+test visual::tests::points_outside_the_image_are_refused_and_round_trips_hold ... ok
+test visual::tests::retina_capture_at_full_resolution_maps_pixels_to_points ... ok
+test tests::a_password_typed_into_a_secure_field_stays_out_of_receipts ... ok
+test tests::a_path_typed_into_the_save_name_field_is_refused_before_anything_is_sent ... ok
+test tests::an_unknown_focus_needs_the_stricter_set ... ok
+test tests::a_click_on_an_unclassifiable_point_needs_commit ... ok
+test tests::a_newline_typed_into_a_single_line_field_needs_commit ... ok
+test tests::newlines_in_a_document_text_area_need_only_global_input ... ok
+test tests::return_on_a_dialog_button_needs_commit_and_nothing_is_sent_without_it ... ok
+test tests::a_click_on_a_send_button_is_a_commit_with_duplicate_protection ... ok
+test tests::return_in_a_save_panel_needs_file_write_and_is_journalled_as_a_commit ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+
+     Running tests/gui.rs (target/debug/deps/gui-0325d34a95e30c90)
+
+running 14 tests
+test a_batch_is_cancelled_between_chunks_and_reports_its_prefix ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test a_batch_stops_at_an_unexpected_save_sheet ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test a_missing_accessibility_permission_is_reported_explicitly ... ignored, builds and runs the desktop helper; run with --ignored --test-threads=1
+test d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test d03_the_open_panel_takes_keys_and_opens_the_chosen_file ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test d04_vietnamese_text_persists_exactly_through_set_value_and_type ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test numbers_cells_are_observed_selected_and_typed_into ... ignored, drives Numbers; run with --ignored --test-threads=1
+test return_in_the_save_panel_needs_commit_and_file_write ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test screenshots_are_scaled_correctly_and_click_at_maps_into_the_window ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test stale_refs_and_closed_windows_are_rejected ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test the_clipboard_is_saved_and_restored ... ignored, uses the desktop helper and the clipboard; run with --ignored --test-threads=1
+test tool_level_latency ... ignored, drives TextEdit; run with --ignored --test-threads=1 --nocapture
+test two_windows_with_the_same_title_are_ambiguous ... ignored, drives TextEdit; run with --ignored --test-threads=1
+test typing_stops_when_another_window_takes_focus ... ignored, drives TextEdit; run with --ignored --test-threads=1
+
+test result: ok. 0 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_eval-197ab92856b82d45)
+
+running 17 tests
+test arms::tests::runs_are_interleaved_and_arm_order_rotates ... ok
+test manifest::tests::prompt_variables_are_substituted ... ok
+test report::tests::a_claim_needs_a_normal_end_and_no_reported_blocker ... ok
+test report::tests::outcomes_distinguish_false_success_from_honest_failure ... ok
+test report::tests::percentiles_interpolate ... ok
+test report::tests::summaries_count_every_attempt_and_leave_undefined_costs_undefined ... ok
+test tests::a_log_without_a_journal_still_yields_a_playable_recording ... ok
+test arms::tests::settings_parse_as_toml_values_with_an_optional_arm ... ok
+test arms::tests::arms_combine_a_base_or_file_with_their_overrides ... ok
+test arms::tests::task_settings_merge_under_the_arms ... ok
+test manifest::tests::tree_hashes_follow_content_and_paths ... ok
+test report::tests::arms_are_compared_task_by_task ... ok
+test manifest::tests::the_older_layout_loads_into_the_same_shape ... ok
+test manifest::tests::a_manifest_parses_with_defaults_and_extension_points ... ok
+test report::tests::the_bootstrap_is_reproducible_from_its_seed_and_brackets_the_mean ... ok
+test tests::recordings_round_trip_through_a_file_and_exhaustion_is_an_error ... ok
+test tests::replaying_a_recording_reproduces_the_log_byte_for_byte ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_ext-bd796a520a08f415)
+
+running 40 tests
+test lsp::tests::uris_escape_what_paths_may_contain ... ok
+test claude_hooks::tests::the_protocols_exit_codes_and_json_are_read_as_documented ... ok
+test commands::tests::agent_files_give_instructions_and_a_tool_list ... ok
+test lsp::text_tests::both_shapes_of_workspace_edit_are_read ... ok
+test claude_plugin::tests::a_plugin_directory_gives_its_name_skills_hooks_and_servers ... ok
+test lsp::text_tests::positions_count_utf16_units_within_a_line ... ok
+test lsp::text_tests::uris_name_files_on_either_kind_of_system ... ok
+test lsp::text_tests::edits_apply_whatever_order_they_come_in ... ok
+test commands::tests::commands_expand_with_their_arguments_and_paths_are_left_alone ... ok
+test lsp::text_tests::a_long_list_of_references_is_cut_with_a_count ... ok
+test hooks::tests::hooks_see_the_call_and_can_object_before_or_after ... ok
+test mcp::tests::a_server_that_cannot_start_or_dies_is_an_error_not_a_hang ... ok
+test lsp::tests::without_a_server_that_can_the_model_is_sent_back_to_grep ... ok
+test mcp::tests::header_values_expand_names_and_leave_other_dollars_alone ... ok
+test mcp::tests::header_values_that_are_not_plain_ascii_are_wrapped_in_base64 ... ok
+test claude_hooks::tests::tool_hooks_see_claude_style_calls_and_can_block_rewrite_and_comment ... ok
+test mcp::tests::a_mixed_result_keeps_text_images_and_structured_data ... ok
+test lsp::tests::references_are_listed_by_file_and_line ... ok
+test mcp::tests::a_confined_server_cannot_write_outside_the_workspace ... ok
+test mcp_auth::tests::real_servers_describe_themselves_the_way_discovery_expects ... ignored
+test lsp::tests::a_rename_changes_every_file_or_none ... ok
+test mcp_auth::tests::the_challenge_header_is_read_quoted_or_not ... ok
+test mcp::tests::content_too_large_or_malformed_is_described_not_stored ... ok
+test mcp::tests::a_server_that_only_speaks_the_stateless_revision_is_found_and_used ... ok
+test mcp::tests::tools_are_listed_across_pages_and_called ... ok
+test skill_install::tests::a_marketplace_catalogue_says_where_each_plugin_is ... ok
+test script::tests::calls_made_by_a_script_are_ruled_on_like_any_other ... ok
+test skill_install::tests::a_plugin_is_scanned_as_a_whole_before_it_is_installed ... ok
+test skills::tests::skills_are_discovered_listed_and_loaded_on_demand ... ok
+test script::tests::inner_calls_to_confined_tools_go_through_the_runner ... ok
+    Finished `release` profile [optimized] target(s) in 0.00s
+test skill_install::tests::a_plain_skill_installs_and_a_trapped_one_is_refused ... ok
+test script::tests::a_script_chains_calls_and_returns_only_what_it_prints ... ok
+test mcp::tests::the_stateless_revision_over_http_sends_its_headers_and_no_session ... ok
+test mcp_auth::tests::a_client_id_from_the_provider_skips_registration ... ok
+test mcp_auth::tests::signing_in_proves_itself_with_pkce_and_tokens_renew_themselves ... ok
+test mcp_auth::tests::an_answer_that_is_not_to_our_request_or_a_wrong_code_gives_no_tokens ... ok
+test mcp::tests::a_server_over_http_is_used_like_a_local_one ... ok
+test wasm::tests::a_plugin_declares_tools_and_reads_only_what_it_was_granted ... ok
+test lsp::tests::diagnostics_follow_the_file_as_it_changes ... ok
+test wasm::tests::runaway_and_broken_plugins_are_stopped ... ok
+
+test result: ok. 39 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_kernel-497adcb1356ff71a)
+
+running 7 tests
+test paths::tests::only_drive_paths_lose_the_verbatim_prefix ... ok
+test bus::tests::delivers_in_order_until_unsubscribed ... ok
+test services::tests::providers_are_swappable_behind_a_trait_key ... ok
+test chain::tests::an_empty_chain_runs_the_terminal ... ok
+test chain::tests::a_layer_can_short_circuit_and_be_removed ... ok
+test chain::tests::layers_wrap_the_terminal_outermost_first ... ok
+test shell::tests::git_bash_is_found_wherever_git_is_installed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_llm-a7023c1e71ead41b)
+
+running 30 tests
+test anthropic::tests::recorded_usage_is_normalized_without_double_counting ... ok
+test anthropic::tests::images_and_documents_go_natively_and_what_cannot_go_is_named ... ok
+test anthropic::tests::a_refusal_that_names_nothing_we_sent_is_not_retried ... ok
+test chat_completions::tests::a_stream_that_stops_early_is_an_error_after_its_deltas ... ok
+test chat_completions::tests::a_tool_call_that_never_started_is_a_protocol_error ... ok
+test chat_completions::tests::cached_prompt_tokens_are_counted_once_for_each_provider ... ok
+test anthropic::tests::streams_a_response_and_sends_history_in_the_wire_shape ... ok
+test anthropic::tests::a_declined_response_continues_on_the_fallback_model ... ok
+test chat_completions::tests::the_cache_key_is_sent_only_to_openai_itself ... ok
+test chat_completions::tests::interleaved_tool_calls_come_out_whole_and_in_index_order ... ok
+test credit_tests::a_prompt_too_long_for_the_window_is_recognized ... ok
+test chat_completions::tests::streams_text_thinking_and_parallel_tool_calls ... ok
+test credit_tests::a_requested_wait_is_honoured_up_to_a_ceiling ... ok
+test credit_tests::an_account_out_of_credit_says_what_to_do ... ok
+test media::tests::known_families_resolve_to_their_capabilities ... ok
+test anthropic::tests::rejected_thinking_is_retried_without_it_and_not_sent_again ... ok
+test media::tests::the_test_png_is_a_png ... ok
+test anthropic::tests::what_an_older_model_does_not_accept_is_left_out_from_then_on ... ok
+test responses::tests::a_response_streams_and_its_reasoning_goes_back_on_the_next_step ... ok
+test anthropic::tests::refusals_overload_and_cut_streams_are_distinguished ... ok
+test chat_completions::tests::retries_before_the_stream_starts_but_not_client_errors ... ok
+test responses::tests::cached_input_is_counted_once ... ok
+test anthropic::tests::the_call_reports_what_it_sent_and_received ... ok
+test responses::tests::rejected_reasoning_is_dropped_and_failures_are_reported ... ok
+test responses::tests::the_conversation_is_named_so_its_requests_share_a_cache ... ok
+test media::tests::a_pdf_goes_as_a_document_only_where_the_model_takes_them ... ok
+test media::tests::an_image_is_sent_or_described_with_the_reason ... ok
+test chat_completions::tests::tool_images_follow_the_tool_messages_for_a_vision_model_only ... ok
+test responses::tests::images_go_as_input_images_in_user_turns_and_function_output ... ok
+test chat_completions::tests::a_wait_asked_for_by_the_provider_is_kept_or_reported ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+
+     Running tests/live_anthropic.rs (target/debug/deps/live_anthropic-b7d72780a834ea9c)
+
+running 4 tests
+test live_an_image_in_a_tool_result_is_seen ... ignored, calls the real Anthropic API; set HAME_LIVE_ANTHROPIC=1
+test live_an_image_in_a_user_message_is_seen ... ignored, calls the real Anthropic API; set HAME_LIVE_ANTHROPIC=1
+test live_an_image_missing_from_the_store_becomes_a_note ... ignored, calls the real Anthropic API; set HAME_LIVE_ANTHROPIC=1
+test live_cache_reads_and_writes_are_reported_apart ... ignored, calls the real Anthropic API; set HAME_LIVE_ANTHROPIC=1
+
+test result: ok. 0 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_multi-b7c3125a4fda18b3)
+
+running 3 tests
+test review::tests::a_report_of_no_findings_is_clean ... ok
+test review::tests::the_request_is_the_first_message_the_user_wrote_this_turn ... ok
+test board::tests::agents_share_one_board_through_a_file ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/review.rs (target/debug/deps/review-a877364e341d45d7)
+
+running 3 tests
+test a_turn_that_changed_nothing_is_not_reviewed ... ok
+test a_clean_review_lets_the_turn_end ... ok
+test findings_go_back_to_the_agent_once ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_policy-0a51c156e9b4dd7d)
+
+running 17 tests
+test layers::tests::application_tools_follow_a_deny_default_but_are_not_asked_about ... ok
+test config::tests::an_empty_file_gives_safe_defaults ... ok
+test layers::tests::a_call_a_person_approved_says_so_in_its_result ... ok
+test layers::tests::globs_match_literally_except_for_stars ... ok
+test layers::tests::redaction_wraps_whatever_ran_beneath_it ... ok
+test config::computer_tests::computer_grants_parse_and_scope_authorization ... ok
+test layers::tests::an_allow_rule_covers_a_line_only_if_it_covers_every_command ... ok
+test layers::tests::asking_with_nobody_there_denies_and_reads_never_ask ... ok
+test secrets::tests::a_secret_containing_another_is_replaced_whole ... ok
+test layers::tests::rules_apply_in_order_then_the_default ... ok
+test shell::tests::every_command_a_line_would_run_is_found ... ok
+test gitguard::tests::a_repository_the_call_creates_is_left_alone ... ok
+test secrets::tests::env_files_are_parsed_and_values_redacted ... ok
+test config::tests::settings_parse_and_typos_are_errors ... ok
+test gitguard::tests::making_an_existing_hook_file_executable_is_undone_too ... ok
+test readfirst::tests::an_existing_file_must_be_read_before_it_is_overwritten ... ok
+test gitguard::tests::planted_hooks_and_config_changes_are_undone_and_reported ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_sandbox-08633e6cea31c7db)
+
+running 7 tests
+test seatbelt::tests::paths_are_quoted_for_the_profile_language ... ok
+test proxy::tests::allowlist_matches_hosts_subdomains_and_ports ... ok
+test intercept::tests::placeholders_are_replaced_in_the_head_only_for_their_hosts ... ok
+test proxy::tests::forwards_allowed_requests_and_refuses_the_rest ... ok
+test seatbelt::tests::read_only_mode_cannot_write_even_in_the_working_directory ... ok
+test seatbelt::tests::workspace_mode_confines_writes_and_hides_secrets ... ok
+test proxy::tests::a_secret_reaches_its_host_without_ever_being_in_the_sandbox ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_session-a45571b4470fb24b)
+
+running 9 tests
+test artifact::tests::crop_transform_maps_model_points_back_to_the_screen ... ok
+test model::tests::a_model_handover_voids_the_first_models_reasoning_and_tool_calls ... ok
+test model::tests::assemble_merges_fragments_and_keeps_truncated_tool_input ... ok
+test model::tests::session_ids_cannot_escape_the_store ... ok
+test contract::tests::grants_are_scoped_by_channel_origin_profile_and_capability ... ok
+test model::tests::signatures_close_thinking_blocks_and_survive_the_log ... ok
+test model::tests::records_use_stable_wire_names ... ok
+test contract::tests::the_journal_survives_a_crash_and_blocks_a_duplicate_effect ... ok
+test artifact::tests::put_is_atomic_content_addressed_and_verified ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/durable.rs (target/debug/deps/durable-23d82a3979b502e3)
+
+running 7 tests
+test receipts_settled_after_the_last_look_are_taken_once ... ok
+test a_cancelled_turn_settles_abandoned_actions_like_a_crash ... ok
+test an_action_dispatched_before_a_crash_is_reported_as_outcome_unknown_and_never_replayed ... ok
+test a_fork_shares_artifacts_and_keeps_every_receipt ... ok
+test a_missing_or_corrupt_artifact_is_detected_and_history_still_derives ... ok
+test only_recent_images_are_shown_and_masking_clears_images_too ... ok
+test garbage_collection_removes_old_orphans_only ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/store.rs (target/debug/deps/store-65d906bbf45db319)
+
+running 8 tests
+test only_one_writer_can_hold_a_session ... ok
+test a_stream_cut_mid_response_is_kept_as_an_attempt_outside_history ... ok
+test recovery_says_which_tool_calls_had_started ... ok
+test a_written_session_reads_back_and_projects_model_history ... ok
+test corruption_before_the_tail_is_reported_not_repaired ... ok
+test compaction_hides_covered_messages_without_touching_the_log ... ok
+test a_fork_copies_a_prefix_and_closes_a_turn_cut_in_the_middle ... ok
+test a_log_cut_at_any_byte_reopens_as_a_well_formed_session ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.39s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_tools-506ca4cef3178b0d)
+
+running 36 tests
+test files::tests::a_failed_edit_says_where_the_text_stops_matching ... ok
+test files::tests::an_empty_old_string_is_answered_with_how_to_add_lines ... ok
+test files::tests::read_reports_problems_the_model_can_act_on ... ok
+test files::tests::edit_requires_one_exact_match_unless_replacing_all ... ok
+test files::tests::whitespace_slips_do_not_fail_an_edit_but_ambiguity_does ... ok
+test files::tests::write_then_read_pages_through_numbered_lines ... ok
+test bash::tests::a_failure_hidden_behind_a_pipe_is_still_a_failure ... ok
+test bash::tests::reports_output_streams_and_exit_code ... ok
+test hashline::tests::a_stale_anchor_writes_nothing_and_says_what_is_there_now ... ok
+test hashline::tests::several_edits_apply_together_and_overlapping_ones_are_refused ... ok
+test hashline::tests::anchors_from_read_are_what_edit_lines_takes ... ok
+test hashline::tests::windows_line_endings_are_kept ... ok
+test files::tests::repeating_an_edit_that_was_already_made_is_recognized ... ok
+test files::tests::changing_a_signature_says_where_else_it_is_used ... ok
+test jobs::tests::job_ids_cannot_reach_outside_the_job_directory ... ok
+test patch::tests::a_move_never_lands_on_a_file_that_is_there ... ok
+test hashline::tests::the_result_says_what_edit_would_about_syntax_and_uses ... ok
+test patch::tests::a_patch_that_does_not_fully_apply_changes_nothing ... ok
+test bash::tests::the_end_of_very_long_output_is_kept ... ok
+test patch::tests::two_sections_for_one_file_are_refused ... ok
+test patch::tests::common_slips_in_a_patch_are_tolerated ... ok
+test search::tests::definitions_come_from_the_syntax_tree_not_from_look_alike_text ... ok
+test search::tests::a_changed_signature_names_the_tests_that_call_it_and_how_to_run_them ... ok
+test patch::tests::a_patch_adds_updates_renames_and_deletes_files ... ok
+test search::tests::glob_lists_matching_files_and_skips_ignored_ones ... ok
+test tests::builtin_tools_have_unique_names_and_object_schemas ... ok
+test tests::truncation_keeps_both_ends_and_respects_char_boundaries ... ok
+test bash::tests::huge_output_is_capped_not_buffered ... ok
+test search::tests::repo_map_ranks_files_by_how_much_others_refer_to_them ... ok
+test search::tests::grep_reports_path_line_and_text_within_limits ... ok
+test files::tests::a_change_that_breaks_the_syntax_is_reported_with_the_change ... ok
+test files::tests::writing_a_fragment_over_a_file_is_pointed_out ... ok
+test bash::tests::a_background_process_does_not_hold_the_call_open ... ok
+test jobs::tests::a_command_past_its_limit_finishes_in_the_background ... ok
+test jobs::tests::a_background_job_can_be_waited_on_in_pieces_and_stopped ... ok
+test bash::tests::stopping_a_command_past_its_limit_kills_the_whole_process_group ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_trace-9d57eaf6ade3c1fa)
+
+running 4 tests
+test tariff::tests::unknown_models_have_no_cost_not_zero ... ok
+test tariff::tests::ids_match_exactly_or_with_a_snapshot_date ... ok
+test tariff::tests::haiku_5_5_has_a_long_prompt_price ... ok
+test tariff::tests::each_token_class_is_priced_at_its_own_rate ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/trace.rs (target/debug/deps/trace-73680d6267e7dcd0)
+
+running 6 tests
+test an_unknown_nested_component_makes_usage_incomplete ... ok
+test the_file_holds_every_record_and_interrupted_spans_are_visible ... ok
+test provider_usage_fixtures_are_not_double_counted ... ok
+test a_response_that_broke_midway_makes_usage_incomplete_and_is_not_retried_here ... ok
+test spans_nest_under_the_code_that_started_them_with_monotonic_times ... ok
+test retries_are_one_span_each_and_their_tokens_are_counted_once ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_tui-c385cf20c498ce99)
+
+running 4 tests
+test app::tests::images_and_files_show_as_one_line_descriptions ... ok
+test app::tests::loading_a_session_shows_messages_once_and_wraps_long_lines ... ok
+test app::tests::a_turn_renders_as_it_streams ... ok
+test app::tests::the_input_box_reflects_approval_and_busy_states ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/drive.rs (target/debug/deps/drive-864b48a9901c04cc)
+
+running 2 tests
+test escape_cancels_a_running_turn_and_plan_mode_removes_write_tools ... ok
+test typing_a_request_runs_a_turn_with_approval_and_rewind_undoes_it ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_verify-3c23920d6a1c1683)
+
+running 23 tests
+test facts::tests::only_plain_commands_are_carried_to_later_sessions ... ok
+test budget::tests::tokens_and_time_are_counted_from_the_task_start ... ok
+test escalate::tests::the_third_identical_result_in_a_row_is_pointed_out ... ok
+test escalate::tests::a_check_that_keeps_failing_differently_is_pointed_out_too ... ok
+test escalate::tests::a_different_result_from_the_same_call_starts_the_count_over ... ok
+test outcome::tests::live_state_predicates_need_a_probe_and_never_pass_without_one ... ok
+test redcheck::tests::a_shortened_command_is_marked_as_shortened ... ok
+test task_file::tests::task_files_parse_validate_and_render ... ok
+test outcome::tests::conditions_that_check_nothing_never_pass ... ok
+test outcome::tests::command_checks_run_through_the_confinement ... ok
+test facts::tests::only_a_shell_saying_so_counts_as_not_found ... ok
+test redcheck::tests::a_check_left_running_in_the_background_is_not_evidence ... ok
+test redcheck::tests::evidence_is_what_ran_after_the_last_change ... ok
+test redcheck::tests::stopping_on_a_failing_check_sends_the_model_back_twice_at_most ... ok
+test tests::passing_checks_let_the_turn_end ... ok
+test outcome::tests::file_predicates_check_the_real_state ... ok
+test facts::tests::facts_come_from_what_was_run_and_are_dropped_when_disproved ... ok
+test workflow::tests::workflows_need_steps_and_postconditions_and_reject_bad_names ... ok
+test workflow::tests::parameters_in_command_checks_stay_one_word ... ok
+test tests::failing_checks_are_reported_until_the_round_limit ... ok
+test tests::the_checklist_is_asked_once_and_only_after_the_checks_pass ... ok
+test workflow::tests::only_trusted_versions_run_and_drift_stops_before_any_step ... ok
+test escalate::tests::repeated_trouble_hands_the_turn_to_the_stronger_model_and_the_next_turn_back ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (target/debug/deps/hame_web-0d4b85c8d407f4b8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api.rs (target/debug/deps/api-ac30113aa9eec11a)
+
+running 3 tests
+test artifacts_are_served_only_to_a_session_that_refers_to_them ... ok
+test a_page_runs_a_turn_answers_an_approval_and_can_reload ... ok
+test the_api_needs_the_token_and_a_turn_can_be_stopped ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+   Doc-tests hame_acp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_agent
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_app
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_browser
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_checkpoint
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_context
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_eval
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_ext
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_kernel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_llm
+
+running 1 test
+test crates/hame-llm/src/media.rs - media::ModelProfile (line 36) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+all doctests ran in 1.15s; merged doctests compilation took 0.63s
+   Doc-tests hame_multi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_policy
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_sandbox
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_session
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_tools
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_trace
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_tui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_verify
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hame_web
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
