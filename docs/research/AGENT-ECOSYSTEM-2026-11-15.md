@@ -236,5 +236,4 @@ UI around review and remote machines, outside hame's scope.
 | `send_message` between running agents | Claude Code agent teams | unit and integration tests |
 | `repo_map` `symbol` (callers, callees) | graphify | unit test; on hame finds callers graphify missed |
 | Desktop `observe` `skeleton` / `root` | agent-desktop | GUI test |
-| `[computer] desktop_helper` (helper through a command, e.g. SSH to a VM) | Tart, Lume, Cua | GUI test with a local launcher; no real VM (disk) |
 | Desktop background mode, `save`, `new_document`, `open_file` | Cua Driver, agent-desktop, own probes | see BACKGROUND-EXECUTION-2026-11-15.md |

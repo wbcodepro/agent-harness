@@ -192,11 +192,8 @@ taking the foreground costs the user nothing.
    window, unexpected sheets, read-back of the value after typing) and
    recording which apps accept it. Do not adopt private SkyLight calls in
    the default path.
-3. **For isolation and evaluation:** a "VM target": the same desktop
-   helper running inside a Tart macOS guest, reached over SSH, with grants,
-   journal and receipts still enforced on the host. It removes the shared
-   GUI from evaluations (two guests, in parallel) and gives untrusted tasks
-   a machine of their own, within the macOS licence terms.
+3. **No virtual machine target** (decided 2026-11-16, see the end of this
+   document): the disk and memory cost does not fit a small harness.
 4. Keep the browser headless by default (already the case).
 
 Still unverified (deliberately not run on the user's machine): windows on
@@ -296,14 +293,11 @@ So with background mode the agent finished 6 of 10 desktop tasks without
 taking the user's screen, and stopped and said why on the rest, except
 for D05.
 
-### A virtual machine as the target
+### Decided: no virtual machine target
 
-`[computer] desktop_helper` starts the desktop helper through a command
-that connects its standard input and output, so `["ssh", "-T", "mac-vm",
-"/opt/hame/hame-desktop-helper"]` puts the agent's screen and input in a
-Tart or Lume macOS guest while grants, journal and receipts stay on the
-host. Tested with a local command that execs the helper (GUI test
-`the_helper_can_be_started_through_a_command`). Not tested with a real
-guest: a base image is about 25 GB and this Mac had 49 GB free. Paths for
-`save`, `open_file` and `new_document` are checked on the host's disk, so
-with a guest they need a folder shared at the same path.
+A Tart or Lume macOS guest would give the agent its own screen and input,
+but costs about 25 GB of disk per image plus the guest's memory, and adds
+an install and permission set-up of its own. hame keeps a small footprint
+instead: the background mode above works on the user's own session, and a
+helper-through-SSH option was built, tested with a local launcher and then
+removed again (2026-11-16) rather than kept unused.

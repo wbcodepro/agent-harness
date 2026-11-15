@@ -173,7 +173,6 @@ browser_channel = "chrome"      # chrome (installed Google Chrome, default) | ms
 # batch = true                  # the tools' batch action (default on; off only to measure it)
 # observation = "semantic"      # semantic (default) | screenshot | pixels (both need a "screen" grant; screenshot measures vision cost, pixels is the screenshot-loop baseline: screenshots only, clicks by coordinates)
 # desktop_background = false     # true: the desktop tool works without taking your screen: text, plain keys, and new_document / open_file / save through Apple Events; menus, pixel clicks and shortcuts are refused
-# desktop_helper = ["ssh", "-T", "mac-vm", "/opt/hame/hame-desktop-helper"]   # run the desktop helper on another Mac (a VM): the agent uses its screen and input
 # profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
 
 [[computer.grant]]              # read and use pages on local servers, profile "work" only

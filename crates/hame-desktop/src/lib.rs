@@ -107,15 +107,6 @@ pub struct DesktopConfig {
     pub helper_dir: Option<PathBuf>,
     /// A prebuilt helper to run instead of compiling the embedded source.
     pub helper_path: Option<PathBuf>,
-    /// A command that starts the helper somewhere else and connects its
-    /// standard input and output, such as `ssh -T mac-vm /opt/hame/helper`
-    /// for a macOS virtual machine: the agent's input and screen are then
-    /// that machine's, not the user's. Grants, journal and receipts stay
-    /// here; the handshake checks the helper's protocol version. Paths
-    /// given to save, open_file and new_document are checked on this
-    /// machine's disk, so they work only for folders shared at the same
-    /// path.
-    pub helper_command: Option<Vec<String>>,
     /// The Swift compiler. Default `swiftc` on `PATH`.
     pub swiftc: PathBuf,
     /// The cross-process lock held while emitting physical input. Default
@@ -152,7 +143,6 @@ impl DesktopConfig {
             home: home.into(),
             helper_dir: None,
             helper_path: None,
-            helper_command: None,
             swiftc: PathBuf::from("swiftc"),
             lease_path: None,
             lease_wait: Duration::from_secs(2),
@@ -509,26 +499,21 @@ impl DesktopTool {
                 "Desktop control is available only on macOS.",
             ));
         }
-        let (program, args) = match (&self.config.helper_command, &self.config.helper_path) {
-            (Some(command), _) if !command.is_empty() => {
-                (PathBuf::from(&command[0]), command[1..].to_vec())
-            }
-            (_, Some(path)) => (path.clone(), Vec::new()),
-            _ => {
+        let program = match &self.config.helper_path {
+            Some(path) => path.clone(),
+            None => {
                 let dir = self.config.helper_dir();
                 let swiftc = self.config.swiftc.clone();
-                let built =
-                    tokio::task::spawn_blocking(move || protocol::ensure_helper(&dir, &swiftc))
-                        .await
-                        .map_err(|e| HelperError::new("failed", e.to_string()))??;
-                (built, Vec::new())
+                tokio::task::spawn_blocking(move || protocol::ensure_helper(&dir, &swiftc))
+                    .await
+                    .map_err(|e| HelperError::new("failed", e.to_string()))??
             }
         };
         let first = self.state().last_observation + 1;
         let helper = Arc::new(
             Helper::start(
                 &program,
-                &args,
+                &[],
                 &[],
                 json!({
                     "first_observation": first,

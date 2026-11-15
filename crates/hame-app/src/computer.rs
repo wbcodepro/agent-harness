@@ -111,9 +111,6 @@ impl Computer {
             desktop.batch = config.computer.batch;
             desktop.pixels = config.computer.observation == Observation::Pixels;
             desktop.background = config.computer.desktop_background;
-            if !config.computer.desktop_helper.is_empty() {
-                desktop.helper_command = Some(config.computer.desktop_helper.clone());
-            }
             let tool = DesktopTool::new(desktop);
             Arc::new(match &pipeline {
                 Some(pipeline) => tool.with_pipeline(Arc::clone(pipeline)),
@@ -249,21 +246,6 @@ mod tests {
         let background = Computer::build(home.path(), &config, &Authorization::default(), None);
         assert!(background.desktop.as_ref().unwrap().config().background);
         assert!(!desktop.desktop.as_ref().unwrap().config().background);
-        let config = Config::parse(
-            "[computer]\ndesktop = true\ndesktop_helper = [\"ssh\", \"-T\", \"vm\", \"/opt/h\"]",
-        )
-        .unwrap();
-        let remote = Computer::build(home.path(), &config, &Authorization::default(), None);
-        assert_eq!(
-            remote
-                .desktop
-                .as_ref()
-                .unwrap()
-                .config()
-                .helper_command
-                .as_deref(),
-            Some(&["ssh".to_string(), "-T".into(), "vm".into(), "/opt/h".into()][..])
-        );
         assert_eq!(desktop.guidance(), COMPUTER_GUIDANCE_PIXELS);
     }
 }

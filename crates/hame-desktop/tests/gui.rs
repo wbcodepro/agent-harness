@@ -729,43 +729,6 @@ async fn background_mode_types_without_taking_the_foreground() {
     });
 }
 
-/// The helper can be started by a command that connects its input and
-/// output, as `ssh` to a virtual machine would; here a shell that execs it
-/// stands in for the remote side.
-#[tokio::test]
-#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
-async fn the_helper_can_be_started_through_a_command() {
-    let mut gui = Gui::start().await;
-    gui_test!(gui, async {
-        let doc = gui.new_document().await;
-        let helper =
-            hame_desktop::protocol::ensure_helper(&helper_cache(), Path::new("swiftc")).unwrap();
-        let mut cfg = config(gui._home.path(), textedit_grants(all_caps()));
-        cfg.helper_command = Some(vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            "exec \"$0\"".into(),
-            helper.to_string_lossy().into_owned(),
-        ]);
-        let remote = DesktopTool::new(cfg);
-        let out = remote
-            .call(
-                &json!({"action": "observe", "app": TEXTEDIT, "window": doc}),
-                &gui.ctx,
-            )
-            .await;
-        assert!(!out.is_error, "{}", out.text);
-        assert!(out.text.contains("textarea"), "{}", out.text);
-        // A command that does not start a helper is reported, not hung on.
-        let mut broken = config(gui._home.path(), textedit_grants(all_caps()));
-        broken.helper_command = Some(vec!["/usr/bin/false".into()]);
-        let failed = DesktopTool::new(broken)
-            .call(&json!({"action": "windows", "app": TEXTEDIT}), &gui.ctx)
-            .await;
-        assert!(failed.is_error, "{}", failed.text);
-    });
-}
-
 /// A skeleton observation lists the window's regions with their child
 /// counts; observing one region with root returns its controls.
 #[tokio::test]
