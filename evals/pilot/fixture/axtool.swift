@@ -8,6 +8,9 @@
 //   axtool raise <bundle> <window-id>    bring a window and its app to the front
 //   axtool press <bundle> <window-id> <button>  press a button in a window
 //   axtool menu <bundle> <menu> <item>   choose a menu bar item, e.g. File New
+//   axtool cells <bundle> <title-part>   every table cell (iWork: canvas exposed first)
+//   axtool value <bundle> <role> <title> the value of the first matching element
+//   axtool frame <bundle> <title-part> <name-part>  frames and texts of an element (a chart)
 //   axtool frontmost                     bundle id of the frontmost app
 //   axtool quit <bundle>                 ask the app to quit; force it after 5 s
 //
@@ -160,6 +163,79 @@ case "menu":
     guard let menu = barItem.flatMap({ children($0).first }) else { exit(1) }
     guard let item = children(menu).first(where: { str($0, kAXTitleAttribute) == args[4] }) else { exit(1) }
     exit(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success ? 0 : 1)
+case "cells":
+    // Every table cell of the windows whose title contains args[3], as
+    // the app shows it. iWork apps expose their canvas only on request.
+    guard let running = app(args[2]) else { exit(1) }
+    let root = AXUIElementCreateApplication(running.processIdentifier)
+    AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+    usleep(500_000)
+    func range(_ e: AXUIElement, _ name: String) -> Int? {
+        guard let v = attr(e, name), CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var r = CFRange()
+        AXValueGetValue(v as! AXValue, .cfRange, &r)
+        return r.location
+    }
+    func walk(_ e: AXUIElement, _ table: String, _ depth: Int) {
+        let role = str(e, kAXRoleAttribute) ?? ""
+        var current = table
+        if role == "AXTable" { current = str(e, kAXTitleAttribute) ?? "" }
+        if role == "AXCell", let row = range(e, "AXRowIndexRange"), let col = range(e, "AXColumnIndexRange") {
+            var letters = ""
+            var n = col
+            repeat { letters = String(UnicodeScalar(UInt8(65 + n % 26))) + letters; n = n / 26 - 1 } while n >= 0
+            print(json(["table": current, "cell": "\(letters)\(row + 1)",
+                        "title": str(e, kAXTitleAttribute) ?? "", "value": str(e, kAXValueAttribute) ?? ""]))
+            return
+        }
+        if depth > 14 { return }
+        for c in children(e) { walk(c, current, depth + 1) }
+    }
+    for (_, w) in windows(args[2]) where (str(w, kAXTitleAttribute) ?? "").contains(args[3]) {
+        walk(w, "", 0)
+    }
+case "frame":
+    // The window (title containing args[3]) and its first element whose
+    // title or description contains args[4]: frames in screen points, the
+    // window id, and every text inside the element.
+    guard let running = app(args[2]) else { exit(1) }
+    let root = AXUIElementCreateApplication(running.processIdentifier)
+    AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+    usleep(300_000)
+    func rect(_ e: AXUIElement) -> [Double] {
+        var p = CGPoint.zero, s = CGSize.zero
+        if let v = attr(e, kAXPositionAttribute) { AXValueGetValue(v as! AXValue, .cgPoint, &p) }
+        if let v = attr(e, kAXSizeAttribute) { AXValueGetValue(v as! AXValue, .cgSize, &s) }
+        return [Double(p.x), Double(p.y), Double(s.width), Double(s.height)]
+    }
+    func texts(_ e: AXUIElement, _ depth: Int) -> [String] {
+        var out: [String] = []
+        let role = str(e, kAXRoleAttribute) ?? ""
+        if role == "AXStaticText" || role == "AXTextArea", let v = str(e, kAXValueAttribute), !v.isEmpty { out.append(v) }
+        if depth < 8 { for c in children(e) { out += texts(c, depth + 1) } }
+        return out
+    }
+    for (id, w) in windows(args[2]) where (str(w, kAXTitleAttribute) ?? "").contains(args[3]) {
+        if let e = find(w, { (str($0, kAXDescriptionAttribute) ?? "").contains(args[4])
+                             || (str($0, kAXTitleAttribute) ?? "").contains(args[4]) }) {
+            print(json(["window_id": Int(id), "window": rect(w), "element": rect(e),
+                        "name": str(e, kAXDescriptionAttribute) ?? str(e, kAXTitleAttribute) ?? "",
+                        "texts": texts(e, 0)]))
+            exit(0)
+        }
+    }
+    exit(1)
+case "value":
+    // The value of the first element with role args[3] and title args[4]
+    // in any window of the app.
+    for (_, w) in windows(args[2]) {
+        if let e = find(w, { str($0, kAXRoleAttribute) == args[3] && str($0, kAXTitleAttribute) == args[4] }) {
+            if let n = attr(e, kAXValueAttribute) as? NSNumber { print(n.stringValue) }
+            else { print(str(e, kAXValueAttribute) ?? "") }
+            exit(0)
+        }
+    }
+    exit(1)
 case "frontmost":
     print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
 case "quit":

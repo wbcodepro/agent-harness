@@ -1,0 +1,9 @@
+Receipts to enter (June 2026)
+Columns: receipt number | vendor | category | amount in VND
+
+R-201 | Highlands Coffee | Meals | 185000
+R-202 | Grab | Transport | 94000
+R-203 | Fahasa Books | Supplies | 356000
+R-204 | Viettel | Phone | 250000
+R-205 | Pho 24 | Meals | 132000
+R-206 | Vinasun Taxi | Transport | 218000
