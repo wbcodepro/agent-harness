@@ -842,6 +842,10 @@ class Tab:
         self.known_refs = []
         self.nav_count = 0
         self.pending = set()
+        # Whether the latest main-frame navigation request finished with a
+        # response the frame will commit (not a redirect, 204/205 or
+        # download): the commit may then still be on its way.
+        self.commit_expected = False
         self.nav_idle = asyncio.Event()
         self.nav_idle.set()
         self.last_status = None
@@ -1059,6 +1063,7 @@ class Helper:
                 if request.is_navigation_request() and request.frame.parent_frame is None:
                     tab.pending.add(request)
                     tab.nav_count += 1
+                    tab.commit_expected = False
                     tab.nav_idle.clear()
             except Exception:
                 pass
@@ -1073,6 +1078,12 @@ class Helper:
             try:
                 if response.request.is_navigation_request() and response.frame.parent_frame is None:
                     tab.last_status = response.status
+                    disposition = response.headers.get("content-disposition", "").lower()
+                    tab.commit_expected = (
+                        not (300 <= response.status < 400)
+                        and response.status not in (204, 205)
+                        and "attachment" not in disposition
+                    )
             except Exception:
                 pass
 
@@ -1083,6 +1094,8 @@ class Helper:
                 self.events.append(f"a native {dialog.type} dialog opened in {tab.id}: {dialog.message[:200]!r}")
 
         def on_download(download):
+            # A navigation that turned into a download never commits.
+            tab.commit_expected = False
             tab.downloads.append(download)
             tab.download_event.set()
 
@@ -1172,6 +1185,15 @@ class Helper:
                 await asyncio.wait_for(tab.nav_idle.wait(), timeout_ms / 1000)
             except asyncio.TimeoutError:
                 raise OpError("timeout", "a navigation the action started did not finish", effect="unknown")
+            if tab.generation == gen_before and tab.commit_expected:
+                # The request can finish before the frame commits the new
+                # document (framenavigated), most visibly on a loaded
+                # machine: wait for the commit rather than report no
+                # navigation.
+                deadline = time.monotonic() + timeout_ms / 1000
+                while (tab.generation == gen_before and tab.commit_expected
+                       and not tab.closed and time.monotonic() < deadline):
+                    await asyncio.sleep(0.02)
             if tab.generation != gen_before:
                 try:
                     await tab.page.wait_for_load_state("load", timeout=timeout_ms)
