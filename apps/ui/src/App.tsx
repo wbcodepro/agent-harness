@@ -3,14 +3,14 @@ import type { AssistantItem } from "./model/fold";
 import type { ModeName, ServerInfo, SessionDetail, SessionSummary, StreamEvent } from "./model/types";
 import { Api, ApiError } from "./state/api";
 import { SessionStore, useSession } from "./state/session";
-import { ServicesContext, folderName, isMod, storage, type Services } from "./state/util";
+import { ServicesContext, blobUrls, folderName, isMod, storage, type Services } from "./state/util";
 import type { Transport } from "./transport";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Composer, type Attachment } from "./components/Composer";
 import { Header } from "./components/Header";
 import { Lightbox } from "./components/Media";
 import { RightPanel, availableTabs, type PanelTab } from "./components/RightPanel";
-import { Shortcuts } from "./components/Shortcuts";
+import { About, Shortcuts } from "./components/Shortcuts";
 import { Sidebar, type Theme } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import styles from "./App.module.css";
@@ -43,6 +43,23 @@ function useWidth(): number {
   return width;
 }
 
+/**
+ * Runs a request that may need confirming ("Full access"): the host answers
+ * 428 with its warning and a one-time nonce; after the user agrees, the
+ * same request goes again with the nonce. Resolves null when declined.
+ */
+async function confirmed<T>(run: (confirm?: string) => Promise<T>): Promise<T | null> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof ApiError && error.confirm) {
+      if (!window.confirm(error.message)) return null;
+      return run(error.confirm);
+    }
+    throw error;
+  }
+}
+
 function sessionFromHash(): string | null {
   const match = /^#\/s\/([A-Za-z0-9_-]{1,64})$/.exec(window.location.hash);
   return match ? match[1] : null;
@@ -63,6 +80,7 @@ export function App({ transport }: { transport: Transport }) {
   const [panel, setPanel] = useState<{ open: boolean; tab: PanelTab; focus: string | null }>({ open: false, tab: "changes", focus: null });
   const [image, setImage] = useState<{ sha256: string; alt: string } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
+  const [about, setAbout] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [seen, setSeen] = useState<Record<string, number>>(() => {
     try {
@@ -101,7 +119,10 @@ export function App({ transport }: { transport: Transport }) {
   }, [api]);
 
   useEffect(() => {
-    api.info().then(setInfo, (error: Error) => {
+    api.info().then((loaded) => {
+      setInfo(loaded);
+      for (const warning of loaded.warnings ?? []) flash(warning);
+    }, (error: Error) => {
       setFatal(error instanceof ApiError && error.status === 403 ? "This page's token was refused. Open the address `hame web` printed." : `Cannot reach hame: ${error.message}`);
     });
     void refreshSessions();
@@ -167,6 +188,9 @@ export function App({ transport }: { transport: Transport }) {
     void loadDetail(store.id);
     return () => store.stop();
   }, [store, loadDetail, refreshSessions]);
+
+  // Images of the session left behind are given back.
+  useEffect(() => () => blobUrls.clear(), [activeId]);
 
   useEffect(() => {
     const hash = activeId ? `#/s/${activeId}` : "";
@@ -235,12 +259,16 @@ export function App({ transport }: { transport: Transport }) {
   const ensureSession = useCallback(async (): Promise<string> => {
     if (activeId) return activeId;
     const [provider, ...rest] = (draft.model ?? "").split(":");
-    const created = await api.create({
-      cwd: draft.cwd ?? undefined,
-      mode: draft.mode,
-      provider: draft.model ? provider : undefined,
-      model: draft.model ? rest.join(":") : undefined,
-    });
+    const created = await confirmed((confirm) =>
+      api.create({
+        cwd: draft.cwd ?? undefined,
+        mode: draft.mode,
+        provider: draft.model ? provider : undefined,
+        model: draft.model ? rest.join(":") : undefined,
+        confirm,
+      }),
+    );
+    if (!created) throw new Error("Not started: Full access was not confirmed.");
     setActiveId(created.id);
     void refreshSessions();
     return created.id;
@@ -251,26 +279,25 @@ export function App({ transport }: { transport: Transport }) {
       try {
         const id = await ensureSession();
         if (!activeId) storage.set("hame.draft.new", null);
-        if (view.running && activeId) {
-          await api.steer(id, text);
-          return true;
+        const prompt = () =>
+          api.prompt(id, {
+            text,
+            images: attachments.filter((a) => a.upload?.kind === "image").map((a) => a.upload!.artifact!.sha256),
+            files: attachments.filter((a) => a.upload?.kind === "file").map((a) => a.upload!.path!),
+          });
+        const steer = () => api.steer(id, text);
+        // The turn may start or end between what this page knows and the
+        // request: a refused queue becomes a prompt, a refused prompt is
+        // queued.
+        const [first, second] = view.running && activeId ? [steer, prompt] : [prompt, steer];
+        try {
+          await first();
+        } catch (error) {
+          if (!(error instanceof ApiError && error.status === 409)) throw error;
+          await second();
         }
-        await api.prompt(id, {
-          text,
-          images: attachments.filter((a) => a.upload?.kind === "image").map((a) => a.upload!.artifact!.sha256),
-          files: attachments.filter((a) => a.upload?.kind === "file").map((a) => a.upload!.path!),
-        });
         return true;
       } catch (error) {
-        if (error instanceof ApiError && error.status === 409 && activeId) {
-          // The turn started or ended under us; queue or retry as fits.
-          try {
-            await api.steer(activeId, text);
-            return true;
-          } catch {
-            // fall through to the message below
-          }
-        }
         report(error);
         return false;
       }
@@ -283,7 +310,7 @@ export function App({ transport }: { transport: Transport }) {
       const waiting = view.approvals[0];
       if (!waiting || !activeId || !store) return;
       store.local({ kind: "approval_resolved", id: waiting.id, allow });
-      api.approve(activeId, waiting.id, allow, always).catch(report);
+      api.approve(activeId, waiting, allow, always).catch(report);
     },
     [view.approvals, activeId, store, api, report],
   );
@@ -294,7 +321,7 @@ export function App({ transport }: { transport: Transport }) {
         setDraft((current) => ({ ...current, mode }));
         return;
       }
-      api.settings(activeId, { mode }).then(() => loadDetail(activeId), report);
+      confirmed((confirm) => api.settings(activeId, { mode, confirm })).then(() => loadDetail(activeId), report);
     },
     [activeId, api, loadDetail, report],
   );
@@ -411,6 +438,7 @@ export function App({ transport }: { transport: Transport }) {
                 onClose={() => setDrawer(false)}
                 onTheme={setTheme}
                 onShortcuts={() => setShortcuts(true)}
+                onAbout={() => setAbout(true)}
               />
             </div>
           </>
@@ -423,6 +451,8 @@ export function App({ transport }: { transport: Transport }) {
             mode={mode}
             status={status}
             subagents={view.subagents.filter((agent) => agent.status === "running" || agent.status === "waiting").length}
+            grants={view.grants}
+            onRevoke={(tool) => activeId && api.revokeGrant(activeId, tool).catch(report)}
             context={detail ? detail.context : null}
             usage={view.usage}
             cost={detail?.cost_usd ?? null}
@@ -492,6 +522,7 @@ export function App({ transport }: { transport: Transport }) {
       </div>
       {image && <Lightbox image={image} onClose={() => setImage(null)} />}
       {shortcuts && <Shortcuts onClose={() => setShortcuts(false)} />}
+      {about && <About version={info?.version ?? null} onClose={() => setAbout(false)} />}
       {toast && (
         <div className={styles.toast} role="status">
           {toast}

@@ -138,7 +138,7 @@ describe("folding a session's events", () => {
       rec("turn/start", { turn: 1 }),
       user("write a.txt"),
       call("c1", "write", { path: "a.txt", content: "hi\n" }),
-      { kind: "approval", id: 1, question: "Allow write a.txt?", tool: "write", call_id: "c1", input: { path: "a.txt" }, effect: "write" } as StreamEvent,
+      { kind: "approval", id: 1, question: "Allow write a.txt?", tool: "write", tool_call_id: "c1", input: { path: "a.txt" }, effect: "write" } as StreamEvent,
     ]) {
       folder.apply(event);
     }
@@ -146,7 +146,7 @@ describe("folding a session's events", () => {
     const row = () => (work(folder.state.items)[0].rows[0] as ToolRow);
     expect(row().status).toBe("waiting");
     // The same question replayed to a reconnecting page is not doubled.
-    folder.apply({ kind: "approval", id: 1, question: "Allow write a.txt?", call_id: "c1" });
+    folder.apply({ kind: "approval", id: 1, question: "Allow write a.txt?", tool_call_id: "c1" });
     expect(folder.state.approvals).toHaveLength(1);
     folder.apply({ kind: "approval_resolved", id: 1, allow: true });
     expect(folder.state.approvals).toHaveLength(0);
@@ -284,5 +284,101 @@ describe("folding a session's events", () => {
     const state = foldAll([...events, ...events]);
     expect(state.items.filter((item) => item.kind === "user")).toHaveLength(1);
     expect(state.lastSeq).toBe(1);
+  });
+
+  it("replaces the waiting approvals with the list sent on reconnecting", () => {
+    reset();
+    const folder = new Folder();
+    folder.apply({ kind: "turn", state: "started" });
+    folder.apply(rec("turn/start", { turn: 1 }));
+    folder.apply(user("go"));
+    folder.apply(call("c1", "write", { path: "a", content: "x" }));
+    folder.apply({ kind: "approval", id: 1, question: "a?", tool_call_id: "c1" });
+    folder.apply({ kind: "approval", id: 2, question: "b?", tool_call_id: "c2" });
+    // The host answered question 1 while we were away; only 2 waits.
+    folder.apply({ kind: "approvals", pending: [{ kind: "approval", id: 2, question: "b?", tool_call_id: "c2" }] });
+    expect(folder.state.approvals.map((a) => a.id)).toEqual([2]);
+    expect((work(folder.state.items)[0].rows[0] as ToolRow).status).toBe("running");
+  });
+
+  it("stops running at a turn/end record even if the turn event was missed", () => {
+    reset();
+    const state = foldAll([
+      { kind: "turn", state: "started" },
+      { kind: "approval", id: 1, question: "x?" },
+      rec("turn/start", { turn: 1 }),
+      user("go"),
+      rec("turn/end", { turn: 1, reason: "completed" }),
+    ]);
+    expect(state.running).toBe(false);
+    expect(state.approvals).toEqual([]);
+  });
+
+  it("keys rows by their call record, so a reused call id gets its own row", () => {
+    reset();
+    const state = foldAll([
+      rec("turn/start", { turn: 1 }),
+      user("go"),
+      call("dup", "bash", { command: "echo one" }),
+      result("dup", "one"),
+      call("dup", "bash", { command: "echo two" }),
+      result("dup", "two"),
+      call("dup", "edit", { path: "a", old_string: "x", new_string: "y" }),
+      result("dup", "ok"),
+      rec("turn/end", { turn: 1, reason: "completed" }),
+    ]);
+    const rows = work(state.items)[0].rows as ToolRow[];
+    expect(new Set(rows.map((row) => row.key)).size).toBe(3);
+    expect(rows.map((row) => row.output)).toEqual(["one", "two", "ok"]);
+    expect(rows.every((row) => row.status === "done")).toBe(true);
+    expect(state.commands.map((command) => command.output)).toEqual(["one", "two"]);
+    expect(new Set(state.commands.map((command) => command.key)).size).toBe(2);
+    expect(state.changes).toHaveLength(1);
+  });
+
+  it("settles text, then thinking, then text without repeating the first text", () => {
+    reset();
+    const state = foldAll([
+      rec("turn/start", { turn: 1 }),
+      user("go"),
+      delta({ type: "text", text: "First." }),
+      delta({ type: "thinking", text: "Hmm." }),
+      delta({ type: "text", text: "Second." }),
+      message([
+        { type: "text", text: "First." },
+        { type: "thinking", text: "Hmm." },
+        { type: "text", text: "Second." },
+      ]),
+    ]);
+    const texts = state.items.filter((item): item is AssistantItem => item.kind === "assistant").map((item) => item.text);
+    expect(texts).toEqual(["First.", "Second."]);
+  });
+
+  it("keeps final text that arrived without text deltas", () => {
+    reset();
+    const state = foldAll([
+      rec("turn/start", { turn: 1 }),
+      user("go"),
+      delta({ type: "thinking", text: "Thinking it over." }),
+      message([
+        { type: "thinking", text: "Thinking it over." },
+        { type: "text", text: "The answer." },
+      ]),
+    ]);
+    expect(state.items.find((item) => item.kind === "assistant")).toMatchObject({ text: "The answer.", streaming: false });
+    expect(work(state.items)[0].rows).toHaveLength(1);
+  });
+
+  it("shows a user's own message that starts with [hame as a message", () => {
+    reset();
+    const state = foldAll([rec("turn/start", { turn: 1 }), user("[hame verify] is a funny name")]);
+    expect(state.items.map((item) => item.kind)).toEqual(["user"]);
+  });
+
+  it("shows a mode change in the transcript", () => {
+    reset();
+    const state = foldAll([rec("mode/changed", { mode: "ask", previous: "default", by: "phone-1", label: "Ana's phone" })]);
+    expect(state.items[0]).toMatchObject({ kind: "notice", text: "Permission mode: Ask (was Sandboxed), changed by Ana's phone." });
+    expect(state.mode).toBe("ask");
   });
 });

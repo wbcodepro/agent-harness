@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Api } from "./api";
+import { BlobUrls } from "../lib/blobs";
 
 /** Per-viewer conveniences (theme, drafts, what was read); never required. */
 export const storage = {
@@ -78,22 +79,17 @@ export function useServices(): Services {
   return services;
 }
 
-const urls = new Map<string, Promise<string>>();
+/** Object URLs of the open session's artifacts; cleared (revoked) when another session opens. */
+export const blobUrls = new BlobUrls();
 
-/** An object URL for an artifact's bytes, fetched once per page. */
+/** An object URL for an artifact's bytes, fetched once per session view. */
 export function useArtifactUrl(sha256: string): { url: string | null; error: string | null } {
   const { api, session } = useServices();
   const [state, setState] = useState<{ url: string | null; error: string | null }>({ url: null, error: null });
   useEffect(() => {
     if (!session) return;
     let live = true;
-    let pending = urls.get(sha256);
-    if (!pending) {
-      pending = api.transport.fetchBlob(sha256, session).then((blob) => URL.createObjectURL(blob));
-      urls.set(sha256, pending);
-      pending.catch(() => urls.delete(sha256));
-    }
-    pending.then(
+    blobUrls.get(sha256, () => api.transport.fetchBlob(sha256, session)).then(
       (url) => live && setState({ url, error: null }),
       (error: Error) => live && setState({ url: null, error: error.message }),
     );

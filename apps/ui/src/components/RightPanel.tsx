@@ -4,6 +4,7 @@ import type { ViewState } from "../model/fold";
 import { duration } from "../state/util";
 import { DiffCard, DiffStat } from "./DiffCard";
 import { Thumb } from "./Media";
+import { Output } from "./Output";
 import styles from "./RightPanel.module.css";
 
 export type PanelTab = "changes" | "files" | "terminal" | "screens" | "tasks";
@@ -135,7 +136,7 @@ export function RightPanel({
                   {command.exitCode !== undefined && command.exitCode !== 0 && <span className={styles.exit}>exit {command.exitCode}</span>}
                   {command.running && <span className={styles.exit}>running…</span>}
                 </div>
-                {command.output && <pre>{command.output}</pre>}
+                {command.output && <Output text={command.output} buttonClassName={styles.showAll} />}
               </div>
             ))}
           </div>

@@ -2,11 +2,15 @@
 // messages, assistant text, work groups of reasoning and tool calls,
 // notices, verdicts and turn footers; plus the data of the side panel
 // (changes, screens, commands, subagents) and the live state (running,
-// approvals, queued messages).
+// approvals, queued messages, grants).
 //
 // The folder is fed one event at a time and mutates its state in place for
 // speed, but every item it changes is replaced by a new object, so a view
 // can compare items by identity to know what to repaint.
+//
+// Tool rows are keyed by the seq of their `tool/call` record, not by the
+// call id a model chose (models reuse ids): a result goes to the newest
+// row with that call id that is still open.
 
 import { diffsFromToolInput, type FileDiff } from "./diff";
 import { categoryOf, describe, exitCode, summarize, type Category } from "./tools";
@@ -25,6 +29,7 @@ import type {
 
 export interface ToolRow {
   kind: "tool";
+  /** `t<seq>` of the `tool/call` record. */
   key: string;
   callId: string;
   name: string;
@@ -143,12 +148,15 @@ export interface ViewState {
   running: boolean;
   approvals: ApprovalEvent[];
   queued: string[];
+  /** Tools allowed for the rest of the session. */
+  grants: string[];
   lastSeq: number | null;
   /** Error of the last failed turn, for "Continue". */
   error: string | null;
   turn: number;
   usage: Usage;
   model: string | null;
+  mode: ModeName | null;
   settings: { mode: ModeName; provider?: string | null; model?: string | null } | null;
   changes: Change[];
   screens: Screen[];
@@ -159,6 +167,27 @@ export interface ViewState {
   /** Bumped on every change, for subscribers. */
   version: number;
 }
+
+/** Messages hame itself sends the model in the middle of a turn. */
+export const HAME_PREFIXES = [
+  "[hame verify]",
+  "[hame check]",
+  "[hame checklist]",
+  "[hame budget]",
+  "[hame repeat]",
+  "[hame outcome]",
+  "[hame limit]",
+  "[hame review]",
+  "[hame compaction]",
+];
+
+const MODE_LABELS: Record<string, string> = {
+  default: "Sandboxed",
+  "read-only": "Read only",
+  ask: "Ask",
+  "accept-edits": "Accept edits",
+  "full-access": "Full access",
+};
 
 export function emptyUsage(): Usage {
   return { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
@@ -201,12 +230,22 @@ function media(content: Block[] | undefined): { images: ArtifactRef[]; files: Ar
   return { images, files };
 }
 
+interface RowPlace {
+  group: string;
+  key: string;
+  open: boolean;
+}
+
 export class Folder {
   state: ViewState;
   private groups = new Map<string, number>(); // work item key -> index
-  private rows = new Map<string, { group: string }>(); // call id -> group key
+  private places = new Map<string, RowPlace[]>(); // call id -> rows with it, oldest first
   private openGroup: string | null = null;
-  private streamingText: number | null = null; // item index
+  /** Assistant items the current response streamed text into, in order. */
+  private streamedTexts: number[] = [];
+  private streamingText: number | null = null;
+  /** Reasoning rows the current response streamed into, in order. */
+  private streamedThoughts: { group: string; key: string }[] = [];
   private streamingThought: { group: string; key: string } | null = null;
   private sawDeltas = false;
   private turnStart = 0;
@@ -226,11 +265,13 @@ export class Folder {
       running: false,
       approvals: [],
       queued: [],
+      grants: [],
       lastSeq: null,
       error: null,
       turn: 0,
       usage: emptyUsage(),
       model: null,
+      mode: null,
       settings: null,
       changes: [],
       screens: [],
@@ -279,7 +320,7 @@ export class Folder {
 
   private group(ts: number): string {
     if (this.openGroup !== null) return this.openGroup;
-    this.streamingText = null;
+    this.endText();
     const key = this.key("w");
     const index = this.push({
       kind: "work",
@@ -320,10 +361,17 @@ export class Folder {
     });
   }
 
-  private updateRow(callId: string, change: (row: ToolRow) => ToolRow) {
-    const where = this.rows.get(callId);
+  /** The newest row with `callId` that is still open (or, failing that, the newest). */
+  private place(callId: string | undefined, onlyOpen = true): RowPlace | undefined {
+    if (!callId) return undefined;
+    const places = this.places.get(callId) ?? [];
+    for (let n = places.length - 1; n >= 0; n--) if (places[n].open) return places[n];
+    return onlyOpen ? undefined : places[places.length - 1];
+  }
+
+  private updateRow(where: RowPlace | undefined, change: (row: ToolRow) => ToolRow) {
     if (!where) return;
-    this.updateGroup(where.group, (rows) => rows.map((row) => (row.kind === "tool" && row.callId === callId ? change(row) : row)));
+    this.updateGroup(where.group, (rows) => rows.map((row) => (row.kind === "tool" && row.key === where.key ? change(row) : row)));
   }
 
   private touch(path: string, op: string) {
@@ -336,6 +384,13 @@ export class Folder {
     }
   }
 
+  private markWaiting(approval: ApprovalEvent, waiting: boolean) {
+    this.updateRow(this.place(approval.tool_call_id), (row) => ({
+      ...row,
+      status: waiting ? (row.status === "running" ? "waiting" : row.status) : row.status === "waiting" ? "running" : row.status,
+    }));
+  }
+
   /** Applies one event of the session's stream. */
   apply(event: StreamEvent) {
     switch (event.kind) {
@@ -346,12 +401,21 @@ export class Folder {
         if (!this.state.approvals.some((waiting) => waiting.id === event.id)) {
           this.state.approvals = [...this.state.approvals, event];
         }
-        if (event.call_id) this.updateRow(event.call_id, (row) => ({ ...row, status: row.status === "running" ? "waiting" : row.status }));
+        this.markWaiting(event, true);
         break;
+      case "approvals": {
+        // The whole list, sent on (re)connecting: it replaces ours.
+        for (const old of this.state.approvals) {
+          if (!event.pending.some((now) => now.id === old.id)) this.markWaiting(old, false);
+        }
+        this.state.approvals = event.pending;
+        for (const now of event.pending) this.markWaiting(now, true);
+        break;
+      }
       case "approval_resolved": {
         const resolved = this.state.approvals.find((waiting) => waiting.id === event.id);
         this.state.approvals = this.state.approvals.filter((waiting) => waiting.id !== event.id);
-        if (resolved?.call_id) this.updateRow(resolved.call_id, (row) => ({ ...row, status: row.status === "waiting" ? "running" : row.status }));
+        if (resolved) this.markWaiting(resolved, false);
         break;
       }
       case "turn":
@@ -376,6 +440,9 @@ export class Folder {
         break;
       case "steering":
         this.state.queued = event.queued;
+        break;
+      case "grants":
+        this.state.grants = event.grants;
         break;
       case "warning":
         this.notice("warn", event.text);
@@ -406,8 +473,7 @@ export class Folder {
         this.userInTurn = 0;
         this.failure = null;
         this.closeGroup();
-        this.streamingText = null;
-        this.streamingThought = null;
+        this.resetStream();
         break;
       case "turn/end":
         this.endTurn(record.data.reason, record.ts);
@@ -431,11 +497,10 @@ export class Folder {
           this.replace(this.streamingText, (item) => ({ ...(item as AssistantItem), streaming: false, cut: reason }));
         }
         if (this.streamingThought) this.finishThought();
-        this.streamingText = null;
-        this.sawDeltas = false;
+        this.resetStream();
         break;
       case "tool/call":
-        this.toolCall(record.data.call_id, record.data.name, record.data.input, record.ts);
+        this.toolCall(record.seq, record.data.call_id, record.data.name, record.data.input, record.ts);
         break;
       case "tool/result":
         this.toolResult(record.data.call_id, record.data.content, record.data.is_error ?? false, record.ts);
@@ -449,6 +514,13 @@ export class Folder {
         this.state.model = record.data.model;
         this.notice("info", `Model: ${record.data.model}`);
         break;
+      case "mode/changed": {
+        const { mode, previous, by, label } = record.data;
+        this.state.mode = mode;
+        const who = by === "local" ? "on this computer" : `by ${label || by}`;
+        this.notice("info", `Permission mode: ${MODE_LABELS[mode] ?? mode} (was ${MODE_LABELS[previous] ?? previous}), changed ${who}.`);
+        break;
+      }
       case "task/start":
         this.closeGroup();
         this.push({ kind: "task", key: this.key("t"), contract: record.data.contract });
@@ -463,16 +535,30 @@ export class Folder {
     }
   }
 
+  private resetStream() {
+    this.streamingText = null;
+    this.streamingThought = null;
+    this.streamedTexts = [];
+    this.streamedThoughts = [];
+    this.sawDeltas = false;
+  }
+
+  private endText() {
+    if (this.streamingText !== null) {
+      this.replace(this.streamingText, (item) => ({ ...(item as AssistantItem), streaming: false }));
+      this.streamingText = null;
+    }
+  }
+
   private userMessage(content: Block[]) {
     this.closeGroup();
-    this.streamingText = null;
+    this.endText();
     const text = textOf(content);
-    if (text.startsWith("[hame verify]")) {
-      this.notice("warn", "Checks failed; the details were sent back to the model.");
-      return;
-    }
-    if (text.startsWith("[hame")) {
-      this.notice("info", text.replace(/^\[hame[^\]]*\]\s*/, ""));
+    // Only hame's own messages, which never open a turn, become notices.
+    const fromHame = this.turnOpen && this.userInTurn > 0 && HAME_PREFIXES.some((prefix) => text.startsWith(prefix));
+    if (fromHame) {
+      if (text.startsWith("[hame verify]")) this.notice("warn", "Checks failed; the details were sent back to the model.");
+      else this.notice("info", text.replace(/^\[hame[^\]]*\]\s*/, ""));
       return;
     }
     const { images, files } = media(content);
@@ -495,6 +581,7 @@ export class Folder {
       if (this.streamingText === null) {
         this.closeGroup();
         this.streamingText = this.push({ kind: "assistant", key: this.key("a"), text: "", streaming: true });
+        this.streamedTexts.push(this.streamingText);
       }
       this.replace(this.streamingText, (item) => ({ ...(item as AssistantItem), text: (item as AssistantItem).text + delta.text }));
     } else if (delta.type === "thinking") {
@@ -503,6 +590,7 @@ export class Folder {
         const group = this.group(record.ts);
         const key = this.key("r");
         this.streamingThought = { group, key };
+        this.streamedThoughts.push(this.streamingThought);
         this.updateGroup(group, (rows) => [...rows, { kind: "reasoning", key, text: "", streaming: true }]);
       }
       const { group, key } = this.streamingThought;
@@ -512,10 +600,7 @@ export class Folder {
     } else if (delta.type === "tool_use_start") {
       this.sawDeltas = true;
       if (this.streamingThought) this.finishThought();
-      if (this.streamingText !== null) {
-        this.replace(this.streamingText, (item) => ({ ...(item as AssistantItem), streaming: false }));
-        this.streamingText = null;
-      }
+      this.endText();
     }
   }
 
@@ -526,19 +611,19 @@ export class Folder {
     this.streamingThought = null;
   }
 
-  /** An `assistant/message` settles what streamed, or adds it when nothing did. */
+  /**
+   * An `assistant/message` settles what streamed: each text block replaces
+   * the text streamed for it, in order; blocks nothing streamed for are
+   * added.
+   */
   private settle(content: Block[], ts: number) {
-    if (this.sawDeltas) {
-      if (this.streamingThought) this.finishThought();
-      if (this.streamingText !== null) {
-        const final = textOf(content);
-        this.replace(this.streamingText, (item) => ({
-          ...(item as AssistantItem),
-          text: final || (item as AssistantItem).text,
-          streaming: false,
-        }));
-      }
-    } else {
+    if (this.streamingThought) this.finishThought();
+    this.endText();
+    const texts = content.filter((block): block is { type: "text"; text: string } => block.type === "text" && block.text.trim() !== "");
+    const thoughts = content.filter(
+      (block): block is { type: "thinking"; text: string } => block.type === "thinking" && block.text.trim() !== "",
+    );
+    if (!this.sawDeltas) {
       for (const block of content) {
         if (block.type === "thinking" && block.text.trim()) {
           const group = this.group(ts);
@@ -548,22 +633,39 @@ export class Folder {
           this.push({ kind: "assistant", key: this.key("a"), text: block.text, streaming: false });
         }
       }
+    } else {
+      texts.forEach((block, n) => {
+        const index = this.streamedTexts[n];
+        if (index !== undefined) {
+          this.replace(index, (item) => ({ ...(item as AssistantItem), text: block.text, streaming: false }));
+        } else {
+          this.closeGroup();
+          this.push({ kind: "assistant", key: this.key("a"), text: block.text, streaming: false });
+        }
+      });
+      thoughts.forEach((block, n) => {
+        const streamed = this.streamedThoughts[n];
+        if (streamed) {
+          this.updateGroup(streamed.group, (rows) =>
+            rows.map((row) => (row.kind === "reasoning" && row.key === streamed.key ? { ...row, text: block.text, streaming: false } : row)),
+          );
+        } else {
+          const group = this.group(ts);
+          this.updateGroup(group, (rows) => [...rows, { kind: "reasoning", key: this.key("r"), text: block.text, streaming: false }]);
+        }
+      });
     }
-    this.streamingText = null;
-    this.streamingThought = null;
-    this.sawDeltas = false;
+    this.resetStream();
   }
 
-  private toolCall(callId: string, name: string, input: unknown, ts: number) {
-    if (this.streamingText !== null) {
-      this.replace(this.streamingText, (item) => ({ ...(item as AssistantItem), streaming: false }));
-      this.streamingText = null;
-    }
+  private toolCall(seq: number, callId: string, name: string, input: unknown, ts: number) {
+    this.endText();
     const group = this.group(ts);
     const described = describe(name, input);
+    const key = `t${seq}`;
     const row: ToolRow = {
       kind: "tool",
-      key: callId,
+      key,
       callId,
       name,
       category: categoryOf(name),
@@ -578,59 +680,54 @@ export class Folder {
       startTs: ts,
       diffs: diffsFromToolInput(name, input),
     };
-    this.rows.set(callId, { group });
+    const places = this.places.get(callId) ?? [];
+    places.push({ group, key, open: true });
+    this.places.set(callId, places);
     this.updateGroup(group, (rows) => [...rows, row]);
-    if (row.category === "run" && name === "bash") {
+    if (name === "bash") {
       const command = typeof (input as { command?: unknown })?.command === "string" ? (input as { command: string }).command : "";
-      this.state.commands = [...this.state.commands, { key: callId, command, output: "", running: true }];
+      this.state.commands = [...this.state.commands, { key, command, output: "", running: true }];
     }
     if (row.category === "subagent") this.state.subagents = [...this.state.subagents, row];
   }
 
   private toolResult(callId: string, content: Block[], isError: boolean, ts: number) {
+    const where = this.place(callId);
+    if (!where) return;
+    where.open = false;
     const output = outputOf(content);
     const { images, files } = media(content);
     const code = exitCode(output);
     let finished: ToolRow | null = null;
-    this.updateRow(callId, (row) => {
-      finished = {
-        ...row,
-        output,
-        images,
-        files,
-        status: isError ? "failed" : "done",
-        exitCode: code,
-        endTs: ts,
-      };
+    this.updateRow(where, (row) => {
+      finished = { ...row, output, images, files, status: isError ? "failed" : "done", exitCode: code, endTs: ts };
       return finished;
     });
     const row = finished as ToolRow | null;
     if (!row) return;
     if (!isError) {
       for (const diff of row.diffs) {
-        this.state.changes = [...this.state.changes, { key: `${callId}:${diff.path}`, turn: this.state.turn, diff }];
+        this.state.changes = [...this.state.changes, { key: `${row.key}:${diff.path}`, turn: this.state.turn, diff }];
         this.touch(diff.path, diff.op === "write" ? "wrote" : "edited");
       }
       if (row.category === "read" && row.path) this.touch(row.path, "read");
     }
     if (images.length) {
-      this.state.screens = [...this.state.screens, ...images.map((artifact, n) => ({ key: `${callId}:${n}`, artifact, tool: row.name, ts }))];
+      this.state.screens = [...this.state.screens, ...images.map((artifact, n) => ({ key: `${row.key}:${n}`, artifact, tool: row.name, ts }))];
     }
     if (row.name === "bash") {
       this.state.commands = this.state.commands.map((command) =>
-        command.key === callId ? { ...command, output, exitCode: code, running: false } : command,
+        command.key === row.key ? { ...command, output, exitCode: code, running: false } : command,
       );
     }
     if (row.category === "subagent") {
-      this.state.subagents = this.state.subagents.map((agent) => (agent.callId === callId ? row : agent));
+      this.state.subagents = this.state.subagents.map((agent) => (agent.key === row.key ? row : agent));
     }
   }
 
   private endTurn(reason: TurnEndReason, ts: number) {
     if (this.streamingThought) this.finishThought();
-    if (this.streamingText !== null) {
-      this.replace(this.streamingText, (item) => ({ ...(item as AssistantItem), streaming: false }));
-    }
+    this.endText();
     // Every group of the turn stops; calls left running were cut off.
     for (const [key, index] of this.groups) {
       const item = this.state.items[index] as WorkItem;
@@ -648,12 +745,14 @@ export class Folder {
         { running: false, endTs: ts },
       );
     }
+    for (const places of this.places.values()) for (const place of places) place.open = false;
     this.state.commands = this.state.commands.map((command) => (command.running ? { ...command, running: false } : command));
     this.closeGroup();
-    this.streamingText = null;
-    this.streamingThought = null;
-    this.sawDeltas = false;
+    this.resetStream();
     this.turnOpen = false;
+    // The log says the turn is over, whatever a missed event would have said.
+    this.state.running = false;
+    this.state.approvals = [];
     if (reason === "failed" || reason === "interrupted") {
       this.notice("error", reason === "failed" ? "The turn failed." : "The turn was interrupted when hame stopped.", "continue");
       this.failure = this.state.items.length - 1;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Check,
+  Info,
   Keyboard,
   Monitor,
   Moon,
@@ -39,6 +40,7 @@ export interface SidebarProps {
   onClose: () => void;
   onTheme: (theme: Theme) => void;
   onShortcuts: () => void;
+  onAbout: () => void;
 }
 
 const SHOWN = 5;
@@ -315,6 +317,9 @@ export function Sidebar(props: SidebarProps) {
         <span className={styles.host} title="The hame on this computer">
           <span className={styles.online} aria-hidden /> This computer
         </span>
+        <button type="button" className={styles.iconButton} onClick={props.onAbout} aria-label="About hame and open-source licenses" title="About">
+          <Info size={16} aria-hidden />
+        </button>
         <button type="button" className={styles.iconButton} onClick={props.onShortcuts} aria-label={`Keyboard shortcuts (${modKey}+/)`} title={`Keyboard shortcuts (${modKey}+/)`}>
           <Keyboard size={16} aria-hidden />
         </button>

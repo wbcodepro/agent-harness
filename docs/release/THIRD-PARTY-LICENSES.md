@@ -492,3 +492,55 @@ Some features use software the user installs separately. hame does not ship, lin
 | `yoke-derive` | 0.8.4 | `Unicode-3.0` | `Unicode-3.0` | all |
 | `zerofrom-derive` | 0.1.8 | `Unicode-3.0` | `Unicode-3.0` | all |
 | `zerovec-derive` | 0.11.7 | `Unicode-3.0` | `Unicode-3.0` | all |
+
+## npm packages in the web interface
+
+Built into the page `hame web` serves (embedded in the binary). Their license texts ship with it as `licenses.txt`, linked from the interface's About dialog.
+
+| Package | Version | License | Used under |
+|---|---|---|---|
+| `@tanstack/react-virtual` | 3.14.24 | `MIT` | `MIT` |
+| `@tanstack/virtual-core` | 3.19.9 | `MIT` | `MIT` |
+| `@types/debug` | 4.1.13 | `MIT` | `MIT` |
+| `@types/ms` | 2.1.0 | `MIT` | `MIT` |
+| `@types/react` | 19.3.0 | `MIT` | `MIT` |
+| `character-entities` | 2.0.2 | `MIT` | `MIT` |
+| `csstype` | 3.2.3 | `MIT` | `MIT` |
+| `debug` | 4.4.3 | `MIT` | `MIT` |
+| `decode-named-character-reference` | 1.3.0 | `MIT` | `MIT` |
+| `dequal` | 2.0.3 | `MIT` | `MIT` |
+| `devlop` | 1.1.0 | `MIT` | `MIT` |
+| `highlight.js` | 11.12.0 | `BSD-3-Clause` | `BSD-3-Clause` |
+| `lucide-react` | 1.64.0 | `ISC` | `ISC` |
+| `micromark` | 4.0.3 | `MIT` | `MIT` |
+| `micromark-core-commonmark` | 2.0.4 | `MIT` | `MIT` |
+| `micromark-extension-gfm` | 3.0.0 | `MIT` | `MIT` |
+| `micromark-extension-gfm-autolink-literal` | 2.1.0 | `MIT` | `MIT` |
+| `micromark-extension-gfm-footnote` | 2.1.0 | `MIT` | `MIT` |
+| `micromark-extension-gfm-strikethrough` | 2.1.0 | `MIT` | `MIT` |
+| `micromark-extension-gfm-table` | 2.1.2 | `MIT` | `MIT` |
+| `micromark-extension-gfm-tagfilter` | 2.0.0 | `MIT` | `MIT` |
+| `micromark-extension-gfm-task-list-item` | 2.1.0 | `MIT` | `MIT` |
+| `micromark-factory-destination` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-factory-label` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-factory-space` | 2.1.0 | `MIT` | `MIT` |
+| `micromark-factory-title` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-factory-whitespace` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-character` | 2.1.1 | `MIT` | `MIT` |
+| `micromark-util-chunked` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-classify-character` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-combine-extensions` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-decode-numeric-character-reference` | 2.0.2 | `MIT` | `MIT` |
+| `micromark-util-edit-map` | 1.0.0 | `MIT` | `MIT` |
+| `micromark-util-encode` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-html-tag-name` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-normalize-identifier` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-resolve-all` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-sanitize-uri` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-subtokenize` | 2.1.0 | `MIT` | `MIT` |
+| `micromark-util-symbol` | 2.0.1 | `MIT` | `MIT` |
+| `micromark-util-types` | 2.0.3 | `MIT` | `MIT` |
+| `ms` | 2.1.3 | `MIT` | `MIT` |
+| `react` | 19.3.1 | `MIT` | `MIT` |
+| `react-dom` | 19.3.1 | `MIT` | `MIT` |
+| `scheduler` | 0.28.0 | `MIT` | `MIT` |

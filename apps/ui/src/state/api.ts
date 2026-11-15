@@ -1,14 +1,30 @@
 // Typed calls of the hame web API over a transport.
 
 import type { Transport } from "../transport";
-import type { ArtifactRef, ModeName, ServerInfo, SessionDetail, SessionSummary } from "../model/types";
+import type { ApprovalEvent, ArtifactRef, ModeName, ServerInfo, SessionDetail, SessionSummary } from "../model/types";
 
 export class ApiError extends Error {
+  /** The response body, when it was JSON. */
+  readonly body: Record<string, unknown> | null;
+
   constructor(
     readonly status: number,
-    message: string,
+    text: string,
   ) {
-    super(message);
+    let body: Record<string, unknown> | null = null;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
+    } catch {
+      // A plain-text message.
+    }
+    super(typeof body?.message === "string" ? body.message : text);
+    this.body = body;
+  }
+
+  /** The nonce of a 428 answer, to send back to confirm "Full access". */
+  get confirm(): string | null {
+    return this.status === 428 && typeof this.body?.confirm === "string" ? this.body.confirm : null;
   }
 }
 
@@ -39,7 +55,7 @@ export class Api {
     return this.call<SessionSummary[]>("GET", "/api/sessions");
   }
 
-  create(body: { cwd?: string; mode?: ModeName; provider?: string; model?: string }) {
+  create(body: { cwd?: string; mode?: ModeName; provider?: string; model?: string; confirm?: string }) {
     return this.call<{ id: string }>("POST", "/api/sessions", body);
   }
 
@@ -55,7 +71,7 @@ export class Api {
     return this.call<object>("DELETE", `/api/sessions/${id}`);
   }
 
-  settings(id: string, body: { mode?: ModeName; provider?: string; model?: string }) {
+  settings(id: string, body: { mode?: ModeName; provider?: string; model?: string; confirm?: string }) {
     return this.call<{ mode: ModeName; provider: string | null; model: string | null }>("PUT", `/api/sessions/${id}/settings`, body);
   }
 
@@ -75,8 +91,19 @@ export class Api {
     return this.call<object>("POST", `/api/sessions/${id}/cancel`, {});
   }
 
-  approve(id: string, approval: number, allow: boolean, always = false) {
-    return this.call<object>("POST", `/api/sessions/${id}/approval`, { id: approval, allow, always });
+  /** Answers `approval`, naming its tool call and arguments as the host requires. */
+  approve(id: string, approval: ApprovalEvent, allow: boolean, always = false) {
+    return this.call<object>("POST", `/api/sessions/${id}/approval`, {
+      id: approval.id,
+      allow,
+      always,
+      tool_call_id: approval.tool_call_id ?? "",
+      args_sha256: approval.args_sha256,
+    });
+  }
+
+  revokeGrant(id: string, tool: string) {
+    return this.call<{ grants: string[] }>("DELETE", `/api/sessions/${id}/grants/${encodeURIComponent(tool)}`);
   }
 
   async upload(id: string, file: File): Promise<Upload> {

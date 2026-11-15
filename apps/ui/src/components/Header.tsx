@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Folder, Menu, PanelRight, Shield } from "lucide-react";
+import { Bot, Folder, KeyRound, Menu, PanelRight, Shield, X } from "lucide-react";
 import type { ModeInfo, SessionStatus, Usage } from "../model/types";
 import { folderName, money, tokens } from "../state/util";
 import styles from "./Header.module.css";
@@ -101,6 +101,53 @@ export function ContextRing({
   );
 }
 
+/** Tools allowed for the rest of the session, each with a revoke button. */
+function Grants({ grants, onRevoke }: { grants: string[]; onRevoke: (tool: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !wrap.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  if (grants.length === 0) return null;
+  return (
+    <div className={styles.ringWrap} ref={wrap}>
+      <button
+        type="button"
+        className={styles.chip}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={`${grants.length} ${grants.length === 1 ? "tool" : "tools"} allowed for this session; show and revoke`}
+      >
+        <KeyRound size={14} aria-hidden /> {grants.length}
+      </button>
+      {open && (
+        <div className={styles.popover} role="dialog" aria-label="Allowed for this session">
+          <p className={styles.popoverTitle}>Allowed without asking until the mode changes</p>
+          <ul className={styles.grantList}>
+            {grants.map((tool) => (
+              <li key={tool}>
+                <code>{tool}</code>
+                <button type="button" onClick={() => onRevoke(tool)} aria-label={`Revoke ${tool}`}>
+                  <X size={13} aria-hidden /> Revoke
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export interface HeaderProps {
   title: string;
   canRename: boolean;
@@ -108,6 +155,8 @@ export interface HeaderProps {
   mode: ModeInfo | undefined;
   status: SessionStatus | "new";
   subagents: number;
+  grants: string[];
+  onRevoke: (tool: string) => void;
   context: { tokens: number; compact_at: number | null } | null;
   usage: Usage;
   cost: number | null;
@@ -191,6 +240,7 @@ export function Header(props: HeaderProps) {
           <span className={styles.dot} aria-hidden />
           {status.label}
         </span>
+        <Grants grants={props.grants} onRevoke={props.onRevoke} />
         {props.subagents > 0 && (
           <button type="button" className={styles.chip} onClick={props.onTasks} aria-label={`${props.subagents} subagents; open Tasks`}>
             <Bot size={14} aria-hidden /> {props.subagents}

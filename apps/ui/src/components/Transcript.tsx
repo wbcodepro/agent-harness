@@ -37,6 +37,7 @@ import { duration, tokens } from "../state/util";
 import { DiffCard } from "./DiffCard";
 import { Markdown } from "./Markdown";
 import { FileChip, Thumb } from "./Media";
+import { Output } from "./Output";
 import styles from "./Transcript.module.css";
 
 const ICONS: Record<Category, typeof FileText> = {
@@ -141,11 +142,11 @@ const ToolRowView = memo(function ToolRowView({ row, actions, now }: { row: Tool
       {open && (
         <div className={styles.toolBody}>
           <div className={styles.ioLabel}>Input</div>
-          <pre className={styles.io}>{inputText(row)}</pre>
+          <Output text={inputText(row)} className={styles.io} buttonClassName={styles.showAll} />
           {(row.output || row.status === "done" || failed) && (
             <>
               <div className={styles.ioLabel}>Output</div>
-              <pre className={styles.io}>{row.output || "(no output)"}</pre>
+              <Output text={row.output || "(no output)"} className={styles.io} buttonClassName={styles.showAll} />
             </>
           )}
           {row.files.map((file) => (

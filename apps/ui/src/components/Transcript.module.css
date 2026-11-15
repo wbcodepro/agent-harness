@@ -274,6 +274,17 @@
   margin-top: 4px;
 }
 
+.showAll {
+  justify-self: start;
+  font: 12px/18px var(--font-sans);
+  color: var(--fg-2);
+  padding: 2px 0;
+}
+
+.showAll:hover {
+  color: var(--fg);
+}
+
 .io {
   margin: 0;
   padding: var(--space-2) var(--space-3);

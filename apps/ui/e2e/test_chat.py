@@ -164,7 +164,9 @@ def main():
             if shots:
                 page.screenshot(path=str(SCREENS / "approval-1440-light.png"))
 
-            # Enter allows this one call.
+            # Enter allows this one call (after a short grace period, so the
+            # Enter that sent a message cannot answer a question).
+            page.wait_for_timeout(400)
             page.keyboard.press("Enter")
             expect(approval).to_have_count(0, timeout=10000)
 
@@ -190,6 +192,19 @@ def main():
 
             # The session is in the list with a title from the prompt.
             expect(page.get_by_role("navigation", name="Sessions").get_by_text("Add a setup section to the README")).to_be_visible()
+
+            # A mode change is recorded in the session and shown in the transcript.
+            page.get_by_role("button", name="Close the side panel").click()
+            page.get_by_role("combobox", name="Permission mode").select_option("ask")
+            expect(page.get_by_role("log", name="Conversation").get_by_text("Permission mode: Ask (was Sandboxed), changed on this computer.")).to_be_visible(timeout=10000)
+
+            # The notices of the open-source packages in the page are reachable.
+            page.get_by_role("button", name="About hame and open-source licenses").click()
+            link = page.get_by_role("link", name="open-source licenses")
+            expect(link).to_have_attribute("href", "/licenses.txt")
+            notices = page.request.get(page.url.split("#")[0].split("?")[0] + "licenses.txt")
+            assert notices.ok and "highlight.js" in notices.text()
+            page.keyboard.press("Escape")
 
             # Reloading replays the conversation from the log.
             page.reload()

@@ -228,12 +228,8 @@ export function Composer(props: ComposerProps) {
               value={props.mode}
               disabled={running || !info}
               onChange={(event) => {
-                const mode = event.target.value as ModeName;
-                if (mode === "full-access" && !window.confirm("Full access runs every command without the sandbox and without asking. Continue?")) {
-                  event.target.value = props.mode;
-                  return;
-                }
-                props.onMode(mode);
+                // Full access is confirmed by the host (a second request with its nonce).
+                props.onMode(event.target.value as ModeName);
               }}
             >
               {(info?.modes ?? [{ name: props.mode, label: props.mode, description: "" }]).map((mode) => (
@@ -243,7 +239,7 @@ export function Composer(props: ComposerProps) {
               ))}
             </select>
           </label>
-          <label className={`${styles.pill} ${styles.modelPill}`}>
+          <label className={`${styles.pill} ${styles.modelPill}`} title={`Model: ${props.model?.split(":").pop() ?? "default"}`}>
             <Sparkles size={14} aria-hidden />
             {models && !models.fixed && models.providers.some((p) => p.configured) ? (
               <select

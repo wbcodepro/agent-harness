@@ -6,6 +6,7 @@ import { createElement, memo, useEffect, useMemo, useState, type ReactNode } fro
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
 import { Check, Copy } from "lucide-react";
+import { splitBlocks } from "../lib/blocks";
 import styles from "./Markdown.module.css";
 
 const ALLOWED = new Set([
@@ -96,7 +97,23 @@ export function renderMarkdown(text: string, live = false): ReactNode {
   return Array.from(doc.body.childNodes).map((child, n) => convert(child, String(n), live));
 }
 
+const MarkdownBlock = memo(function MarkdownBlock({ text, live }: { text: string; live: boolean }) {
+  return <>{useMemo(() => renderMarkdown(text, live), [text, live])}</>;
+});
+
+/**
+ * While text streams in, only its last block is parsed again on each
+ * change; finished blocks keep their rendering. Settled text is parsed
+ * whole (so lists and references across blank lines come out right).
+ */
 export const Markdown = memo(function Markdown({ text, live = false }: { text: string; live?: boolean }) {
-  const content = useMemo(() => renderMarkdown(text, live), [text, live]);
-  return <div className={styles.markdown}>{content}</div>;
+  if (!live) return <div className={styles.markdown}><MarkdownBlock text={text} live={false} /></div>;
+  const blocks = splitBlocks(text);
+  return (
+    <div className={styles.markdown}>
+      {blocks.map((block, n) => (
+        <MarkdownBlock key={n} text={block} live={n === blocks.length - 1} />
+      ))}
+    </div>
+  );
 });

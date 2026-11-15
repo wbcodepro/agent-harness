@@ -76,17 +76,18 @@ Follows `GET /api/sessions/{id}/events`.
   session. Local sends `?after=N`; remote sends `{"t":"sub",…,"after":N}`.
 - `onEvent(event, seq)`: each event's parsed JSON, in order. For
   `{"kind":"record","record":{…}}` events `seq` is `record.seq`; for all
-  other kinds (`approval`, `approval_resolved`, `turn`, `steering`,
-  `warning`, `settings`, `session`) it is `null`.
+  other kinds (`approval`, `approvals`, `approval_resolved`, `turn`,
+  `steering`, `grants`, `warning`, `settings`, `session`) it is `null`.
 - Records arrive with strictly increasing `seq`. The transport must never
   deliver a record with a `seq` at or below one it already delivered on
   this subscription (after a reconnect the host replays from `after`).
 - Reconnects are the transport's job: after a dropped connection it calls
   `onState("reconnecting")`, resubscribes with `after` = the last record seq
   it delivered, and calls `onState("open")` once events flow again.
-  Non-record events are not resumable: the host re-sends the live state
-  (pending approvals, the queued messages, "turn started") on every
-  subscription, and the UI's folding ignores duplicates.
+  Non-record events are not resumable: on every subscription the host
+  sends the whole live state after the records — `turn` (started, or ended
+  with the last error), `approvals` (the full list of waiting questions,
+  which replaces the page's), `steering` (the queue) and `grants`.
 - `onEnd(error)`: called once when the stream ends for good — the session
   was deleted (404), the token or device was refused (403), or the
   transport gave up. Never called after the caller unsubscribed.
@@ -103,12 +104,37 @@ serves an artifact that the named session refers to. Rejects with an
 that the SHA-256 of the result matches before resolving. The UI turns the
 blob into an object URL and caches it per page.
 
+## Approvals
+
+An approval event names the call it is about:
+`{"kind":"approval","id":N,"question":…,"tool":…,"tool_call_id":…,"args_sha256":…,"input":…,"effect":…,"scope":…}`,
+where `args_sha256` is the lowercase hex SHA-256 of the arguments as the
+host serialised them. The answer
+`POST /api/sessions/{id}/approval {"id":N,"allow":bool,"always":bool,"tool_call_id":…,"args_sha256":…}`
+must carry the same `tool_call_id` (and, when given, the same
+`args_sha256`), or the host answers 400. A remote implementation checks the
+pair itself too before passing an answer on (APPS-AND-SYNC.md §4).
+
+## Remote callers
+
+The host connector calls the router in process (`hame_web::router`) and
+marks each request with `hame_web::RemoteCaller { device_id, label }`
+(`RemoteCaller::attach` or `hame_web::mark_remote`). Such requests need no
+token and get the remote policy of `[remote]` in the host's config.toml:
+no "Full access" mode and no "always" answers unless `allow_full_access =
+true`, and new sessions only in `roots` (default: folders that already
+have a session, and the folder `hame web` started in). Refusals are 403
+with the reason as text. Choosing "Full access" (local or remote) is
+answered 428 `{"confirm": nonce, "message": …}` first; the same request
+again with `"confirm": nonce` applies it.
+
 ## Errors and statuses the UI relies on
 
 | Status | Meaning |
 |---|---|
 | 400 | bad input (message in the body as text) |
-| 403 | missing or wrong token (local) / device not allowed (remote) |
+| 403 | missing or wrong token (local), or refused by the remote policy |
 | 404 | no such session or artifact |
 | 409 | a turn is running (prompt, settings, delete) or none is (steer), or a queued message was already delivered |
 | 413 | upload too large |
+| 428 | "Full access" needs the confirmation nonce in the body |

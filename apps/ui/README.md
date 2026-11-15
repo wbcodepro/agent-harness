@@ -49,6 +49,7 @@ python3 apps/ui/e2e/test_chat.py           # also refreshes docs/design/screens/
 | `src/model/tools.ts` | tool categories, one-line descriptions, work group summaries |
 | `src/state/` | API client, per-session store (one repaint per frame), helpers |
 | `src/components/` | sidebar, header, transcript, composer, approval card, side panel, Markdown |
+| `src/lib/` | output clipping, streamed-Markdown blocks, approval keys, blob URLs (unit-tested) |
 | `src/styles/global.css` | the design tokens of UI.md, light and dark |
 
 ## Dependencies
@@ -81,6 +82,11 @@ Build and test only (not shipped):
 
 Their transitive packages are MIT, ISC, Apache-2.0 and BSD-3-Clause, plus
 `caniuse-lite` (CC-BY-4.0, browser support data read at build time).
+
+The build writes `licenses.txt` next to the page with the license text of
+every shipped package (from `node_modules`, in name order); `hame web`
+serves it and the About dialog links it. `scripts/license-report.py` lists
+the same packages in `docs/release/THIRD-PARTY-LICENSES.md` and the SBOM.
 
 On the Rust side `hame-web` adds `include_dir` 0.7.4 (MIT) to embed the
 build.

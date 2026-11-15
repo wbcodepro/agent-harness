@@ -89,14 +89,18 @@ export type SessionRecord =
   | R<"checkpoint", { commit: string }>
   | R<"task/start", { contract: TaskContract }>
   | R<"action/receipt", { receipt: unknown }>
-  | R<"task/verified", { report: VerificationReport }>;
+  | R<"task/verified", { report: VerificationReport }>
+  | R<"mode/changed", { mode: ModeName; previous: ModeName; by: string; label?: string }>;
 
 export interface ApprovalEvent {
   kind: "approval";
   id: number;
   question: string;
   tool?: string;
-  call_id?: string;
+  /** The tool call asked about; an answer must name it. */
+  tool_call_id?: string;
+  /** sha256 of the call's arguments as serialised; an answer may name it. */
+  args_sha256?: string;
   input?: unknown;
   effect?: "read-only" | "write" | "execute" | "control";
   scope?: string;
@@ -107,6 +111,8 @@ export type ModeName = "default" | "read-only" | "ask" | "accept-edits" | "full-
 export type StreamEvent =
   | { kind: "record"; record: SessionRecord }
   | ApprovalEvent
+  | { kind: "approvals"; pending: ApprovalEvent[] }
+  | { kind: "grants"; grants: string[] }
   | { kind: "approval_resolved"; id: number; allow: boolean }
   | { kind: "turn"; state: "started" | "ended"; error?: string | null }
   | { kind: "steering"; queued: string[] }
@@ -138,6 +144,7 @@ export interface SessionDetail extends SessionSummary {
   context: { tokens: number; compact_at: number | null };
   queued: string[];
   approvals: ApprovalEvent[];
+  grants: string[];
 }
 
 export interface ModeInfo {
@@ -157,4 +164,5 @@ export interface ServerInfo {
     providers: { name: string; configured: boolean; model: string | null }[];
   };
   limits: { upload_bytes: number };
+  warnings?: string[];
 }

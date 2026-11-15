@@ -275,9 +275,13 @@
   animation: fade-in 160ms var(--ease);
 }
 
+.approval:focus,
 .approval:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  /* One treatment: the card's own amber edge, drawn stronger when it has
+     focus, instead of a second ring around it. */
+  outline: none;
+  border-color: var(--warn);
+  box-shadow: 0 0 0 1px var(--warn), var(--shadow);
 }
 
 .strip {
@@ -388,13 +392,31 @@
     border-radius: var(--radius-card);
     box-shadow: none;
   }
+  /* One line at phone width: icons, truncated labels, the model as an
+     icon whose (invisible, full-size) select opens the system picker. */
   .controls {
-    flex-wrap: wrap;
-    row-gap: 2px;
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+  .modelPill {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+    flex: none;
+  }
+  .modelPill select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    opacity: 0;
+  }
+  .modelPill .pillText {
+    display: none;
   }
   .pill select,
   .pillText {
-    max-width: 96px;
+    max-width: 76px;
   }
   .pill {
     padding: 0 6px;
