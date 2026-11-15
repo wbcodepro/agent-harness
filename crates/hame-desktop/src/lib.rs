@@ -412,6 +412,38 @@ impl DesktopTool {
         Ok(helper)
     }
 
+    /// Window titles and element values of an application's windows, for
+    /// verifying a task's outcome. Read-only; nothing is journalled. Values
+    /// are cut at 300 characters by the helper, so check long document
+    /// content in the saved file instead.
+    pub async fn app_state(&self, app: &str) -> Result<(Vec<String>, Vec<String>), String> {
+        let windows = self
+            .req_quick("windows", json!({"app": app}))
+            .await
+            .map_err(|e| failure_text(&e))?;
+        let mut titles = Vec::new();
+        let mut values = Vec::new();
+        for window in windows["windows"].as_array().into_iter().flatten() {
+            titles.push(window["title"].as_str().unwrap_or_default().to_string());
+            let Some(id) = window["window_id"].as_u64() else {
+                continue;
+            };
+            let observed = self
+                .req_quick(
+                    "observe",
+                    json!({"app": app, "pid": window["pid"], "window_id": id, "max_nodes": 600}),
+                )
+                .await
+                .map_err(|e| failure_text(&e))?;
+            for node in observed["nodes"].as_array().into_iter().flatten() {
+                if let Some(value) = node["value"].as_str().filter(|v| !v.is_empty()) {
+                    values.push(value.to_string());
+                }
+            }
+        }
+        Ok((titles, values))
+    }
+
     /// What the running helper reported in its handshake.
     pub async fn hello(&self) -> Result<protocol::Hello, HelperError> {
         Ok(self.helper().await?.hello.clone())

@@ -324,16 +324,16 @@ fn final_text(records: &[Record]) -> String {
 
 /// What the model requests in a stretch of log cost.
 #[derive(Debug, Default, PartialEq)]
-struct Spent {
-    requests: u64,
+pub(crate) struct Spent {
+    pub(crate) requests: u64,
     /// Everything sent, whether read from the provider's cache or not.
-    input: u64,
-    cached: u64,
-    output: u64,
+    pub(crate) input: u64,
+    pub(crate) cached: u64,
+    pub(crate) output: u64,
 }
 
 impl Spent {
-    fn of(records: &[Record]) -> Self {
+    pub(crate) fn of(records: &[Record]) -> Self {
         let mut spent = Self::default();
         for record in records {
             if let Event::AssistantMessage { usage, .. } | Event::Compaction { usage, .. } =
@@ -377,7 +377,7 @@ impl std::fmt::Display for Spent {
 
 /// Streams the answer to stdout and a one-line trace of tool activity to
 /// stderr.
-fn printer() -> impl FnMut(&Record) + Send + 'static {
+pub(crate) fn printer() -> impl FnMut(&Record) + Send + 'static {
     let mut line_open = false;
     move |record| match &record.event {
         Event::AssistantDelta {

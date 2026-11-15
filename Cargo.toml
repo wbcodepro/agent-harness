@@ -18,6 +18,7 @@ hame-session = { path = "crates/hame-session" }
 hame-acp = { path = "crates/hame-acp" }
 hame-agent = { path = "crates/hame-agent" }
 hame-browser = { path = "crates/hame-browser" }
+hame-desktop = { path = "crates/hame-desktop" }
 hame-app = { path = "crates/hame-app" }
 hame-checkpoint = { path = "crates/hame-checkpoint" }
 hame-context = { path = "crates/hame-context" }

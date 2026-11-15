@@ -9,7 +9,9 @@ rust-version.workspace = true
 [dependencies]
 base64.workspace = true
 hame-agent.workspace = true
+hame-browser.workspace = true
 hame-checkpoint.workspace = true
+hame-desktop.workspace = true
 hame-context.workspace = true
 hame-verify.workspace = true
 hame-eval.workspace = true

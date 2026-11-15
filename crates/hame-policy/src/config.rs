@@ -69,6 +69,10 @@ pub struct ComputerConfig {
     /// Where persistent browser profiles live. Defaults to
     /// `<hame home>/browser-profiles`.
     pub profiles_dir: Option<PathBuf>,
+    /// Playwright browser channel: `chrome` (installed Google Chrome, the
+    /// default), `msedge`, or `chromium` (after `playwright install
+    /// chromium`).
+    pub browser_channel: Option<String>,
     /// Scoped authorizations, e.g.
     /// `{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact"] }`.
     #[serde(rename = "grant")]
@@ -82,6 +86,7 @@ impl Default for ComputerConfig {
             desktop: false,
             headless: true,
             profiles_dir: None,
+            browser_channel: None,
             grants: Vec::new(),
         }
     }

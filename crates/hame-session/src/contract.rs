@@ -504,13 +504,25 @@ impl ActionJournal {
         &self.path
     }
 
-    /// Appends one receipt and syncs it to disk.
+    /// Appends one receipt. The write reaches the OS before this returns,
+    /// so it survives the process dying.
+    ///
+    /// Only a `dispatched` record is also synced to stable storage before
+    /// returning, because it is the one recovery depends on: losing it to a
+    /// power cut would hide an action that may have happened. Losing a
+    /// `not_started` record loses nothing that happened, and losing a later
+    /// settlement leaves the `dispatched` record, which recovery treats as
+    /// `outcome_unknown`: the safe reading. A full sync costs several
+    /// milliseconds on macOS, so this saves two of three per action.
     pub fn record(&self, receipt: &ActionReceipt) -> io::Result<()> {
         let mut line = serde_json::to_string(receipt).map_err(io::Error::other)?;
         line.push('\n');
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.write_all(line.as_bytes())?;
-        file.sync_data()
+        if receipt.status == ActionStatus::Dispatched {
+            file.sync_data()?;
+        }
+        Ok(())
     }
 
     /// Every receipt in the journal, in order. A torn last line (a crash

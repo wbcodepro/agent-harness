@@ -1563,8 +1563,10 @@ version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "hame-agent",
+ "hame-browser",
  "hame-checkpoint",
  "hame-context",
+ "hame-desktop",
  "hame-eval",
  "hame-ext",
  "hame-kernel",

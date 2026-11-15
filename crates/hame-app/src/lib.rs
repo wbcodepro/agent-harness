@@ -5,6 +5,7 @@
 
 mod import;
 
+pub mod computer;
 mod reviewer;
 
 use std::io::IsTerminal;
@@ -125,6 +126,10 @@ pub struct Options {
     /// Record model attempts and tool calls in this trace. Given to
     /// subagents too, so their work lands in the same trace.
     pub tracer: Option<hame_trace::Tracer>,
+    /// The task this run works on: its grants enable and scope the
+    /// browser and desktop tools, and its acceptance conditions hold the
+    /// turn open until they pass (a bounded number of times).
+    pub task: Option<hame_session::contract::TaskContract>,
 }
 
 type NoticeSink = Box<dyn Fn(&str) + Send + Sync>;
@@ -166,6 +171,8 @@ pub struct Runtime {
     pub secrets: Secrets,
     /// Push a message here to hand it to the running turn.
     pub steering: Steering,
+    /// Browser and desktop tools, and the probe that reads their state.
+    pub computer: computer::Computer,
 }
 
 /// The directory where checkpoints of `cwd` are kept.
@@ -783,9 +790,51 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             );
         }
     }
+    // Browser and desktop control, when configured or granted by the task.
+    let extra = options
+        .task
+        .as_ref()
+        .map(|task| task.authorization.clone())
+        .unwrap_or_default();
+    let computer = computer::Computer::build(home, &config, &extra, Some(Arc::clone(&pipeline)));
+    if let Some(browser) = &computer.browser {
+        tools.insert(browser.clone());
+    }
+    if let Some(desktop) = &computer.desktop {
+        tools.insert(desktop.clone());
+    }
+    if computer.any() {
+        system.push_str(computer::COMPUTER_GUIDANCE);
+    }
+    // Saved workflows, offered only when there are some.
+    let workflow_dirs = vec![cwd.join(".hame").join("workflows"), home.join("workflows")];
+    let trust_file = home.join(hame_verify::workflow::TRUST_FILE);
+    if !hame_verify::workflow::list(
+        &workflow_dirs,
+        &hame_verify::workflow::TrustList::load(&trust_file),
+    )
+    .is_empty()
+    {
+        tools.insert(Arc::new(hame_verify::workflow::WorkflowTool {
+            dirs: workflow_dirs,
+            trust_file,
+            tools: tools.clone(),
+            pipeline: Arc::clone(&pipeline),
+            probe: Some(computer.probe.clone() as Arc<dyn hame_verify::StateProbe>),
+            authorization: computer.authorization.clone(),
+            runner: Some(Arc::clone(&runner)),
+        }));
+    }
+    if options.task.is_some() {
+        hooks.push(Arc::new(hame_verify::OutcomeGate {
+            cwd: cwd.to_path_buf(),
+            probe: Some(computer.probe.clone() as Arc<dyn hame_verify::StateProbe>),
+            max_rounds: 2,
+        }));
+    }
     if options.plan {
         deferred.retain(|tool| tool.effect() != Effect::Write);
-        tools.retain(|tool| tool.effect() != Effect::Write);
+        tools.retain(|tool| !matches!(tool.effect(), Effect::Write | Effect::Control));
         system.push_str(PLAN_MODE);
     }
 
@@ -832,6 +881,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         proxy,
         secrets,
         steering,
+        computer,
     })
 }
 
