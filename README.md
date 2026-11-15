@@ -172,6 +172,7 @@ headless = true                 # browser without a window (default)
 browser_channel = "chrome"      # chrome (installed Google Chrome, default) | msedge | chromium
 # batch = true                  # the tools' batch action (default on; off only to measure it)
 # observation = "semantic"      # semantic (default) | screenshot | pixels (both need a "screen" grant; screenshot measures vision cost, pixels is the screenshot-loop baseline: screenshots only, clicks by coordinates)
+# desktop_background = false     # true: the desktop tool works without taking your screen (text and plain keys only; saving and menus need the app in front)
 # profiles_dir = "/path"        # persistent browser profiles; default ~/.hame/browser-profiles
 
 [[computer.grant]]              # read and use pages on local servers, profile "work" only

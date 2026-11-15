@@ -17,3 +17,4 @@ and Pages without making them frontmost; results and conclusions are in
 They open and quit the apps (discarding changes) and write only into the
 output folder. Run them from a terminal with Accessibility and Screen
 Recording permission. They never post mouse events.
+- `probe6.swift`: other menu items (Edit > Select All, File > Close) and a button inside the window (Bold) with the app in the background.

@@ -92,6 +92,13 @@ pub struct ComputerConfig {
     /// `pixels` need the Screen capability in a browser grant. Any other
     /// value is an error.
     pub observation: Observation,
+    /// Run the desktop tool in the background so the user keeps the
+    /// screen, keyboard and pointer: text and plain keys go to the target
+    /// app's process without bringing it in front; focusing windows, menu
+    /// commands, pixel clicks and key equivalents are refused as
+    /// `needs_foreground` (a background app does not carry them out).
+    /// Off by default.
+    pub desktop_background: bool,
 }
 
 /// How the browser tool shows pages to the model; see
@@ -119,6 +126,7 @@ impl Default for ComputerConfig {
             grants: Vec::new(),
             batch: true,
             observation: Observation::Semantic,
+            desktop_background: false,
         }
     }
 }

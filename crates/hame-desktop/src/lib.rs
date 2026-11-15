@@ -124,6 +124,14 @@ pub struct DesktopConfig {
     /// with a fresh screenshot. Off by default; it exists to measure what
     /// accessibility observations save.
     pub pixels: bool,
+    /// Background mode (`[computer] desktop_background = true`): the user
+    /// keeps the screen, keyboard and pointer. Text and plain keys go to
+    /// the target app's process instead of the HID stream, so the app need
+    /// not be in front; `focus`, `menu`, `click_at` and keys with cmd, ctrl
+    /// or opt are refused with `needs_foreground`, since a background app
+    /// does not act on menu commands or key equivalents (verified on macOS
+    /// 26.6.2; see docs/research/BACKGROUND-EXECUTION-2026-11-15.md).
+    pub background: bool,
 }
 
 impl DesktopConfig {
@@ -139,6 +147,7 @@ impl DesktopConfig {
             simulate_untrusted: false,
             batch: true,
             pixels: false,
+            background: false,
         }
     }
 
@@ -670,7 +679,8 @@ impl DesktopTool {
     /// caller treats as the stricter case; an error when the input could
     /// not be sent anyway (the window is not frontmost, or is gone).
     async fn focus_context(&self, pid: &Value, window_id: &Value) -> Step<Option<FocusContext>> {
-        let params = json!({"pid": pid, "window_id": window_id});
+        let params =
+            json!({"pid": pid, "window_id": window_id, "background": self.config.background});
         match self.req_quick("focus_context", params).await {
             Ok(result) => Ok(FocusContext::from_json(&result)),
             Err(e) if PASS_THROUGH.contains(&e.code.as_str()) => Err(fail(&e)),
@@ -1127,6 +1137,9 @@ impl DesktopTool {
             });
         }
         if action == "select" {
+            if self.config.background {
+                params["background"] = json!(true);
+            }
             let cell = input["cell"].as_str().filter(|c| !c.trim().is_empty());
             let text = input["text"].as_str().filter(|t| !t.is_empty());
             if cell.is_none() && text.is_none() && facts.role != "AXCell" {
@@ -1141,6 +1154,15 @@ impl DesktopTool {
                 params["text"] = json!(text);
                 if let Some(n) = input["occurrence"].as_u64() {
                     params["occurrence"] = json!(n);
+                }
+                match input["caret"].as_str() {
+                    Some(c @ ("before" | "after")) => params["caret"] = json!(c),
+                    Some(other) => {
+                        return Err(invalid(format!(
+                            "caret is \"before\" or \"after\", not {other:?}."
+                        )));
+                    }
+                    None => {}
                 }
                 emitted.push(format!(
                     "text: {}",
@@ -1321,6 +1343,9 @@ impl DesktopTool {
             let mut params = params;
             params["expect_role"] = resolved["role"].clone();
             params["expect_name"] = resolved["name"].clone();
+            if self.config.background {
+                params["background"] = json!(true);
+            }
             return Ok((params, resolved, target));
         }
         let params = self.window_params(input, ctx)?;
@@ -1334,10 +1359,13 @@ impl DesktopTool {
             return Err(Outcome::err(problem));
         }
         let target = self.target_of(&state["window"], channel, ctx);
-        let params = json!({
+        let mut params = json!({
             "pid": state["window"]["pid"],
             "window_id": state["window"]["window_id"],
         });
+        if self.config.background {
+            params["background"] = json!(true);
+        }
         Ok((params, state, target))
     }
 
@@ -1490,6 +1518,9 @@ impl DesktopTool {
                 "pid": info["window"]["pid"],
                 "window_id": info["window"]["window_id"],
             });
+        }
+        if self.config.background {
+            params["background"] = json!(true);
         }
         // Return, Space and Delete do what the focused element (or the
         // dialog around it) does with them; ask where focus is now, and
@@ -1993,6 +2024,11 @@ impl DesktopTool {
             );
         }
         let action = input["action"].as_str().unwrap_or("");
+        if self.config.background
+            && let Some(why) = background_refusal(action, input)
+        {
+            return Outcome::err(why);
+        }
         let result = match action {
             "apps" => self.apps(ctx).await,
             "windows" => self.windows(input, ctx).await,
@@ -2350,6 +2386,31 @@ impl DesktopTool {
     }
 }
 
+/// Why `action` cannot run in background mode, if it cannot: a background
+/// app does not act on menu commands or key equivalents, and pixel clicks
+/// and `focus` need the screen.
+fn background_refusal(action: &str, input: &Value) -> Option<String> {
+    let step = match action {
+        "focus" => "focusing a window brings its app in front",
+        "menu" => "menu commands are not carried out by an app in the background",
+        "click_at" => "a pixel click needs the app in front",
+        "key" => {
+            let combo = keys::parse(input["keys"].as_str().unwrap_or("")).ok()?;
+            if !["cmd", "ctrl", "opt"].iter().any(|m| combo.has(m)) {
+                return None;
+            }
+            "key equivalents (cmd, ctrl, opt) are not carried out by an app in the background"
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "needs_foreground: hame is working in the background, so the user keeps the screen; \
+         {step}. Do what you can without it (observe, set_value, press, select with caret, \
+         type, plain keys), then stop and tell the user which step needs the app in front \
+         (for example saving the document)."
+    ))
+}
+
 /// Narrows the declaration to the screenshot loop's actions and fields.
 fn pixel_spec(spec: &mut ToolSpec) {
     spec.description = "Operate native macOS applications from screenshots, as a screenshot \
@@ -2433,6 +2494,7 @@ impl Tool for DesktopTool {
                     "text": {"type": "string", "description": "type: the text (\\n is Return, \\t is Tab). select: the text to select."},
                     "cell": {"type": "string", "description": "select: a cell address or range, e.g. C2 or A1:C4."},
                     "occurrence": {"type": "integer", "description": "select: which appearance of text (default 1)."},
+                    "caret": {"type": "string", "enum": ["before", "after"], "description": "select: put the insertion point before or after the text instead of selecting it."},
                     "keys": {"type": "string", "description": "key: e.g. cmd+s, return, cmd+shift+g."},
                     "path": {"type": "string", "description": "menu: e.g. File > Save…"},
                     "until": {"type": "string", "enum": ["window", "window_gone", "dialog", "element", "element_gone", "value", "title"]},
@@ -2457,6 +2519,15 @@ impl Tool for DesktopTool {
         if self.config.pixels {
             pixel_spec(&mut spec);
             return spec;
+        }
+        if self.config.background {
+            spec.description.push_str(
+                " This desktop runs in the background so the user keeps the screen: type and \
+                 plain keys go to the named window without bringing its app in front (place the \
+                 insertion point first with select caret before/after, or select a cell); focus, \
+                 menu, click_at and keys with cmd, ctrl or opt are refused as needs_foreground. \
+                 Finish what you can, then tell the user which step needs the app in front.",
+            );
         }
         if !self.config.batch {
             spec.description = spec.description.replace(
@@ -2657,6 +2728,35 @@ mod tests {
             "{}",
             out.text
         );
+    }
+
+    #[tokio::test]
+    async fn background_mode_refuses_what_needs_the_foreground() {
+        let mut config = DesktopConfig::new("/nonexistent-hame-home", Authorization::default());
+        config.background = true;
+        let t = DesktopTool::new(config);
+        assert!(t.spec().description.contains("needs_foreground"));
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(dir.path());
+        for input in [
+            json!({"action": "focus", "app": "TextEdit", "window": 3}),
+            json!({"action": "menu", "app": "TextEdit", "path": "File > Save"}),
+            json!({"action": "click_at", "artifact": "0123456789ab", "x": 1, "y": 1}),
+            json!({"action": "key", "app": "TextEdit", "keys": "cmd+s"}),
+            json!({"action": "key", "app": "TextEdit", "keys": "ctrl+a"}),
+            json!({"action": "key", "app": "TextEdit", "keys": "opt+left"}),
+        ] {
+            let out = t.call(&input, &ctx).await;
+            assert!(
+                out.is_error && out.text.starts_with("needs_foreground"),
+                "{input}: {}",
+                out.text
+            );
+        }
+        assert!(background_refusal("key", &json!({"keys": "return"})).is_none());
+        assert!(background_refusal("key", &json!({"keys": "shift+tab"})).is_none());
+        assert!(background_refusal("type", &json!({"text": "x"})).is_none());
+        assert!(background_refusal("press", &json!({})).is_none());
     }
 
     #[tokio::test]

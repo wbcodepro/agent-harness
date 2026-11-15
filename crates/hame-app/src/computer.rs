@@ -110,6 +110,7 @@ impl Computer {
             let mut desktop = DesktopConfig::new(home, authorization.clone());
             desktop.batch = config.computer.batch;
             desktop.pixels = config.computer.observation == Observation::Pixels;
+            desktop.background = config.computer.desktop_background;
             let tool = DesktopTool::new(desktop);
             Arc::new(match &pipeline {
                 Some(pipeline) => tool.with_pipeline(Arc::clone(pipeline)),
@@ -240,6 +241,11 @@ mod tests {
         let config = Config::parse("[computer]\ndesktop = true\nobservation = \"pixels\"").unwrap();
         let desktop = Computer::build(home.path(), &config, &Authorization::default(), None);
         assert!(desktop.desktop.as_ref().unwrap().config().pixels);
+        let config =
+            Config::parse("[computer]\ndesktop = true\ndesktop_background = true").unwrap();
+        let background = Computer::build(home.path(), &config, &Authorization::default(), None);
+        assert!(background.desktop.as_ref().unwrap().config().background);
+        assert!(!desktop.desktop.as_ref().unwrap().config().background);
         assert_eq!(desktop.guidance(), COMPUTER_GUIDANCE_PIXELS);
     }
 }

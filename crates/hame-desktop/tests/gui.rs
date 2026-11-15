@@ -562,6 +562,115 @@ async fn d01_textedit_new_document_saved_through_the_save_panel_beside_a_decoy()
     });
 }
 
+/// The bundle id of the frontmost application, from Launch Services.
+fn frontmost_bundle() -> String {
+    let front = Command::new("lsappinfo").arg("front").output().unwrap();
+    let asn = String::from_utf8_lossy(&front.stdout).trim().to_string();
+    let info = Command::new("lsappinfo")
+        .args(["info", "-only", "bundleid", &asn])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&info.stdout)
+        .split('"')
+        .nth(3)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Background mode: a document opened behind the user's app is edited by
+/// typing and plain keys without TextEdit coming forward; what needs the
+/// foreground is refused.
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1"]
+async fn background_mode_types_without_taking_the_foreground() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        // In the test's home, which outlives the cleanup: a document whose
+        // file vanished cannot be closed without a dialog.
+        let file = gui._home.path().join("hame-background.txt");
+        std::fs::write(&file, "start of the note\n").unwrap();
+        let before: Vec<u64> = gui.windows().await.iter().map(|(id, _)| *id).collect();
+        open_app(&[
+            "-g".as_ref(),
+            "-a".as_ref(),
+            "TextEdit".as_ref(),
+            file.as_os_str(),
+        ]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let doc = loop {
+            if let Some((id, _)) = gui
+                .windows()
+                .await
+                .into_iter()
+                .find(|(id, title)| title.contains("hame-background") && !before.contains(id))
+            {
+                break id;
+            }
+            assert!(Instant::now() < deadline, "the document did not open");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
+        gui.created.push(doc);
+        let front_at_start = frontmost_bundle();
+        let mut cfg = config(gui._home.path(), textedit_grants(all_caps()));
+        cfg.background = true;
+        let background = DesktopTool::new(cfg);
+        let call = |input: Value| {
+            let background = &background;
+            let ctx = &gui.ctx;
+            async move { background.call(&input, ctx).await }
+        };
+        let obs = call(json!({"action": "observe", "app": TEXTEDIT, "window": doc})).await;
+        assert!(!obs.is_error, "{}", obs.text);
+        let area = find_ref(&obs.text, " textarea").unwrap();
+
+        let caret = call(
+            json!({"action": "select", "ref": area, "text": "start of the note",
+                                "caret": "after"}),
+        )
+        .await;
+        assert!(
+            !caret.is_error && caret.text.contains("insertion point after"),
+            "{}",
+            caret.text
+        );
+        let typed = call(json!({"action": "type", "app": TEXTEDIT, "window": doc,
+                                "text": " – thêm từ nền"}))
+        .await;
+        assert!(!typed.is_error, "{}", typed.text);
+        let key =
+            call(json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"})).await;
+        assert!(!key.is_error, "{}", key.text);
+        let after = gui.observe_until(doc, "thêm từ nền").await;
+        assert!(
+            after.contains("start of the note – thêm từ nền\\n"),
+            "{after}"
+        );
+
+        for refused in [
+            json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "cmd+s"}),
+            json!({"action": "menu", "app": TEXTEDIT, "window": doc, "path": "File > Save"}),
+            json!({"action": "focus", "app": TEXTEDIT, "window": doc}),
+        ] {
+            let out = call(refused.clone()).await;
+            assert!(
+                out.is_error && out.text.starts_with("needs_foreground"),
+                "{refused}: {}",
+                out.text
+            );
+        }
+        if front_at_start != TEXTEDIT {
+            assert_ne!(frontmost_bundle(), TEXTEDIT, "TextEdit came to the front");
+        } else {
+            eprintln!("TextEdit was already frontmost; the foreground check was skipped");
+        }
+        // Nothing was saved: the file still has its first content.
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "start of the note\n"
+        );
+    });
+}
+
 /// The screenshot-loop configuration: no accessibility observations or
 /// refs; every acting call comes back with a screenshot, and click_at and
 /// typing work from it.

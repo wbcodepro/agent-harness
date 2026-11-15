@@ -145,7 +145,7 @@ throughout.
 |---|---|---|
 | Launch with `open -g` (and `-j`) | works | document windows are visible to AX; `-j` did not keep a TextEdit document window hidden |
 | AX read of text, cells, menus | works | Numbers and Pages need `AXEnhancedUserInterface` and a few seconds before their canvases appear in the tree |
-| AX set value, TextEdit text area | works | the value changes but the document is not marked edited, so a later Save does not write it |
+| AX set value, TextEdit text area | works | the document is marked edited (its title shows "Edited"); saving it is a document command, see below |
 | AX set value, Numbers cell / Pages body | does not work | Numbers refuses (-25200); Pages ignores it |
 | `postToPid` text, TextEdit (background, not hidden) | works | Vietnamese included; macOS autocapitalization applies ("typed" became "Typed"); the document becomes edited |
 | `postToPid` text, Numbers | works after selecting the cell by AX (`AXSelectedCells`) | B2 became 777 and Return moved the selection to B3, all in the background |
@@ -153,10 +153,14 @@ throughout.
 | `postToPid` text into a minimized window | does not work | |
 | `postToPid` key equivalents (cmd+s, cmd+shift+g) | do not work in the background | nothing saved; no Go To Folder sheet |
 | AX press File > Save / Save As… with the app in the background | does nothing (AX reports success) | no save after 4 s, no sheet |
+| AX press of other menu items (Edit > Select All, File > Close) in the background | does nothing (AX reports success) | menu commands in general, not only saving |
+| AX press of a control inside the window (TextEdit's Bold button) in the background | works | value 0 → 1 |
 | the same after `NSRunningApplication.activate()` | works (Save wrote the file; Save As… opened its sheet) | macOS did not bring TextEdit forward (Chrome stayed frontmost), so `activate()` changed the app's own active state only; macOS may honor the activation when the user is idle, which would raise the app, so this is a lead, not a safe default |
 | Save panel: Go To Folder by `postToPid` key, even after `activate()` | does not work | panel navigation needs either the foreground or another route |
 | Capture of a background, occluded or hidden-app window (`SCScreenshotManager`, `desktopIndependentWindow`) | works | full content for TextEdit, Numbers and Pages; set `showsCursor = false` or the pointer is drawn in |
 | Capture of a minimized window | does not work | ScreenCaptureKit error -3811 |
+
+Probe 6 (`probe6.swift`) checked the other menu items and the Bold button.
 
 What follows for hame: reading, capturing and editing content (TextEdit
 text; Numbers cells by selecting then typing; Pages text with the caret
@@ -201,3 +205,27 @@ switching), which needs a new user account; Apple Events `save` in the
 background, which needs an Automation consent prompt; a Tart or Lume VM
 (a 25 GB image); Cua Driver itself; pixel clicks into background windows
 (only the private `SLEventPostToPid` route is known to work).
+
+## Implemented: `[computer] desktop_background = true`
+
+hame's desktop tool now has the background mode recommended above
+(`DesktopConfig.background`). Text and plain keys (no cmd, ctrl or opt)
+go to the target app's process with `postToPid`; the helper requires the
+target window to be the focused window inside its app (making it main
+through accessibility when it is not, which does not bring the app
+forward) instead of frontmost, keeps its checks for focus moving to
+another element, unexpected sheets and dialogs, and refuses input for a
+sheet or an open or save panel (drawn out of process) as
+`needs_foreground`. `select` takes `caret: "before" | "after"` to place an
+insertion point, and selecting cells no longer brings the window forward
+in this mode. `focus`, `menu`, `click_at` and keys with cmd, ctrl or opt
+are refused with `needs_foreground`, telling the model to finish what it
+can and tell the user which step needs the app in front.
+
+Verified by the GUI test `background_mode_types_without_taking_the_foreground`:
+a document opened with `open -g` behind Finder gets an insertion point
+after a phrase, Vietnamese text and a Return typed into it, cmd+s, a menu
+command and `focus` are refused, Finder stays frontmost, and nothing is
+saved. Not yet done: measuring the pilot's desktop tasks in this mode, and
+an announced foreground step (or an Apple Events save) for the saving that
+every such task ends with.

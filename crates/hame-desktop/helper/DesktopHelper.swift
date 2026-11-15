@@ -1162,7 +1162,9 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
         // in front; focusing the table afterwards would make Numbers select
         // the table object instead of the cell (pilot X02). Bring the window
         // forward first, then select.
-        _ = try? focus(["pid": Int(r.app.processIdentifier), "window_id": Int(r.windowID)])
+        if !(req["background"] as? Bool ?? false) {
+            _ = try? focus(["pid": Int(r.app.processIdentifier), "window_id": Int(r.windowID)])
+        }
         let err = AXUIElementSetAttributeValue(table, "AXSelectedCells" as CFString, cells as CFArray)
         if err != .success {
             throw fail("unsupported", "The table does not let its cells be selected through accessibility (AX error \(err.rawValue)).")
@@ -1196,7 +1198,14 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
     if !settable.boolValue {
         throw fail("unsupported", "\(r.role) \"\(r.name)\" does not let its text be selected through accessibility.")
     }
+    // `caret`: put an insertion point before or after the text instead of
+    // selecting it, so typing adds to the text instead of replacing it.
     var range = CFRange(location: found.location, length: found.length)
+    switch req["caret"] as? String {
+    case "before": range = CFRange(location: found.location, length: 0)
+    case "after": range = CFRange(location: found.location + found.length, length: 0)
+    default: break
+    }
     guard let axRange = AXValueCreate(.cfRange, &range) else { throw fail("failed", "Could not build the range.") }
     let err = AXUIElementSetAttributeValue(r.element, kAXSelectedTextRangeAttribute as CFString, axRange)
     if err != .success {
@@ -1204,7 +1213,9 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
     }
     Thread.sleep(forTimeInterval: 0.05)
     let selected = strAttr(r.element, kAXSelectedTextAttribute) ?? ""
-    return ["selected_text": selected, "matches": selected == text, "location": found.location,
+    let caret = req["caret"] as? String
+    return ["selected_text": selected, "matches": caret != nil ? selected.isEmpty : selected == text,
+            "caret": caret ?? "", "location": range.location,
             "occurrences_seen": count, "window": windowState(r)]
 }
 
@@ -1382,11 +1393,40 @@ struct InputTarget {
     /// Where input started, to return to when a followed editor closes.
     let originWindow: AXUIElement
     let originFocus: AXUIElement?
+    /// Background input: events go to the app's process, the app need not
+    /// be frontmost, only the target window focused inside the app.
+    var background: Bool = false
 }
 
 /// Checks that the target is frontmost and focused, so input would land in
 /// it; never moves focus itself.
-func captureInputTarget(pid: pid_t, appEl: AXUIElement, windowID wid: CGWindowID) throws -> InputTarget {
+func captureInputTarget(pid: pid_t, appEl: AXUIElement, windowID wid: CGWindowID,
+                        background: Bool = false) throws -> InputTarget {
+    if background {
+        // Inside the app the target window must be the focused one; making
+        // it main through accessibility does not bring the app forward.
+        if focusedWindows(appEl).map({ windowID(of: $0.top) != wid }) ?? true,
+           let w = axWindows(appEl).first(where: { windowID(of: $0) == wid }) {
+            AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        guard let fw = focusedWindows(appEl), windowID(of: fw.top) == wid else {
+            throw fail("not_focused", "The target window is not the focused window of its app, and making it main did not change that.")
+        }
+        let panelId = attr(fw.focused, kAXIdentifierAttribute) as? String
+        if roleOf(fw.focused).0 == "AXSheet" || panelId == "open-panel" || panelId == "save-panel"
+            || !CFEqual(fw.focused, elementAttr(appEl, kAXFocusedWindowAttribute) ?? appEl) {
+            throw fail("needs_foreground", "Keyboard input for a sheet or an open or save panel cannot be sent to an app in the background; this step needs the app in front.")
+        }
+        var t = InputTarget(pid: pid, appEl: appEl, windowID: wid, focusedWindow: fw.focused,
+                            sheets: sheetsOf(fw.top).count,
+                            focus: elementAttr(appEl, kAXFocusedUIElementAttribute),
+                            windows: axWindows(appEl),
+                            originWindow: fw.focused,
+                            originFocus: elementAttr(appEl, kAXFocusedUIElementAttribute))
+        t.background = true
+        return t
+    }
     guard targetHasFocus(pid: pid, appEl: appEl, windowID: wid), let fw = focusedWindows(appEl) else {
         throw fail("not_frontmost",
                    "The target window is not frontmost and focused. Call focus first; physical input never steals focus by itself.",
@@ -1411,7 +1451,7 @@ let NOT_EDITOR_SUBROLES: Set<String> = ["AXStandardWindow", "AXDialog", "AXSyste
 /// and the app is still frontmost. Returns the editor's description when
 /// the target moved.
 func followEditor(_ t: inout InputTarget) -> String? {
-    guard frontmostPid() == t.pid, let fw = focusedWindows(t.appEl), !CFEqual(fw.focused, t.focusedWindow) else {
+    guard t.background || frontmostPid() == t.pid, let fw = focusedWindows(t.appEl), !CFEqual(fw.focused, t.focusedWindow) else {
         return nil
     }
     if CFEqual(fw.focused, t.originWindow) {
@@ -1438,7 +1478,7 @@ func checkInputTarget(_ t: InputTarget, emitted: String, checkFocus: Bool) throw
     guard let front = frontmostPid() else {
         throw fail("interference", "Cannot tell which application is frontmost; stopped.", details)
     }
-    if front != t.pid {
+    if !t.background && front != t.pid {
         let name = runningApp(pid: front)?.localizedName ?? "pid \(front)"
         var d = details
         d["frontmost"] = name
@@ -1555,14 +1595,15 @@ func typeText(_ req: [String: Any], id: Int) throws -> [String: Any] {
     }
     let size = max(1, min((req["chunk"] as? Int) ?? 8, 16))
     let delay = Double(max(0, min((req["delay_ms"] as? Int) ?? 12, 1000))) / 1000.0
-    var target = try captureInputTarget(pid: pid, appEl: appEl, windowID: wid)
+    let background = req["background"] as? Bool ?? false
+    var target = try captureInputTarget(pid: pid, appEl: appEl, windowID: wid, background: background)
     // Focus may not move while typing (checked before every chunk), so the
     // focus checked here is the focus every newline and space will meet.
     // The exceptions followEditor allows stay inside what the typing
     // itself opened: the app's own editor for the element typed into.
     try checkContext(req, focusContext(target.focus, windows: [target.focusedWindow, topWindow]))
     var startFocus = target.focus
-    let hid = postsToHID(req, target)
+    let hid = background ? false : postsToHID(req, target)
     var baseCount = charCount(startFocus)
     var baseSelected = selectedLength(startFocus)
     // How much of `emitted` was typed before the current focus took over.
@@ -1620,12 +1661,13 @@ func pressKey(_ req: [String: Any], id: Int) throws -> [String: Any] {
         flags.insert(f)
     }
     let (app, appEl, window, wid) = try resolveWindow(req)
-    let target = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid)
+    let background = req["background"] as? Bool ?? false
+    let target = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid, background: background)
     try checkCancelled(id)
     try checkInputTarget(target, emitted: "", checkFocus: false)
     try checkContext(req, focusContext(elementAttr(appEl, kAXFocusedUIElementAttribute),
                                        windows: [target.focusedWindow, window]))
-    postKey(CGKeyCode(code), flags: flags, pid: app.processIdentifier, hid: postsToHID(req, target))
+    postKey(CGKeyCode(code), flags: flags, pid: app.processIdentifier, hid: background ? false : postsToHID(req, target))
     Thread.sleep(forTimeInterval: 0.08)
     return ["pressed": req["label"] as? String ?? "", "window": windowJSON(window, app: app, appEl: appEl) ?? [:]]
 }
@@ -2034,7 +2076,8 @@ func handle(_ req: [String: Any]) {
         case "focus_context":
             // Only meaningful while the window would receive the input.
             let (app, appEl, window, wid) = try resolveWindow(req)
-            let t = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid)
+            let t = try captureInputTarget(pid: app.processIdentifier, appEl: appEl, windowID: wid,
+                                           background: req["background"] as? Bool ?? false)
             result = focusContext(t.focus, windows: [t.focusedWindow, window])
         case "hit_test":
             guard let x = req["x"] as? Double, let y = req["y"] as? Double else {

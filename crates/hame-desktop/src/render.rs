@@ -196,12 +196,26 @@ pub fn selection(what: &str, result: &Value) -> String {
             );
         }
         return format!(
-            "Selected in {table}: {shown}. Its window is in front: type now (without focusing \
-             the table, which would select the table instead of the cell). Typing replaces the \
-             cell's content; \\n (Return) or \\t (Tab) in typed text commits it and moves on."
+            "Selected in {table}: {shown}. Type now (without focusing the table, which would \
+             select the table instead of the cell). Typing replaces the cell's content; \\n \
+             (Return) or \\t (Tab) in typed text commits it and moves on."
         );
     }
     let selected = result["selected_text"].as_str().unwrap_or("");
+    let caret = result["caret"].as_str().unwrap_or("");
+    if !caret.is_empty() {
+        return if result["matches"].as_bool() == Some(true) {
+            format!(
+                "Put the insertion point {caret} the text in {what} (character {}); typing adds there.",
+                result["location"]
+            )
+        } else {
+            format!(
+                "Asked {what} for an insertion point {caret} the text, but the selection reads {}.",
+                quote(selected, 120)
+            )
+        };
+    }
     if result["matches"].as_bool() == Some(true) {
         format!("Selected {} in {what}.", quote(selected, 120))
     } else {
