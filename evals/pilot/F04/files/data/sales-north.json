@@ -1,0 +1,4 @@
+{"region": "north", "items": [
+  {"sku": "A1", "qty": 3, "unit_price": "12.50"},
+  {"sku": "B2", "qty": 1, "unit_price": "99.99"}
+]}

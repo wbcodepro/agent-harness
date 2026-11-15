@@ -1,0 +1,16 @@
+# Local settings for this machine. Keep my changes!
+schema_version = 1
+
+[server]
+host = "0.0.0.0"   # listen on all interfaces for the LAN demo
+port = 9090
+timeout = 45       # seconds; the VPN is slow
+
+[log]
+level = "debug"
+file = "/var/log/app/app.log"
+
+[local]
+# my own settings, not in the defaults
+editor = "nvim"
+greeting = "Xin chào"

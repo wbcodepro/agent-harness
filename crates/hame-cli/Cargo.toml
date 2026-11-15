@@ -28,12 +28,14 @@ hame-llm.workspace = true
 hame-multi.workspace = true
 hame-session.workspace = true
 hame-tools.workspace = true
+hame-trace.workspace = true
 hame-tui.workspace = true
 hame-web.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 toml.workspace = true
 serde.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 agent-client-protocol = { version = "5.2.0", features = ["process"] }

@@ -1,0 +1,8 @@
+order_id,customer,amount,currency,status
+1,"Zed, Ann","2,000.00",USD,PAID
+2,Amy,10.10,USD,paid
+3,Amy,20.20,USD,paid
+4,"Zed, Ann",5.00,USD,refunded
+5,Bo,30.30,USD,paid
+6,Cy,30.30,USD, paid
+7,Bo,1.00,USD,void

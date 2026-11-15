@@ -1,0 +1,11 @@
+order_id,customer,amount,currency,status
+1001,"Nguyen, An",120.50,USD,paid
+1002,Bob Smith,80.00,USD,PAID
+1003,"Tran, Binh",45.25,USD,refunded
+1004,Bob Smith,19.99,USD,paid
+1005,"Nguyen, An",30.00,USD,Paid
+1006,Carol,200.00,USD,pending
+1007,Carol,15.00,USD,paid
+1008,"Tran, Binh",99.75,USD,paid
+1009,Dave,0.50,USD,paid
+1010,"Le, Chi","1,250.00",USD,paid

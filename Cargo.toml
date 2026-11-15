@@ -25,6 +25,7 @@ hame-ext = { path = "crates/hame-ext" }
 hame-llm = { path = "crates/hame-llm" }
 hame-tools = { path = "crates/hame-tools" }
 hame-tui = { path = "crates/hame-tui" }
+hame-trace = { path = "crates/hame-trace" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1"
