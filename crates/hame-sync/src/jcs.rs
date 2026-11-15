@@ -86,6 +86,29 @@ fn number(n: &serde_json::Number) -> Result<String, String> {
     es_number(f)
 }
 
+/// The shortest decimal digits that round-trip to `f` (positive, finite),
+/// choosing the closest such number and, between two equally close, the
+/// even one, as ECMAScript requires (Ryū does this; Rust's `{:e}` rounds
+/// ties up instead). Returns the digits without leading or trailing zeros
+/// and `n`, the position of the decimal point: value = 0.digits × 10^n.
+fn shortest_digits(f: f64) -> (String, i32) {
+    let mut buffer = ryu::Buffer::new();
+    let text = buffer.format_finite(f);
+    let (mantissa, exponent) = match text.split_once(['e', 'E']) {
+        Some((m, e)) => (m, e.parse::<i32>().expect("an exponent")),
+        None => (text, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let mut digits = format!("{whole}{fraction}");
+    let mut point = whole.len() as i32 + exponent;
+    let leading = digits.len() - digits.trim_start_matches('0').len();
+    digits.drain(..leading);
+    point -= leading as i32;
+    let trimmed = digits.trim_end_matches('0').len();
+    digits.truncate(trimmed);
+    (digits, point)
+}
+
 /// ECMAScript Number::toString for a finite double.
 fn es_number(f: f64) -> Result<String, String> {
     if !f.is_finite() {
@@ -94,13 +117,8 @@ fn es_number(f: f64) -> Result<String, String> {
     if f == 0.0 {
         return Ok("0".into());
     }
-    // Rust's `{:e}` gives the shortest round-tripping digits, like
-    // ECMAScript: "d.ddde±x".
-    let sci = format!("{:e}", f.abs());
-    let (mantissa, exponent) = sci.split_once('e').expect("scientific form");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let (digits, n) = shortest_digits(f.abs());
     let k = digits.len() as i32;
-    let n = exponent.parse::<i32>().map_err(|e| e.to_string())? + 1;
     let sign = if f < 0.0 { "-" } else { "" };
     let body = if k <= n && n <= 21 {
         format!("{digits}{}", "0".repeat((n - k) as usize))
@@ -142,6 +160,12 @@ mod tests {
             (0.000001, "0.000001"),
             (123456.789, "123456.789"),
             (5e-324, "5e-324"),
+            // Ties between two shortest forms go to the even digit.
+            (1658206780088562.2, "1658206780088562.2"),
+            (233115890514796.12, "233115890514796.12"),
+            (-26829767983277.312, "-26829767983277.312"),
+            (1.7976931348623157e308, "1.7976931348623157e+308"),
+            (123e-20, "1.23e-18"),
         ] {
             assert_eq!(es_number(f).unwrap(), text, "{f}");
         }
