@@ -787,6 +787,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
             pipeline: Arc::clone(&pipeline),
             policy: policy.is_confined().then(|| policy.clone()),
             helper: helper.clone(),
+            runner: Some(Arc::clone(&runner)),
         }));
     }
     // Last, so every other hook has had its say before a queued message

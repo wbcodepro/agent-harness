@@ -49,6 +49,50 @@ pub struct Config {
     /// WebAssembly plugins, by name.
     #[serde(rename = "plugin")]
     pub plugins: BTreeMap<String, PluginConfig>,
+    /// Browser and desktop control: what is authorized, and where state
+    /// lives.
+    pub computer: ComputerConfig,
+}
+
+/// Browser and desktop control. Nothing is authorized unless granted
+/// here, on the command line, or in a task file; content the agent
+/// observes can never add a grant.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ComputerConfig {
+    /// Offer the `browser` tool.
+    pub browser: bool,
+    /// Offer the `desktop` tool (macOS only).
+    pub desktop: bool,
+    /// Run the browser without a window.
+    pub headless: bool,
+    /// Where persistent browser profiles live. Defaults to
+    /// `<hame home>/browser-profiles`.
+    pub profiles_dir: Option<PathBuf>,
+    /// Scoped authorizations, e.g.
+    /// `{ channel = "browser", origin = "http://127.0.0.1:*", capabilities = ["observe", "interact"] }`.
+    #[serde(rename = "grant")]
+    pub grants: Vec<hame_session::contract::Grant>,
+}
+
+impl Default for ComputerConfig {
+    fn default() -> Self {
+        Self {
+            browser: false,
+            desktop: false,
+            headless: true,
+            profiles_dir: None,
+            grants: Vec::new(),
+        }
+    }
+}
+
+impl ComputerConfig {
+    pub fn authorization(&self) -> hame_session::contract::Authorization {
+        hame_session::contract::Authorization {
+            grants: self.grants.clone(),
+        }
+    }
 }
 
 impl Config {
@@ -571,5 +615,49 @@ mod tests {
         ] {
             assert!(Config::parse(bad).is_err(), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod computer_tests {
+    use super::*;
+    use hame_session::contract::{Capability, Channel, Target};
+
+    #[test]
+    fn computer_grants_parse_and_scope_authorization() {
+        let config = Config::parse(
+            r#"
+            [computer]
+            browser = true
+            [[computer.grant]]
+            channel = "browser"
+            origin = "http://127.0.0.1:*"
+            profile = "work"
+            capabilities = ["observe", "interact", "commit"]
+            [[computer.grant]]
+            channel = "desktop"
+            app = "com.apple.TextEdit"
+            capabilities = ["observe", "interact", "file_write", "global_input"]
+            "#,
+        )
+        .unwrap();
+        assert!(config.computer.browser && config.computer.headless);
+        let auth = config.computer.authorization();
+        let page = Target {
+            channel: Some(Channel::Browser),
+            origin: Some("http://127.0.0.1:8123".into()),
+            profile: Some("work".into()),
+            ..Target::default()
+        };
+        assert!(auth.permits(&page, Capability::Commit));
+        assert!(!auth.permits(&page, Capability::Screen));
+        let editor = Target {
+            channel: Some(Channel::Desktop),
+            app: Some("com.apple.TextEdit".into()),
+            ..Target::default()
+        };
+        assert!(auth.permits(&editor, Capability::GlobalInput));
+        assert!(!auth.permits(&editor, Capability::Commit));
+        assert!(Config::parse("[computer]\nbogus = 1").is_err());
     }
 }

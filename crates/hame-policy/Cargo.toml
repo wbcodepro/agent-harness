@@ -11,6 +11,7 @@ hame-agent.workspace = true
 hame-ext.workspace = true
 hame-kernel.workspace = true
 hame-sandbox.workspace = true
+hame-session.workspace = true
 hame-tools.workspace = true
 serde.workspace = true
 thiserror.workspace = true

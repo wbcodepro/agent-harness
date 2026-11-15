@@ -68,6 +68,10 @@ pub struct ScriptTool {
     pub policy: Option<SandboxPolicy>,
     /// The `hame` executable, which the Linux sandbox re-executes.
     pub helper: PathBuf,
+    /// Runs the body of a called tool that is not host-side, so a script's
+    /// inner shell or file call is confined exactly as the model's own
+    /// would be. `None` runs it in this process.
+    pub runner: Option<Arc<dyn hame_tools::ToolRunner>>,
 }
 
 impl ScriptTool {
@@ -137,7 +141,14 @@ impl ScriptTool {
                         self.pipeline
                             .run(request, |request: ToolRequest| {
                                 let tool = Arc::clone(&tool);
-                                async move { tool.call(&request.input, ctx).await }
+                                async move {
+                                    match &self.runner {
+                                        Some(runner) if !tool.host_side() => {
+                                            runner.run(&tool, &request.input, ctx).await
+                                        }
+                                        _ => tool.call(&request.input, ctx).await,
+                                    }
+                                }
                             })
                             .await
                     }
@@ -268,6 +279,59 @@ mod tests {
         }
     }
 
+    /// A tool whose body must run confined: not host-side.
+    struct Confined;
+
+    impl Tool for Confined {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "confined".into(),
+                description: "Runs in a worker.".into(),
+                input_schema: json!({"type": "object"}),
+            }
+        }
+        fn effect(&self) -> Effect {
+            Effect::Execute
+        }
+        fn call<'a>(
+            &'a self,
+            _input: &'a Value,
+            _ctx: &'a ToolContext,
+        ) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async { ToolOutput::ok("ran in-process") })
+        }
+    }
+
+    /// Stands in for the sandboxed worker runner.
+    struct Worker;
+
+    impl hame_tools::ToolRunner for Worker {
+        fn run<'a>(
+            &'a self,
+            _tool: &'a Arc<dyn Tool>,
+            _input: &'a Value,
+            _ctx: &'a ToolContext,
+        ) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async { ToolOutput::ok("ran in the worker") })
+        }
+    }
+
+    #[tokio::test]
+    async fn inner_calls_to_confined_tools_go_through_the_runner() {
+        let mut script = tool(Arc::new(ToolPipeline::new()));
+        script.tools.insert(Arc::new(Confined));
+        script.runner = Some(Arc::new(Worker));
+        let out = run(&script, "print(call('confined'))").await;
+        assert_eq!(out, ToolOutput::ok("ran in the worker\n"));
+        // Host-side tools still run here: they hold what a worker cannot.
+        let out = run(
+            &script,
+            "print(call('mcp__shop__price', item='pen')['price'])",
+        )
+        .await;
+        assert_eq!(out, ToolOutput::ok("3\n"));
+    }
+
     fn tool(pipeline: Arc<ToolPipeline>) -> ScriptTool {
         let mut tools = ToolSet::new();
         tools.insert(Arc::new(Price));
@@ -276,6 +340,7 @@ mod tests {
             pipeline,
             policy: None,
             helper: PathBuf::from("hame"),
+            runner: None,
         }
     }
 

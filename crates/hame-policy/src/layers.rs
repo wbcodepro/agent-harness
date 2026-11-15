@@ -116,7 +116,11 @@ impl ApprovalLayer {
 
     fn decide(&self, request: &ToolRequest) -> RuleAction {
         let subject = subject(request);
-        let fallback = if request.effect == Effect::ReadOnly {
+        // A tool that acts on applications is governed by the grants in
+        // `[computer]`, which its adapter enforces per target and
+        // capability; asking about every click would defeat a standing
+        // scope. A rule can still ask about or deny it.
+        let fallback = if matches!(request.effect, Effect::ReadOnly | Effect::Control) {
             RuleAction::Allow
         } else {
             self.default

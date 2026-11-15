@@ -7,7 +7,9 @@
 
 mod escalate;
 mod facts;
+pub mod outcome;
 mod redcheck;
+pub mod workflow;
 
 use std::sync::Arc;
 
@@ -22,6 +24,7 @@ use serde_json::json;
 pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, trouble_this_turn};
 
 pub use facts::{ProjectFacts, facts_note};
+pub use outcome::{OUTCOME_PREFIX, OutcomeGate, StateProbe, current_task, describe, verify};
 pub use redcheck::{CHECK_PREFIX, Evidence, RedCheck, evidence};
 
 pub const VERIFY_PREFIX: &str = "[hame verify]";
