@@ -59,6 +59,26 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 | 2026-11-15 | `cargo test --workspace` after shared contracts | 237 passed, 0 failed, 1 ignored; clippy clean |
 | 2026-11-15 | `cargo test --workspace` after verification/workflows/grants (1ac63c4) | 243 passed, 0 failed, 1 ignored |
 | 2026-11-15 | `cargo test -p hame-verify` after budget + task files (a1d9753) | 20 passed |
+| 2026-11-15 | `cargo test --workspace` after merging B | 259 passed, 0 failed, 5 ignored (4 live) |
+| 2026-11-15 | `HAME_LIVE_ANTHROPIC=1 cargo test -p hame-llm --test live_anthropic -- --ignored` (B) | 4/4 pass, claude-haiku-5-5 |
+| 2026-11-15 | `cargo test --workspace` after merging A | 274 passed, 0 failed, 5 ignored |
+
+### A — merged (c844fef, e3024b3, 2932957)
+- [x] Per-session ToolContext (artifacts, journal, session id) derived from `SessionWriter` each turn; `request.artifacts` set.
+- [x] Settled receipts copied into the log once per step; on open, unsettled → `outcome_unknown` + interrupted result lists actions to reconcile; cancel treats dispatched actions the same; nothing replayed.
+- [x] `check_artifacts`, `gc_artifacts(min_age)` (+dry run), `hame sessions gc`; `put` refreshes mtime.
+- [x] Image retention (KEEP_IMAGES=3), masking clears images; compaction appends deterministic "Durable task facts".
+- [x] Fork carries settled receipts; import stores base64 images (DeepSeek Harness importer only — no Claude Code/Codex importer exists).
+- [x] TUI/web (`/api/artifacts/<sha>?session=`)/ACP image rendering. README retention paragraph.
+- Follow-ups: image retention changes older history → breaks prompt cache at each new image (P4 item); KEEP_IMAGES not configurable.
+
+### B — merged (aa23be8, d8e7c19)
+- [x] Native images: Anthropic image/document blocks (incl. in tool_result), Responses input_image/input_file (incl. function_call_output arrays), Chat Completions follow-up user message for vision models.
+- [x] `ModelProfile` (vision, pdf, limits) resolved per provider/model; `.with_profile()` override; explicit notes for every unsendable image.
+- [x] `Completion.meta` filled (request/response bytes, images, image bytes, ttft, model, raw usage); usage no-double-count fixture tests.
+- [x] MCP mixed content preserved (text, image→artifact, resources, links, structuredContent→Data, audio→Unsupported).
+- [x] Live (claude-haiku-5-5): image in tool result, image in user message, missing image note, prompt cache — 5/5 pass, ≈$0.0013.
+- Follow-ups: unknown models default text-only (config override needed — wire `[model] vision`); PDF and OpenAI paths fixture-only.
 
 ## Dependency licenses (pre-merge snapshot, `cargo metadata`, all targets)
 
