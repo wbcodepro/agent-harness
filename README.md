@@ -162,7 +162,7 @@ The grants in a task file add to those in `config.toml` for that run only, and t
 
 ## Browser and desktop control
 
-Two host-side tools act outside the shell sandbox: `browser` (Chrome through Playwright, any platform where those run) and `desktop` (native macOS applications through the accessibility interface). Both are off until the configuration turns them on or a grant names their channel, and each action is checked against the grants before it is sent.
+Two host-side tools act outside the shell sandbox: `browser` (Chrome through Playwright; tested on macOS arm64 only, see [SUPPORT-MATRIX](docs/release/SUPPORT-MATRIX.md)) and `desktop` (native macOS applications through the accessibility interface). Both are off until the configuration turns them on or a grant names their channel, and each action is checked against the grants before it is sent.
 
 ```toml
 [computer]

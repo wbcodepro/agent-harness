@@ -150,7 +150,7 @@ Quyền cấp trong file tác vụ được cộng thêm vào quyền trong `con
 
 ## Điều khiển trình duyệt và desktop
 
-Hai tool chạy phía host, ngoài sandbox của shell: `browser` (Chrome qua Playwright, trên nền tảng nào chạy được hai thứ đó) và `desktop` (ứng dụng macOS qua giao diện accessibility). Cả hai đều tắt cho tới khi cấu hình bật lên hoặc có quyền cấp nêu kênh của chúng, và mỗi thao tác được đối chiếu với quyền cấp trước khi gửi đi.
+Hai tool chạy phía host, ngoài sandbox của shell: `browser` (Chrome qua Playwright; mới kiểm trên macOS arm64, xem [SUPPORT-MATRIX](docs/release/SUPPORT-MATRIX.md)) và `desktop` (ứng dụng macOS qua giao diện accessibility). Cả hai đều tắt cho tới khi cấu hình bật lên hoặc có quyền cấp nêu kênh của chúng, và mỗi thao tác được đối chiếu với quyền cấp trước khi gửi đi.
 
 ```toml
 [computer]
