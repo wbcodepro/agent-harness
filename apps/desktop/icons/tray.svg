@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The menu bar (template) version of the "h": black on transparent;
+       macOS tints it for light and dark menu bars. -->
+  <path d="M370 150 V874 M370 560 C370 440 446 372 548 372 C650 372 712 440 712 560 V874"
+        fill="none" stroke="#000000" stroke-width="150" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

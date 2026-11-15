@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- hame's app icon: a lowercase "h" in hame green. Original artwork,
+       MIT like the rest of the repository. Source for `tauri icon`. -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#12805C"/>
+  <path d="M400 268 V756 M400 548 C400 470 452 424 524 424 C596 424 640 470 640 548 V756"
+        fill="none" stroke="#FFFFFF" stroke-width="108" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

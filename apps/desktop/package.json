@@ -1,0 +1,18 @@
+{
+  "name": "@hame/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "hame's desktop app (Tauri v2). Its own npm project, outside the root workspace, so installing the web interface's tools never fetches the Tauri CLI.",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:app": "tauri build --bundles app",
+    "build:debug": "tauri build --debug",
+    "icons": "tauri icon icons/hame.svg --output src-tauri/icons && tauri icon icons/tray.svg --output icons/.tray --png 44 && node -e \"const fs=require('fs');fs.copyFileSync('icons/.tray/44x44.png','src-tauri/icons/tray-template.png');for(const d of ['icons/.tray','src-tauri/icons/ios','src-tauri/icons/android'])fs.rmSync(d,{recursive:true,force:true})\"",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

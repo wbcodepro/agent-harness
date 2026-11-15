@@ -1,0 +1,62 @@
+# The desktop app. It is its own Cargo workspace on purpose: the core
+# crates' `cargo build --workspace` and their CI on Linux and Windows never
+# pull in a web view. It uses the core crates by path.
+[workspace]
+
+[package]
+name = "hame-desktop-app"
+description = "hame's desktop app: the hame web server in process, shown in a system web view."
+version = "0.1.0-rc.1"
+edition = "2024"
+license = "MIT"
+rust-version = "1.89"
+publish = false
+default-run = "hame-desktop"
+
+[lib]
+# The library holds everything; `main.rs` is a thin entry point, which is
+# the layout `tauri ios init` / `tauri android init` expect later.
+name = "hame_desktop_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "hame-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+hame-app = { path = "../../../crates/hame-app" }
+hame-kernel = { path = "../../../crates/hame-kernel" }
+hame-sandbox = { path = "../../../crates/hame-sandbox" }
+hame-tools = { path = "../../../crates/hame-tools" }
+hame-web = { path = "../../../crates/hame-web" }
+getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2.8.4"
+tauri-plugin-notification = "2.8.1"
+tauri-plugin-opener = "2.5"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+url = "2"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-deep-link = "2.6.3"
+tauri-plugin-single-instance = { version = "2.5.5", features = ["deep-link"] }
+tauri-plugin-updater = "2.14.1"
+tauri-plugin-window-state = "2.5.0"
+
+[features]
+# `tauri dev` and `tauri build` turn this on to load the app from its
+# configured frontend instead of a development server.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "unwind"
+strip = true
