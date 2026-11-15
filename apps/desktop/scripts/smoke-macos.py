@@ -3,7 +3,9 @@
 
 Build it first with `npm run build:smoke` in apps/desktop (a release build
 with the `smoke` feature: the app writes its address and token to
-$HAME_DESKTOP_INFO_FILE and logs links instead of opening a browser). The
+$HAME_DESKTOP_INFO_FILE and logs links instead of opening a browser; its
+own identifier, io.github.wbcodepro.hame.smoke, keeps it apart from an
+installed hame). The
 script launches hame.app with a temporary hame home and a scripted model
 (HAME_SCRIPT: no provider is called), then checks:
 

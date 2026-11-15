@@ -12,6 +12,7 @@ mod bridge;
 mod deeplink;
 mod notice;
 mod page;
+mod permissions;
 mod quit;
 mod shell;
 mod token;
@@ -400,6 +401,10 @@ fn setup(app: &mut tauri::App, updates: bool) -> Result<(), Box<dyn std::error::
             return Ok(());
         }
     };
+    // The desktop tool names this app in permission messages, and the app
+    // helps the user grant what it is refused.
+    app.manage(permissions::Asked::default());
+    permissions::register(&handle);
     let port_file = app.path().app_data_dir()?.join("port");
     let server =
         match tauri::async_runtime::block_on(start_server(home, cwd, saved_port(&port_file))) {
@@ -428,7 +433,7 @@ fn setup(app: &mut tauri::App, updates: bool) -> Result<(), Box<dyn std::error::
         told_hidden: AtomicBool::new(false),
     });
     app.add_capability(capability(&origin))?;
-    let hidden = std::env::args().any(|arg| arg == HIDDEN_ARG);
+    let hidden = std::env::args_os().any(|arg| arg == HIDDEN_ARG);
     shell::create_window(&handle, &origin, &token, hidden, |app| {
         if let Some(desktop) = app.try_state::<Desktop>() {
             desktop.page.lock().expect("page").loading();

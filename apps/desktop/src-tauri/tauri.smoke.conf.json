@@ -1,0 +1,8 @@
+{
+  "identifier": "io.github.wbcodepro.hame.smoke",
+  "bundle": {
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

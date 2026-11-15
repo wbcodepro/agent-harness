@@ -2184,6 +2184,7 @@ version = "0.1.0-rc.1"
 dependencies = [
  "getrandom 0.3.4",
  "hame-app",
+ "hame-desktop",
  "hame-kernel",
  "hame-sandbox",
  "hame-web",

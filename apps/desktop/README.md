@@ -110,10 +110,10 @@ platform.
 cd apps/desktop
 npm ci                 # the Tauri CLI (@tauri-apps/cli), nothing else
 npm run dev            # debug build, runs it
-npm run build          # release build and installers for this platform
-npm run build:app      # macOS: only hame.app (no .dmg)
-npm run build:debug    # debug build of the bundles
-npm run build:smoke    # macOS: hame.app with the `smoke` feature, for the smoke test
+npm run build          # release build and installers; on macOS refuses unless signed (see below)
+npm run build:app      # local build: macOS hame.app only, signed ad hoc
+npm run build:debug    # local debug build of the bundles, signed ad hoc
+npm run build:smoke    # macOS: hame.app with the `smoke` feature and its own identifier
 npm run icons          # regenerate src-tauri/icons from icons/*.svg
 ```
 
@@ -124,22 +124,31 @@ root regenerates it), so rebuild that first after changing `apps/ui`.
 The Rust crate `src-tauri` is its own Cargo workspace (and excluded from
 the root one). `cargo build --workspace` at the repository root, and the
 core crates' CI on Linux and Windows, never compile a web view. It uses
-`hame-web`, `hame-app`, `hame-sandbox` and `hame-kernel` by path. Unit
+`hame-web`, `hame-app`, `hame-desktop`, `hame-sandbox` and `hame-kernel`
+by path. Unit
 tests: `cargo test` in `src-tauri`. Cargo features: `updater` (see below)
 and `smoke` (test builds only: writes `$HAME_DESKTOP_INFO_FILE`, logs
 links instead of opening them).
 
 - **macOS**: Xcode command line tools. Output in
   `src-tauri/target/release/bundle/macos/hame.app` and `…/dmg/`. The
-  configuration signs ad hoc (`signingIdentity: "-"`), with the hardened
-  runtime and the entitlements below, so local builds behave like signed
-  ones; such a bundle runs on the machine that built it, and Gatekeeper
-  refuses it elsewhere. The bundle carries
+  repository's configuration names no signing identity. `build:app` and
+  `build:debug` merge `src-tauri/tauri.local.conf.json`, which signs ad hoc
+  with the hardened runtime and the entitlements below, so local builds
+  behave like signed ones (such a bundle runs only on the machine that
+  built it). `npm run build` (`scripts/build-release.mjs`) refuses to run
+  on macOS without `APPLE_SIGNING_IDENTITY`, and fails if the bundle it
+  made is signed ad hoc anyway. `build:smoke` merges
+  `src-tauri/tauri.smoke.conf.json`: ad hoc, and the identifier
+  `io.github.wbcodepro.hame.smoke`, so a smoke build has its own
+  single-instance lock, data folder, permission grants and login item.
+  The bundle carries
   `Entitlements.plist` (`com.apple.security.automation.apple-events`) and
   merges `Info.plist` (`NSAppleEventsUsageDescription`), which hame's
   desktop tool needs to script TextEdit, Numbers and Pages from the
   hardened app. Accessibility and screen recording have no Info.plist key;
-  the user grants them in System Settings. `scripts/smoke-macos.py` runs a
+  the user grants them in System Settings (see "Permissions" below).
+  `scripts/smoke-macos.py` runs a
   `build:smoke` bundle with a scripted model and checks the server, the
   window, hiding, a turn with approval, links (in-app and launching),
   a click on a link in a reply, and the quit confirmation. It needs
@@ -162,13 +171,44 @@ links instead of opening them).
 | `HAME_SCRIPT`, `HAME_SCRIPT_DELAY_MS` | replay a recorded model (tests; no provider is called) |
 | `HAME_DESKTOP_INFO_FILE` | `smoke` builds only: the app writes `{pid, addr, token}` to this new file (mode 0600; an existing file or link is refused) once it serves. Release builds ignore it. |
 
+### Permissions (macOS)
+
+hame's desktop tool needs Accessibility (to read and operate other apps)
+and, for screenshots, Screen Recording; scripting TextEdit, Numbers and
+Pages also needs Automation, which macOS asks about on first use. macOS
+grants them to hame.app, not to a terminal. The tool checks first: when a
+permission is missing it is refused at once (`permission_denied`, naming
+hame) and nothing is sent. The app then asks macOS to prompt for it (which
+lists hame in System Settings) and shows where to switch it on, with an
+"Open Settings" button, once per permission and launch. Accessibility
+granted meanwhile is seen at the next call; for Screen Recording the tool
+starts a fresh helper, since macOS reads it once per process.
+
+macOS ties these grants to the app's signature. For an ad-hoc build that is
+the exact build: after a rebuild, System Settings still shows hame switched
+on, but the grant no longer applies. To keep grants across rebuilds, sign
+development builds with a stable identity: an Apple Development
+certificate, or a self-signed one (Keychain Access > Certificate Assistant
+> Create a Certificate…, type Code Signing, e.g. "hame dev"), then
+`APPLE_SIGNING_IDENTITY="hame dev" npm run build:app` (the environment
+variable takes precedence over the configuration). To start over with the
+grants of a build:
+
+```sh
+tccutil reset Accessibility io.github.wbcodepro.hame
+tccutil reset ScreenCapture io.github.wbcodepro.hame
+tccutil reset AppleEvents io.github.wbcodepro.hame
+```
+
+(`io.github.wbcodepro.hame.smoke` for smoke builds.)
+
 ## Signing, notarization and updates (later)
 
 Nothing here is signed with a real certificate, and no keys are in the
 repository.
 
 - **macOS.** Needs an Apple Developer ID Application certificate. Set
-  `APPLE_SIGNING_IDENTITY` (or `bundle.macOS.signingIdentity`), keep
+  `APPLE_SIGNING_IDENTITY` (`npm run build` insists), keep
   `hardenedRuntime: true`, and notarize with `APPLE_ID`, `APPLE_PASSWORD`
   (app-specific) and `APPLE_TEAM_ID`, or with `APPLE_API_KEY`,
   `APPLE_API_ISSUER` and `APPLE_API_KEY_PATH`. `tauri build` signs,

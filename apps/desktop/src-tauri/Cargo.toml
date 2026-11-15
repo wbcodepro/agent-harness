@@ -29,6 +29,7 @@ tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 hame-app = { path = "../../../crates/hame-app" }
+hame-desktop = { path = "../../../crates/hame-desktop" }
 hame-kernel = { path = "../../../crates/hame-kernel" }
 hame-sandbox = { path = "../../../crates/hame-sandbox" }
 hame-web = { path = "../../../crates/hame-web" }
