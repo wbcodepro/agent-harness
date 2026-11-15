@@ -39,7 +39,17 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 
 ## Acceptance criteria status
 
-(Updated at each integration; see the per-workstream sections below.)
+### G (integrator, on `unified-harness`)
+
+- [x] Outcome predicates checked against real state: files, JSON pointer, CSV shape, command exit, browser/desktop via `StateProbe`; no predicates ⇒ not verified; missing probe ⇒ fail with reason (`hame-verify/src/outcome.rs`).
+- [x] `OutcomeGate` turn hook sends failing acceptance checks back to the model (bounded rounds).
+- [x] Reusable workflows: parameter schema with patterns, required grants, preconditions (drift ⇒ nothing runs), steps through the tool pipeline and sandbox runner, postconditions, trust list keyed by file SHA-256 (editing revokes trust) (`hame-verify/src/workflow.rs`).
+- [x] `[computer]` config with scoped grants → `Authorization`; Control-effect tools fall back to Allow because adapters enforce grants; explicit rules can still ask/deny (`hame-policy`).
+- [x] Security fix: `script` inner calls to non-host-side tools now go through the sandboxed runner (previously ran in the harness process).
+- [x] Budget guard (tokens, deadline) before every model request (`hame-verify/src/budget.rs`); cost budget waits for the tariff table (E).
+- [x] Task files (TOML) → `TaskContract` + task prompt (`hame-verify/src/task_file.rs`).
+- [ ] `hame task` CLI + app assembly (browser/desktop tools, OutcomeGate, BudgetGuard, trace wiring, profile overrides) — after wave 1 merges.
+- [ ] Browser/desktop/cross-app pilot tasks in the eval manifest; real-API end-to-end runs.
 
 ## Test log
 
@@ -47,6 +57,12 @@ Branch: `unified-harness` (base commit: shared contracts). Baseline before any c
 |---|---|---|
 | 2026-11-15 | `cargo test --workspace` at `cc2ac82` | 233 passed, 0 failed, 1 ignored |
 | 2026-11-15 | `cargo test --workspace` after shared contracts | 237 passed, 0 failed, 1 ignored; clippy clean |
+| 2026-11-15 | `cargo test --workspace` after verification/workflows/grants (1ac63c4) | 243 passed, 0 failed, 1 ignored |
+| 2026-11-15 | `cargo test -p hame-verify` after budget + task files (a1d9753) | 20 passed |
+
+## Dependency licenses (pre-merge snapshot, `cargo metadata`, all targets)
+
+514 third-party crates. Permissive (MIT/Apache/BSD/ISC/Zlib/Unicode/CC0/Unlicense) except: `im-rc`, `bitmaps`, `sized-chunks` (MPL-2.0, file-level copyleft; unmodified), `terminfo` (WTFPL), `webpki-root-certs` (CDLA-Permissive-2.0). Dual `GPL-2.0-only OR BSD-3-Clause` is used under BSD-3-Clause. Final report after wave 1 merges.
 
 ## Release blockers
 
