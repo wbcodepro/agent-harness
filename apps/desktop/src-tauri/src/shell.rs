@@ -30,25 +30,41 @@ pub fn same_origin(url: &Url, origin: &str) -> bool {
     url.origin().ascii_serialization() == origin
 }
 
-/// Opens a link the page cannot show in the default browser. Only web and
-/// mail links; anything else (`file:`, custom schemes) is dropped.
+/// Whether a link the page cannot show may go to the default browser: web
+/// and mail links only, never `file:` or custom schemes.
+pub fn may_open_outside(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https" | "mailto")
+}
+
+/// Opens a link the page cannot show in the default browser. (The opener
+/// plugin itself is not registered: its script would catch every
+/// `target=_blank` click and call a command the page may not use.)
 fn open_outside(url: &Url) {
-    if matches!(url.scheme(), "http" | "https" | "mailto")
-        && let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
-    {
+    if !may_open_outside(url) {
+        return;
+    }
+    // The smoke test checks that a click on a link in a reply gets here,
+    // without opening a browser.
+    if cfg!(feature = "smoke") {
+        eprintln!("hame desktop: would open {url}");
+        return;
+    }
+    if let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
         eprintln!("hame desktop: cannot open {url}: {e}");
     }
 }
 
-/// Creates the window on the interface at `origin` (plus `fragment`, such
-/// as `#/s/<id>`), hidden until the saved size and position are restored.
+/// Creates the window on the interface at `origin`, hidden until the saved
+/// size and position are restored, then shown unless `hidden` (started at
+/// login). `loading` runs whenever a page load begins.
 pub fn create_window<R: Runtime>(
     app: &AppHandle<R>,
     origin: &str,
     token: &str,
-    fragment: &str,
+    hidden: bool,
+    loading: impl Fn(&AppHandle<R>) + Send + Sync + 'static,
 ) -> tauri::Result<WebviewWindow<R>> {
-    let url: Url = format!("{origin}/{fragment}")
+    let url: Url = format!("{origin}/")
         .parse()
         .map_err(|e: url::ParseError| tauri::Error::Anyhow(e.into()))?;
     let version = app.package_info().version.to_string();
@@ -73,6 +89,11 @@ pub fn create_window<R: Runtime>(
         .on_new_window(|url, _features| {
             open_outside(&url);
             NewWindowResponse::Deny
+        })
+        .on_page_load(move |webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                loading(webview.app_handle());
+            }
         });
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -80,8 +101,10 @@ pub fn create_window<R: Runtime>(
         .hidden_title(true)
         .traffic_light_position(tauri::LogicalPosition::new(18.0, 30.0));
     let window = builder.build()?;
-    window.show()?;
-    window.set_focus()?;
+    if !hidden {
+        window.show()?;
+        window.set_focus()?;
+    }
     Ok(window)
 }
 
@@ -101,14 +124,6 @@ pub fn in_front<R: Runtime>(app: &AppHandle<R>) -> bool {
             && window.is_focused().unwrap_or(false)
             && !window.is_minimized().unwrap_or(false)
     })
-}
-
-/// Shows the window and hands `detail` to the page as a `hame:desktop`
-/// event.
-pub fn tell_page<R: Runtime>(app: &AppHandle<R>, detail: serde_json::Value) {
-    if let Some(window) = show_main(app) {
-        let _ = window.eval(bridge::event_script(&detail));
-    }
 }
 
 /// The tray (Windows, Linux) or menu bar (macOS) icon.
@@ -289,6 +304,19 @@ pub fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_web_and_mail_links_leave_for_the_browser() {
+        for allowed in ["https://example.com/x", "http://a.b/", "mailto:a@b.c"] {
+            assert!(may_open_outside(&Url::parse(allowed).unwrap()), "{allowed}");
+        }
+        for refused in ["file:///etc/passwd", "hame://new", "javascript:alert(1)"] {
+            assert!(
+                !may_open_outside(&Url::parse(refused).unwrap()),
+                "{refused}"
+            );
+        }
+    }
 
     #[test]
     fn only_the_servers_origin_is_shown_in_the_window() {

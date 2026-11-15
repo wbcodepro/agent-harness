@@ -10,28 +10,27 @@
 
 mod bridge;
 mod deeplink;
-mod helper;
 mod notice;
+mod page;
 mod quit;
 mod shell;
 mod token;
 mod updater;
 
-use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use hame_web::{Activity, WebServer};
-use serde_json::json;
+use serde_json::{Value, json};
 use tauri::ipc::CapabilityBuilder;
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt as _;
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt as _;
-
-pub use helper::internal_command;
 
 use deeplink::DeepLink;
 use shell::MAIN;
@@ -39,10 +38,9 @@ use shell::MAIN;
 /// How long quitting waits for stopped turns to record that they stopped.
 const STOP_WAIT: Duration = Duration::from_secs(3);
 
-/// Set to a file path, the app writes the server's address and token there
-/// (mode 0600) once it serves. For the smoke test of a built app; never set
-/// in normal use.
-const INFO_FILE_ENV: &str = "HAME_DESKTOP_INFO_FILE";
+/// The argument start at login launches the app with: no window until the
+/// user opens it.
+const HIDDEN_ARG: &str = "--hidden";
 
 /// What the app keeps while it runs.
 struct Desktop {
@@ -51,27 +49,40 @@ struct Desktop {
     quitting: AtomicBool,
     /// The app decided to exit; the exit request that follows goes through.
     may_exit: AtomicBool,
-    /// The session each shown notification is about, by notification id.
-    notified: Mutex<HashMap<i32, String>>,
-    next_notification: AtomicI32,
+    /// Events for the page, held until it listens.
+    page: Mutex<page::PageQueue>,
+    shown: Mutex<notice::Shown>,
     /// Whether the user was told the app keeps running when the window
     /// closes (Windows and Linux, once per launch).
     told_hidden: AtomicBool,
 }
 
-/// hame's data directory: `$HAME_HOME`, else `~/.hame` (or `~/.zcode`
-/// from before the rename, where it still is), as for the `hame` command.
-fn hame_home() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("HAME_HOME") {
-        return Some(PathBuf::from(home));
-    }
-    let user = std::env::home_dir()?;
-    let home = user.join(".hame");
-    let before = user.join(".zcode");
-    if !home.exists() && before.is_dir() {
-        return Some(before);
-    }
-    Some(home)
+/// Answers hame's internal commands (`tool-worker`, `sandbox-exec`): hame
+/// confines every tool call in a fresh process of its own executable, which
+/// in the desktop app is this binary. `None` when the arguments name none,
+/// so the app starts.
+pub fn internal_command() -> Option<ExitCode> {
+    let mut args = std::env::args_os().skip(1);
+    let command = args.next()?;
+    let result = match command.to_str()? {
+        "tool-worker" => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("cannot start the runtime: {e}"))
+            .map(|runtime| runtime.block_on(hame_sandbox::internal::tool_worker())),
+        "sandbox-exec" => hame_sandbox::internal::parse_sandbox_exec(
+            args.collect::<Vec<OsString>>(),
+        )
+        .and_then(|(policy, command)| hame_sandbox::internal::sandbox_exec(&policy, &command)),
+        _ => return None,
+    };
+    Some(match result {
+        Ok(code) => ExitCode::from(code),
+        Err(message) => {
+            eprintln!("hame: {message}");
+            ExitCode::FAILURE
+        }
+    })
 }
 
 /// The folder new sessions work in unless the user picks another: the
@@ -108,8 +119,12 @@ async fn start_server(home: PathBuf, cwd: PathBuf, port: u16) -> Result<WebServe
     hame_web::start_with_token(home, cwd, options(), 0, token).await
 }
 
+/// Smoke builds only (`--features smoke`): writes `{pid, addr, token}` to
+/// `$HAME_DESKTOP_INFO_FILE` (a new file, mode 0600, never through an
+/// existing file or link) for `scripts/smoke-macos.py`.
+#[cfg(feature = "smoke")]
 fn write_info_file(server: &WebServer) {
-    let Some(path) = std::env::var_os(INFO_FILE_ENV) else {
+    let Some(path) = std::env::var_os("HAME_DESKTOP_INFO_FILE") else {
         return;
     };
     let info = json!({
@@ -118,7 +133,7 @@ fn write_info_file(server: &WebServer) {
         "token": server.token,
     });
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let written = options
@@ -128,6 +143,9 @@ fn write_info_file(server: &WebServer) {
         eprintln!("hame desktop: cannot write {}: {e}", path.to_string_lossy());
     }
 }
+
+#[cfg(not(feature = "smoke"))]
+fn write_info_file(_server: &WebServer) {}
 
 /// What the page may call: the folder picker, the ready signal, and moving
 /// the window by its title area. Only from the server's exact origin.
@@ -161,29 +179,43 @@ async fn pick_folder(window: WebviewWindow, start: Option<String>) -> Option<Str
     Some(folder.to_string_lossy().into_owned())
 }
 
-/// The page loaded and reached the shell.
+/// The page listens for the shell's events: hand it what waited.
 #[tauri::command]
-fn desktop_ready() {
+fn desktop_ready(app: AppHandle) {
     eprintln!("hame desktop: the interface is ready");
+    let Some(desktop) = app.try_state::<Desktop>() else {
+        return;
+    };
+    let waiting = desktop.page.lock().expect("page").ready();
+    if let Some(window) = app.get_webview_window(MAIN) {
+        for event in waiting {
+            let _ = window.eval(bridge::event_script(&event));
+        }
+    }
+}
+
+/// Shows the window and hands `event` to the page, now or once it listens.
+fn tell_page(app: &AppHandle, event: Value) {
+    let window = shell::show_main(app);
+    let Some(desktop) = app.try_state::<Desktop>() else {
+        return;
+    };
+    let now = desktop.page.lock().expect("page").send(event);
+    if let (Some(event), Some(window)) = (now, window) {
+        let _ = window.eval(bridge::event_script(&event));
+    }
 }
 
 fn open_link(app: &AppHandle, link: DeepLink) {
+    eprintln!("hame desktop: link {link:?}");
     match link {
         DeepLink::Open { session: None } => {
             shell::show_main(app);
         }
         DeepLink::Open {
             session: Some(session),
-        } => shell::tell_page(app, json!({"action": "open", "session": session})),
-        DeepLink::New => shell::tell_page(app, json!({"action": "new"})),
-    }
-}
-
-fn session_of(activity: &Activity) -> &str {
-    match activity {
-        Activity::TurnStarted { session }
-        | Activity::TurnEnded { session, .. }
-        | Activity::Approval { session, .. } => session,
+        } => tell_page(app, json!({"action": "open", "session": session})),
+        DeepLink::New => tell_page(app, json!({"action": "new"})),
     }
 }
 
@@ -200,20 +232,17 @@ fn follow_activity(app: AppHandle, mut activity: tokio::sync::broadcast::Receive
             let Some(desktop) = app.try_state::<Desktop>() else {
                 continue;
             };
-            shell::show_running(&app, desktop.server.running().len());
-            if shell::in_front(&app) {
+            shell::show_running(&app, desktop.server.running_count());
+            if matches!(event, Activity::TurnStarted { .. }) || shell::in_front(&app) {
                 continue;
             }
-            let title = desktop.server.title(session_of(&event));
+            let title = desktop.server.title(event.session());
             let Some(shown) = notice::notice(&event, title.as_deref()) else {
                 continue;
             };
-            let id = desktop.next_notification.fetch_add(1, Ordering::Relaxed);
-            desktop
-                .notified
-                .lock()
-                .expect("notified")
-                .insert(id, shown.session.clone());
+            let Some(id) = desktop.shown.lock().expect("shown").show(&shown.session) else {
+                continue;
+            };
             if let Err(e) = app
                 .notification()
                 .builder()
@@ -228,7 +257,8 @@ fn follow_activity(app: AppHandle, mut activity: tokio::sync::broadcast::Receive
     });
 }
 
-/// Quits, first asking when turns are running.
+/// Quits, first asking when turns are running. The titles for the question
+/// are read off the main thread.
 fn request_quit(app: &AppHandle) {
     let Some(desktop) = app.try_state::<Desktop>() else {
         app.exit(0);
@@ -238,26 +268,32 @@ fn request_quit(app: &AppHandle) {
         // Already asking, or already quitting.
         return;
     }
-    let Some(asked) = quit::confirmation(&desktop.server.running()) else {
-        exit_now(app);
-        return;
-    };
-    let mut dialog = app
-        .dialog()
-        .message(asked.message)
-        .title(asked.title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(asked.quit, asked.keep));
-    if let Some(window) = shell::show_main(app) {
-        dialog = dialog.parent(&window);
-    }
-    let handle = app.clone();
-    dialog.show(move |quit| {
-        if quit {
-            exit_now(&handle);
-        } else if let Some(desktop) = handle.try_state::<Desktop>() {
-            desktop.quitting.store(false, Ordering::SeqCst);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(desktop) = app.try_state::<Desktop>() else {
+            return;
+        };
+        let Some(asked) = quit::confirmation(&desktop.server.running()) else {
+            exit_now(&app);
+            return;
+        };
+        let mut dialog = app
+            .dialog()
+            .message(asked.message)
+            .title(asked.title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(asked.quit, asked.keep));
+        if let Some(window) = shell::show_main(&app) {
+            dialog = dialog.parent(&window);
         }
+        let handle = app.clone();
+        dialog.show(move |quit| {
+            if quit {
+                exit_now(&handle);
+            } else if let Some(desktop) = handle.try_state::<Desktop>() {
+                desktop.quitting.store(false, Ordering::SeqCst);
+            }
+        });
     });
 }
 
@@ -274,12 +310,26 @@ fn exit_now(app: &AppHandle) {
     });
 }
 
+/// Stops the turns from a thread outside the async runtime (exit paths
+/// that cannot wait for a task).
+fn stop_turns_now(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::spawn(move || {
+        if let Some(desktop) = app.try_state::<Desktop>()
+            && desktop.server.running_count() > 0
+        {
+            tauri::async_runtime::block_on(desktop.server.stop_turns(STOP_WAIT));
+        }
+    })
+    .join();
+}
+
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         shell::item::OPEN => {
             shell::show_main(app);
         }
-        shell::item::NEW => shell::tell_page(app, json!({"action": "new"})),
+        shell::item::NEW => tell_page(app, json!({"action": "new"})),
         shell::item::QUIT => request_quit(app),
         shell::item::AUTOSTART => shell::toggle_autostart(app),
         shell::item::RELOAD => {
@@ -296,22 +346,31 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     if window.label() != MAIN {
         return;
     }
-    if let WindowEvent::CloseRequested { api, .. } = event {
-        // Closing hides: turns keep running, the tray brings it back.
-        api.prevent_close();
-        let _ = window.hide();
-        let app = window.app_handle();
-        if !cfg!(target_os = "macos")
-            && let Some(desktop) = app.try_state::<Desktop>()
-            && !desktop.told_hidden.swap(true, Ordering::Relaxed)
-        {
-            let _ = app
-                .notification()
-                .builder()
-                .title("hame is still running")
-                .body("Turns keep running. Open hame from its icon in the notification area; quit it there.")
-                .show();
+    let app = window.app_handle();
+    match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            // Closing hides: turns keep running, the tray brings it back.
+            api.prevent_close();
+            let _ = window.hide();
+            if !cfg!(target_os = "macos")
+                && let Some(desktop) = app.try_state::<Desktop>()
+                && !desktop.told_hidden.swap(true, Ordering::Relaxed)
+            {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("hame is still running")
+                    .body("Turns keep running. Open hame from its icon in the notification area; quit it there.")
+                    .show();
+            }
         }
+        WindowEvent::Focused(true) => {
+            // The user is back: sessions may notify again.
+            if let Some(desktop) = app.try_state::<Desktop>() {
+                desktop.shown.lock().expect("shown").seen();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -327,8 +386,8 @@ fn fail(app: &AppHandle, message: String) {
 
 fn setup(app: &mut tauri::App, updates: bool) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
-    let (home, cwd) = match (hame_home(), default_folder()) {
-        (Some(home), Ok(cwd)) => (home, cwd),
+    let (home, cwd) = match (hame_app::default_home(), default_folder()) {
+        (Some(home), Ok(cwd)) => (home.path, cwd),
         (None, _) => {
             fail(
                 &handle,
@@ -357,40 +416,25 @@ fn setup(app: &mut tauri::App, updates: bool) -> Result<(), Box<dyn std::error::
     let origin = format!("http://{}", server.addr);
     eprintln!("hame desktop: serving the interface on {origin}");
     write_info_file(&server);
-
-    // A link the app was started with: a session to open first.
-    let mut links: Vec<DeepLink> = app
-        .deep_link()
-        .get_current()
-        .ok()
-        .flatten()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(deeplink::parse)
-        .collect();
-    let fragment = match links.first() {
-        Some(DeepLink::Open {
-            session: Some(session),
-        }) => format!("#/s/{session}"),
-        _ => String::new(),
-    };
-    if !fragment.is_empty() {
-        links.remove(0);
-    }
-
-    app.add_capability(capability(&origin))?;
-    shell::create_window(&handle, &origin, &server.token, &fragment)?;
-    shell::tray(&handle)?;
+    let token = server.token.clone();
 
     let activity = server.activity();
     app.manage(Desktop {
         server,
         quitting: AtomicBool::new(false),
         may_exit: AtomicBool::new(false),
-        notified: Mutex::new(HashMap::new()),
-        next_notification: AtomicI32::new(1),
+        page: Mutex::new(page::PageQueue::default()),
+        shown: Mutex::new(notice::Shown::default()),
         told_hidden: AtomicBool::new(false),
     });
+    app.add_capability(capability(&origin))?;
+    let hidden = std::env::args().any(|arg| arg == HIDDEN_ARG);
+    shell::create_window(&handle, &origin, &token, hidden, |app| {
+        if let Some(desktop) = app.try_state::<Desktop>() {
+            desktop.page.lock().expect("page").loading();
+        }
+    })?;
+    shell::tray(&handle)?;
     follow_activity(handle.clone(), activity);
 
     // A click on a notification opens its session.
@@ -399,24 +443,22 @@ fn setup(app: &mut tauri::App, updates: bool) -> Result<(), Box<dyn std::error::
         let session = performed.notification().and_then(|shown| {
             clicked
                 .try_state::<Desktop>()?
-                .notified
+                .shown
                 .lock()
-                .expect("notified")
-                .get(&shown.id())
-                .cloned()
+                .expect("shown")
+                .clicked(shown.id())
         });
         match session {
-            Some(session) => {
-                shell::tell_page(&clicked, json!({"action": "open", "session": session}))
-            }
+            Some(session) => tell_page(&clicked, json!({"action": "open", "session": session})),
             None => {
                 shell::show_main(&clicked);
             }
         }
     })?;
 
-    // Links while running: macOS hands them to this process; on Windows and
-    // Linux a second launch forwards them here (single instance).
+    // Links: macOS hands them to this process (one that launched the app
+    // arrives just after this setup); on Windows and Linux a second launch
+    // forwards them here. Events for the page wait until it listens.
     let linked = handle.clone();
     app.deep_link().on_open_url(move |event| {
         for link in event.urls().iter().filter_map(deeplink::parse) {
@@ -427,21 +469,36 @@ fn setup(app: &mut tauri::App, updates: bool) -> Result<(), Box<dyn std::error::
     if let Err(e) = app.deep_link().register_all() {
         eprintln!("hame desktop: cannot register hame:// links: {e}");
     }
-    for link in links {
+    let started_with: Vec<DeepLink> = app
+        .deep_link()
+        .get_current()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(deeplink::parse)
+        .collect();
+    for link in started_with {
         open_link(&handle, link);
     }
 
+    #[cfg(feature = "updater")]
     if updates {
-        updater::check(&handle);
+        let exiting = handle.clone();
+        updater::check(&handle, move || stop_turns_now(&exiting));
     }
+    #[cfg(not(feature = "updater"))]
+    let _ = updates;
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
-    let updates =
-        updater::configured(&serde_json::to_value(&context.config().plugins.0).unwrap_or_default());
+    let updates = cfg!(feature = "updater")
+        && updater::configured(
+            &serde_json::to_value(&context.config().plugins.0).unwrap_or_default(),
+        );
 
     let mut builder = tauri::Builder::default()
         // First, so a second launch only hands over its arguments.
@@ -452,10 +509,9 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![HIDDEN_ARG]),
         ))
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -466,6 +522,7 @@ pub fn run() {
                 )
                 .build(),
         );
+    #[cfg(feature = "updater")]
     if updates {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
@@ -494,13 +551,9 @@ pub fn run() {
         RunEvent::Reopen { .. } => {
             shell::show_main(app);
         }
-        RunEvent::Exit => {
-            // Quitting some other way (the Dock's menu, logging out): still
-            // stop the turns so their logs say so.
-            if let Some(desktop) = app.try_state::<Desktop>() {
-                tauri::async_runtime::block_on(desktop.server.stop_turns(STOP_WAIT));
-            }
-        }
+        // Quitting some other way (the Dock's menu, logging out): still
+        // stop the turns so their logs say so.
+        RunEvent::Exit => stop_turns_now(app),
         _ => {}
     });
 }
@@ -538,6 +591,7 @@ mod tests {
         assert!(text.contains("\"local\":false"), "{text}");
         assert!(text.contains("allow-pick-folder"));
         assert!(!text.contains("core:default"));
+        assert!(!text.contains("opener"));
         assert!(!text.contains("127.0.0.1:*"));
     }
 }

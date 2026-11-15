@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged by Tauri into the app's Info.plist. Without a usage description
+  macOS refuses Apple events (error -1743) instead of asking the user.
+  Accessibility and screen recording, which the desktop tool also uses,
+  have no Info.plist key: the user grants them in System Settings.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>hame controls apps such as TextEdit, Numbers and Pages when you ask it to work with their documents.</string>
+</dict>
+</plist>

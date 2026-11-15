@@ -14,10 +14,11 @@ publish = false
 default-run = "hame-desktop"
 
 [lib]
-# The library holds everything; `main.rs` is a thin entry point, which is
-# the layout `tauri ios init` / `tauri android init` expect later.
+# The library holds everything; `main.rs` is a thin entry point, the layout
+# `tauri ios init` / `tauri android init` expect. The mobile builds add
+# "staticlib" (iOS) and "cdylib" (Android) here; the desktop needs neither.
 name = "hame_desktop_app"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "hame-desktop"
@@ -30,29 +31,34 @@ tauri-build = { version = "2.7.4", features = [] }
 hame-app = { path = "../../../crates/hame-app" }
 hame-kernel = { path = "../../../crates/hame-kernel" }
 hame-sandbox = { path = "../../../crates/hame-sandbox" }
-hame-tools = { path = "../../../crates/hame-tools" }
 hame-web = { path = "../../../crates/hame-web" }
 getrandom = "0.3"
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2.12.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2.8.4"
 tauri-plugin-notification = "2.8.1"
 tauri-plugin-opener = "2.5"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 url = "2"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-deep-link = "2.6.3"
 tauri-plugin-single-instance = { version = "2.5.5", features = ["deep-link"] }
-tauri-plugin-updater = "2.14.1"
+tauri-plugin-updater = { version = "2.14.1", optional = true }
 tauri-plugin-window-state = "2.5.0"
 
 [features]
 # `tauri dev` and `tauri build` turn this on to load the app from its
 # configured frontend instead of a development server.
 custom-protocol = ["tauri/custom-protocol"]
+# Updates through tauri-plugin-updater. Off by default; a release build that
+# also configures an endpoint and a public key turns it on (see README).
+updater = ["dep:tauri-plugin-updater"]
+# For scripts/smoke-macos.py only: write the server's address and token to
+# $HAME_DESKTOP_INFO_FILE, and log links instead of opening them. Never in
+# a release.
+smoke = []
 
 [profile.release]
 codegen-units = 1

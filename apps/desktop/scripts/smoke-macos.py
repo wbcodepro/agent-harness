@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Smoke test of the built macOS app bundle.
+"""Smoke test of a built macOS app bundle.
 
-Launches hame.app with a temporary hame home and a scripted model
+Build it first with `npm run build:smoke` in apps/desktop (a release build
+with the `smoke` feature: the app writes its address and token to
+$HAME_DESKTOP_INFO_FILE and logs links instead of opening a browser). The
+script launches hame.app with a temporary hame home and a scripted model
 (HAME_SCRIPT: no provider is called), then checks:
 
 - the in-process server answers /api/info with the token, and refuses
@@ -10,14 +13,15 @@ Launches hame.app with a temporary hame home and a scripted model
 - closing the window hides it while the app keeps running;
 - a turn that asks for approval and then finishes runs while hidden (the
   app notifies; the log must not report a notification error);
-- a hame://open?session=… link shows the window again;
+- a hame://open?session=… link shows the window;
+- a click on a link in a reply reaches the shell's "open in the browser";
 - Quit with a turn running asks first; "Keep Running" keeps it; "Quit"
-  stops the turn (its log says cancelled) and exits.
+  stops the turn (its log says cancelled) and exits;
+- a hame://open?session=… link that launches the app opens that session.
 
 It prints the bundle size and the memory (RSS) of the app and its web view
-processes after start. Needs macOS, a built bundle (`npm run build:app`)
-and Accessibility access for the terminal (System Events drives the menus
-and the dialog).
+processes after start. Needs Accessibility access for the terminal
+(System Events drives the menus, the dialog and the page).
 
     python3 apps/desktop/scripts/smoke-macos.py [path/to/hame.app]
 """
@@ -32,7 +36,8 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_APP = HERE.parent / "src-tauri/target/release/bundle/macos/hame.app"
+DEFAULT_APP = HERE.parent / "src-tauri/target/smoke/release/bundle/macos/hame.app"
+LINK = "https://example.com/hame-smoke-link"
 
 
 def wait(what, check, timeout=20.0):
@@ -52,6 +57,67 @@ def osa(*lines):
 
 def in_process(pid, *lines):
     return osa(f"tell application \"System Events\" to tell (first process whose unix id is {pid})", *lines, "end tell")
+
+
+# System Events' `entire contents` stops at a web view, so the page's
+# accessibility tree is walked element by element.
+WALK = """
+on walk(e, depth, label)
+  tell application "System Events"
+    set found to {}
+    if depth > 40 then return found
+    try
+      set r to role of e
+      if r is "AXStaticText" then set end of found to (value of e as text)
+      if label is not "" and r is "AXLink" then
+        set words_ to ""
+        try
+          set words_ to words_ & (description of e as text)
+        end try
+        try
+          set words_ to words_ & (title of e as text)
+        end try
+        try
+          set words_ to words_ & (value of every static text of e as text)
+        end try
+        if words_ contains label then
+          perform action "AXPress" of e
+          return {"<pressed>"}
+        end if
+      end if
+    end try
+    try
+      repeat with c in UI elements of e
+        set more to my walk(c, depth + 1, label)
+        if more contains "<pressed>" then return more
+        set found to found & more
+      end repeat
+    end try
+    return found
+  end tell
+end walk
+"""
+
+
+def walk_page(pid, label=""):
+    source = WALK + f"""
+tell application "System Events" to set w to window 1 of (first process whose unix id is {pid})
+set found to my walk(w, 0, "{label}")
+set AppleScript's text item delimiters to "|"
+return found as text
+"""
+    result = subprocess.run(["osascript", "-"], input=source, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def page_texts(pid):
+    """The text of the page, as accessibility reports it."""
+    return walk_page(pid)
+
+
+def click_link(pid, label):
+    """Presses the link whose text contains `label`; True when found."""
+    return "<pressed>" in walk_page(pid, label)
 
 
 def api(addr, token, method, path, body=None):
@@ -89,10 +155,48 @@ def text(words):
     return [{"type": "text", "text": f"word{n} "} for n in range(words)]
 
 
+def gone(pid):
+    try:
+        os.kill(pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+
+
+def launch(app, tmp, home, script, name, url=None):
+    """Starts the app; returns (pid, addr, token, stderr path)."""
+    info, stderr = tmp / f"{name}-info.json", tmp / f"{name}-stderr.log"
+    command = ["open", "-n",
+               "--env", f"HAME_HOME={home}",
+               "--env", f"HAME_SCRIPT={script}",
+               "--env", "HAME_SCRIPT_DELAY_MS=20",
+               "--env", f"HAME_DESKTOP_INFO_FILE={info}",
+               "--stderr", str(stderr), "--stdout", str(tmp / f"{name}-stdout.log")]
+    command += ["-a", str(app), url] if url else [str(app)]
+    subprocess.run(command, check=True)
+    wait("the info file", lambda: info.exists() and info.stat().st_size > 0)
+    details = json.loads(info.read_text())
+    assert oct(info.stat().st_mode & 0o777) == "0o600", "the info file is private"
+    wait("the interface to reach the shell", lambda: "interface is ready" in stderr.read_text())
+    return details["pid"], details["addr"], details["token"], stderr
+
+
 def main():
     app = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_APP
     if not app.is_dir():
-        raise SystemExit(f"no app bundle at {app}; run `npm run build:app` in apps/desktop")
+        raise SystemExit(f"no app bundle at {app}; run `npm run build:smoke` in apps/desktop")
+    # hame:// goes to whichever registered bundle LaunchServices prefers;
+    # make it this one, and say when others are registered too.
+    lsregister = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+                  "LaunchServices.framework/Support/lsregister")
+    subprocess.run([lsregister, "-f", str(app)], check=True)
+    dump = subprocess.run([lsregister, "-dump"], capture_output=True, text=True).stdout
+    others = sorted({line.split(None, 1)[1].rsplit(" (", 1)[0] for line in dump.splitlines()
+                     if line.startswith("path:") and line.rstrip().endswith(")") and "/hame.app (" in line}
+                    - {str(app)})
+    if others:
+        print(f"note: other hame.app bundles are registered for hame:// links: {others}; "
+              f"unregister them with `{lsregister} -u <path>` if a link test fails")
     size = subprocess.run(["du", "-sk", str(app)], capture_output=True, text=True).stdout.split()[0]
     print(f"bundle: {app.name} {int(size) / 1024:.1f} MiB")
 
@@ -103,31 +207,19 @@ def main():
     (home / "config.toml").write_text('[approval]\ndefault = "ask"\n')
     script = tmp / "script.jsonl"
     responses = [
-        # Turn 1: a write that needs approval, then an answer.
+        # Turn 1: a write that needs approval, then an answer with a link.
         {"deltas": [{"type": "tool_use_start", "id": "c1", "name": "write"},
                     {"type": "tool_input", "json": json.dumps({"path": "note.txt", "content": "hi"})}],
          "stop": "tool_use"},
-        {"deltas": text(5), "stop": "end_turn"},
+        {"deltas": [{"type": "text", "text": f"Written. See [the smoke link]({LINK})."}], "stop": "end_turn"},
         # Turn 2: a long answer that is still streaming when Quit is chosen.
         {"deltas": text(2000), "stop": "end_turn"},
     ]
     script.write_text("".join(json.dumps(r) + "\n" for r in responses))
-    info, stderr = tmp / "info.json", tmp / "stderr.log"
-    subprocess.run(["open", "-n",
-                    "--env", f"HAME_HOME={home}",
-                    "--env", f"HAME_SCRIPT={script}",
-                    "--env", "HAME_SCRIPT_DELAY_MS=20",
-                    "--env", f"HAME_DESKTOP_INFO_FILE={info}",
-                    "--stderr", str(stderr), "--stdout", str(tmp / "stdout.log"),
-                    str(app)], check=True)
-    started = time.time()
-    wait("the info file", lambda: info.exists() and info.stat().st_size > 0)
-    details = json.loads(info.read_text())
-    pid, addr, token = details["pid"], details["addr"], details["token"]
-    assert oct(info.stat().st_mode & 0o777) == "0o600", "the info file is private"
-    wait("the interface to reach the shell", lambda: "interface is ready" in stderr.read_text())
-    print(f"ready after {time.time() - started:.1f} s on {addr} (pid {pid})")
 
+    started = time.time()
+    pid, addr, token, stderr = launch(app, tmp, home, script, "first")
+    print(f"ready after {time.time() - started:.1f} s on {addr} (pid {pid})")
     try:
         status, body = api(addr, token, "GET", "/info")
         assert status == 200 and body["version"], (status, body)
@@ -158,7 +250,10 @@ def main():
         api(addr, token, "POST", f"/sessions/{session}/prompt", {"text": "write a note"})
         detail = wait("the approval question",
                       lambda: (lambda d: d if d[1].get("approvals") else None)(api(addr, token, "GET", f"/sessions/{session}")))[1]
-        api(addr, token, "POST", f"/sessions/{session}/approval", {"id": detail["approvals"][0]["id"], "allow": True})
+        asked = detail["approvals"][0]
+        status, answer = api(addr, token, "POST", f"/sessions/{session}/approval",
+                             {"id": asked["id"], "allow": True, "tool_call_id": asked["tool_call_id"], "args_sha256": asked["args_sha256"]})
+        assert status == 200, answer
         wait("the turn to finish", lambda: not api(addr, token, "GET", f"/sessions/{session}")[1]["busy"])
         assert (work / "note.txt").read_text() == "hi"
         time.sleep(0.5)
@@ -167,7 +262,12 @@ def main():
 
         subprocess.run(["open", f"hame://open?session={session}"], check=True)
         wait("the window to show for the link", lambda: in_process(pid, "count windows")[1] == "1", 10)
-        print("ok: hame://open?session=… shows the window")
+        wait("the session on the page", lambda: "Written. See" in page_texts(pid), 10)
+        print("ok: hame://open?session=… shows the window and the session")
+
+        assert click_link(pid, "smoke link"), "the link is on the page"
+        wait("the link to reach the shell", lambda: f"would open {LINK}" in stderr.read_text(), 5)
+        print("ok: a click on a link in a reply reaches the shell's open-in-browser")
 
         api(addr, token, "POST", f"/sessions/{session}/prompt", {"text": "talk for a while"})
         wait("the second turn", lambda: api(addr, token, "GET", f"/sessions/{session}")[1]["busy"])
@@ -192,25 +292,25 @@ def main():
         code, _, err = in_process(pid, 'click button "Quit" of sheet 1 of window 1')
         if code != 0:
             in_process(pid, 'click button "Quit" of window 1')
-
-        def gone():
-            try:
-                os.kill(pid, 0)
-                return False
-            except ProcessLookupError:
-                return True
-
-        wait("the app to exit", gone, 10)
-        logs = list((home / "sessions" / session).glob("*.jsonl"))
-        records = "".join(path.read_text() for path in logs)
+        wait("the app to exit", lambda: gone(pid), 10)
+        records = (home / "sessions" / session / "session.v1.jsonl").read_text()
         assert '"cancelled"' in records, "the stopped turn is recorded as cancelled"
         print("ok: Quit stops the running turn (logged as cancelled) and exits")
+    finally:
+        if not gone(pid):
+            os.kill(pid, 15)
+
+    # A link that launches the app.
+    pid, addr, token, stderr = launch(app, tmp, home, script, "second", f"hame://open?session={session}")
+    try:
+        wait("the linked session on the page", lambda: "Written. See" in page_texts(pid), 15)
+        print("ok: a hame://open?session=… link that launches the app opens that session")
+        in_process(pid, 'click menu item "Quit hame" of menu "hame" of menu bar 1')
+        wait("the app to exit", lambda: gone(pid), 10)
         print(f"PASS ({tmp})")
     finally:
-        try:
+        if not gone(pid):
             os.kill(pid, 15)
-        except ProcessLookupError:
-            pass
 
 
 if __name__ == "__main__":

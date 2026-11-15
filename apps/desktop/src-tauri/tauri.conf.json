@@ -10,9 +10,7 @@
   "app": {
     "withGlobalTauri": false,
     "windows": [],
-    "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    }
+    "security": {}
   },
   "bundle": {
     "active": true,
@@ -37,7 +35,9 @@
     ],
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "-"
     },
     "windows": {
       "nsis": {

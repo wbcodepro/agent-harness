@@ -1,9 +1,10 @@
 //! Updates through `tauri-plugin-updater`, off unless configured.
 //!
 //! The repository carries no update endpoint and no key. A release build
-//! turns updates on by merging a configuration with both into the Tauri
-//! configuration (`tauri build --config updater.conf.json`, see the README);
-//! only then is the plugin registered and an update looked for at launch.
+//! turns updates on with the `updater` cargo feature and a configuration
+//! with both merged into the Tauri configuration (`tauri build --features
+//! updater --config updater.conf.json`, see the README); only then is the
+//! plugin registered and an update looked for at launch.
 //! Updates are signed with the release key, whose public half is in that
 //! configuration, and the signature must name the announced version.
 
@@ -30,14 +31,19 @@ pub fn configured(plugins: &Value) -> bool {
     key && endpoints
 }
 
-#[cfg(desktop)]
-pub fn check<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+/// Looks for an update and offers it. `before_exit` runs before the
+/// Windows installer takes over and ends the process.
+#[cfg(feature = "updater")]
+pub fn check<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    before_exit: impl Fn() + Send + Sync + 'static,
+) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     use tauri_plugin_updater::UpdaterExt;
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let update = match app.updater() {
+        let update = match app.updater_builder().on_before_exit(before_exit).build() {
             Ok(updater) => updater.check().await,
             Err(e) => Err(e),
         };

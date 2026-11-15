@@ -35,23 +35,35 @@ hame.app / hame-desktop.exe (one process)
   scripts, `connect-src 'self'`, `frame-ancestors 'none'`). The app does not
   loosen it. Tauri's IPC therefore uses its `postMessage` channel (the
   page logs one warning about the `ipc:` protocol at the first call). The
-  Tauri config's own CSP covers only the placeholder page in `static/`,
-  which is never shown.
+  Tauri configuration sets no CSP of its own: it would cover only the
+  placeholder page in `static/`, which is never shown.
 - **What the page may call.** At launch the app adds a runtime capability
   for the exact origin `http://127.0.0.1:<port>/*` and the `main` window
   only: `pick_folder`, `desktop_ready`, and moving or zooming the window by
   its title area. Nothing else: no file system, shell or plugin commands.
 - **Navigation.** The window stays on the server's origin. Other `http`,
   `https` and `mailto` links open in the default browser, new-window
-  requests too, and anything else is dropped.
+  requests too (every link in a reply is `target=_blank`), and anything
+  else is dropped. The opener plugin is used only as a Rust function; it is
+  not registered, since its script would catch those clicks and call a
+  command the page may not use.
+- **Page events.** The shell tells the page to open a session or start
+  one with `hame:desktop` DOM events. They wait in a queue (`src/page.rs`)
+  until the interface calls `desktop_ready` from the effect that attaches
+  its listener, and the queue waits again whenever a page load starts. So a
+  link that launches the app, or a notification clicked during a reload,
+  is not lost.
 - **Activity.** The app reads `WebServer::activity()` (turn started or
-  ended, approval asked, in any session) and `WebServer::running()`. It
-  uses them for notifications, the tray tooltip and the quit confirmation.
+  ended, approval asked, in any session), `running_count()` (the tray
+  tooltip, no log read) and `running()` (with titles, only for the quit
+  confirmation, off the main thread).
 - **Tool workers.** hame runs every tool call in a confined
   `<exe> tool-worker` process (on Linux and Windows wrapped by
   `<exe> sandbox-exec`). `main.rs` answers those arguments before any of
-  the app starts (`src/helper.rs`, mirroring `hame-cli`).
-- **Data.** Same as the `hame` command: `$HAME_HOME`, else `~/.hame`. New
+  the app starts, with the same code as `hame`
+  (`hame_sandbox::internal`).
+- **Data.** Same as the `hame` command (`hame_app::default_home`):
+  `$HAME_HOME`, else `~/.hame`. New
   sessions start in the home folder unless another folder is picked.
 
 ## Features
@@ -62,14 +74,14 @@ hame.app / hame-desktop.exe (one process)
 | Closing the window hides it; turns keep running | `on_window_event` in `src/lib.rs` (Windows and Linux say so once per launch in a notification) |
 | Tray / menu bar icon: Open hame, New Session, Start at Login, Quit hame; tooltip counts running turns | `src/shell.rs` (macOS uses a template image) |
 | Quit with turns running asks first and names them; quitting stops them so their logs say cancelled | `src/quit.rs`, `request_quit` |
-| Notification when a turn finishes, fails or needs approval while the window is hidden or not focused; a click opens that session | `src/notice.rs`, `tauri-plugin-notification` (`on_action`) |
+| Notification when a turn finishes, fails or needs approval (with the question) while the window is hidden or not focused; a click opens that session; at most one per session until the user comes back to the window | `src/notice.rs`, `tauri-plugin-notification` (`on_action`) |
 | `hame://open`, `hame://open?session=<id>`, `hame://new` | `src/deeplink.rs`, `tauri-plugin-deep-link` |
-| Start at login, off by default (tray check item) | `tauri-plugin-autostart` (macOS: LaunchAgent) |
+| Start at login, off by default (tray check item); started that way, the app runs without showing its window | `tauri-plugin-autostart` (macOS: LaunchAgent, with `--hidden`) |
 | Window size, position and maximized state remembered | `tauri-plugin-window-state` |
 | Native folder picker for a new session's folder ("Other folder…") | `pick_folder`, `tauri-plugin-dialog` |
 | macOS: app menu (About, Hide, Quit, New Session ⌘N, Close Window ⌘W, Edit, Reload, Full Screen, Window, Help); hidden inset title bar with the window buttons over the sidebar | `src/shell.rs`, `apps/ui` styles |
 | Windows and Linux: default title bar, no menu bar | |
-| Updater: present, but registered only when an endpoint and a public key are configured | `src/updater.rs` |
+| Updater: behind the `updater` cargo feature, and registered only when an endpoint and a public key are configured; on Windows the turns are stopped before the installer takes over | `src/updater.rs` |
 
 ### The interface's side (apps/ui)
 
@@ -83,7 +95,8 @@ present, the interface:
 - handles `hame:desktop` events: `{action: "open", session}` and
   `{action: "new"}`;
 - uses the native picker for "Other folder…";
-- calls `desktop_ready` once loaded.
+- calls `desktop_ready` once its `hame:desktop` listener is attached (from
+  the effect in `App.tsx`), and the shell hands over what waited.
 
 In a browser (`hame web`) none of this runs.
 
@@ -100,6 +113,7 @@ npm run dev            # debug build, runs it
 npm run build          # release build and installers for this platform
 npm run build:app      # macOS: only hame.app (no .dmg)
 npm run build:debug    # debug build of the bundles
+npm run build:smoke    # macOS: hame.app with the `smoke` feature, for the smoke test
 npm run icons          # regenerate src-tauri/icons from icons/*.svg
 ```
 
@@ -110,16 +124,26 @@ root regenerates it), so rebuild that first after changing `apps/ui`.
 The Rust crate `src-tauri` is its own Cargo workspace (and excluded from
 the root one). `cargo build --workspace` at the repository root, and the
 core crates' CI on Linux and Windows, never compile a web view. It uses
-`hame-web`, `hame-app`, `hame-sandbox`, `hame-tools` and `hame-kernel` by
-path. Unit tests: `cargo test` in `src-tauri`.
+`hame-web`, `hame-app`, `hame-sandbox` and `hame-kernel` by path. Unit
+tests: `cargo test` in `src-tauri`. Cargo features: `updater` (see below)
+and `smoke` (test builds only: writes `$HAME_DESKTOP_INFO_FILE`, logs
+links instead of opening them).
 
 - **macOS**: Xcode command line tools. Output in
-  `src-tauri/target/release/bundle/macos/hame.app` and `…/dmg/`. Without a
-  signing identity the bundle is signed ad hoc (it runs on the machine that
-  built it; Gatekeeper refuses it elsewhere). `scripts/smoke-macos.py`
-  launches a built bundle with a scripted model and checks the server, the
-  window, hiding, a turn with approval, a link and the quit confirmation.
-  It needs Accessibility access for the terminal.
+  `src-tauri/target/release/bundle/macos/hame.app` and `…/dmg/`. The
+  configuration signs ad hoc (`signingIdentity: "-"`), with the hardened
+  runtime and the entitlements below, so local builds behave like signed
+  ones; such a bundle runs on the machine that built it, and Gatekeeper
+  refuses it elsewhere. The bundle carries
+  `Entitlements.plist` (`com.apple.security.automation.apple-events`) and
+  merges `Info.plist` (`NSAppleEventsUsageDescription`), which hame's
+  desktop tool needs to script TextEdit, Numbers and Pages from the
+  hardened app. Accessibility and screen recording have no Info.plist key;
+  the user grants them in System Settings. `scripts/smoke-macos.py` runs a
+  `build:smoke` bundle with a scripted model and checks the server, the
+  window, hiding, a turn with approval, links (in-app and launching),
+  a click on a link in a reply, and the quit confirmation. It needs
+  Accessibility access for the terminal.
 - **Windows**: Visual Studio Build Tools (C++), WebView2 (preinstalled on
   Windows 10/11). `npm run build` makes an NSIS installer (per-user
   install) in `src-tauri\target\release\bundle\nsis\`. Release builds use
@@ -136,7 +160,7 @@ path. Unit tests: `cargo test` in `src-tauri`.
 |---|---|
 | `HAME_HOME` | data directory, as for `hame` |
 | `HAME_SCRIPT`, `HAME_SCRIPT_DELAY_MS` | replay a recorded model (tests; no provider is called) |
-| `HAME_DESKTOP_INFO_FILE` | test hook: the app writes `{pid, addr, token}` to this file (mode 0600) once it serves. Never set in normal use. |
+| `HAME_DESKTOP_INFO_FILE` | `smoke` builds only: the app writes `{pid, addr, token}` to this new file (mode 0600; an existing file or link is refused) once it serves. Release builds ignore it. |
 
 ## Signing, notarization and updates (later)
 
@@ -163,8 +187,8 @@ repository.
 - **Updates.** Generate a key pair with `npx tauri signer generate` and
   keep the private key out of the repository (`TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the release environment). Build
-  releases with a configuration merged in, for example
-  `npx tauri build --config updater.conf.json`:
+  releases with the feature and a configuration merged in, for example
+  `npx tauri build --features updater --config updater.conf.json`:
 
   ```json
   {
@@ -179,17 +203,18 @@ repository.
   }
   ```
 
-  The app registers the updater only when such a configuration names a
-  key and HTTPS endpoints. It then looks for an update at launch and asks
+  The app registers the updater only when built with the feature and such
+  a configuration names a key and HTTPS endpoints. It then looks for an update at launch and asks
   before installing and restarting.
 
 ## Mobile (package E)
 
 The same project is meant to build the iOS and Android apps (remote mode
 only: no in-process server; the UI's remote transport through the relay).
-Already in place: the crate is a library (`staticlib`, `cdylib`, `rlib`)
-with `run()` marked `#[cfg_attr(mobile, tauri::mobile_entry_point)]`, and
-`main.rs` is a thin wrapper. What `tauri ios init` / `tauri android init`
+Already in place: the crate is a library with `run()` marked
+`#[cfg_attr(mobile, tauri::mobile_entry_point)]`, and `main.rs` is a thin
+wrapper. The library is built as `rlib` only; the mobile builds add
+`staticlib` (iOS) and `cdylib` (Android) to `crate-type`. What `tauri ios init` / `tauri android init`
 will need:
 
 - `tauri ios init`: Xcode, CocoaPods, the `aarch64-apple-ios` and
@@ -210,8 +235,9 @@ will need:
   (`tauri-plugin-deep-link`, with associated domains / app links for
   `https` links) work on mobile too. A QR scanner needs a plugin such as
   `tauri-plugin-barcode-scanner`.
-- Icons: `tauri icon` also writes iOS and Android icons. `npm run icons`
-  deletes them because `icons/hame.svg` has transparent margins, which
+- Icons: `tauri icon` also writes iOS, Android and Windows Store icons.
+  `npm run icons` deletes them (the Store icons are unused: no MSIX
+  package) because `icons/hame.svg` has transparent margins, which
   suit macOS but would show as a white border on iOS. Give mobile a
   full-bleed variant, through `tauri icon`'s manifest (`default`,
   `bg_color`, `android_fg`).
@@ -232,6 +258,20 @@ will need:
   another app's name. On macOS the first notification makes the system
   ask whether hame may notify, and notifications are shown only once the
   user allows them.
+- **Notification threads.** With a click handler registered,
+  `tauri-plugin-notification` keeps one OS thread per shown notification
+  until the user acts on it or it goes away (on macOS also polling the
+  delivered notifications every 0.5 s on the main run loop), and cannot
+  remove a shown notification on macOS or Windows. The app therefore shows
+  at most one notification per session until the user comes back to the
+  window, and remembers at most 32 for their clicks. Worth an issue
+  upstream.
+- **Two copies of the app on one Mac.** A `hame://` link goes to whichever
+  registered copy LaunchServices prefers. If that is not the running one,
+  it starts, hands over to the running instance and exits, and macOS
+  hands the link to the copy that started, so the session is not opened
+  (the window still comes to the front). With one installed copy this does
+  not happen.
 - **Splash.** The window opens after the server starts (well under a
   second), with no splash screen.
 - **No signing, notarization, update server or keys**: see above.
@@ -249,11 +289,11 @@ All are Apache-2.0 OR MIT, Tauri's own crates and npm package:
 | tauri-plugin-dialog | 2.8 | folder picker, quit confirmation |
 | tauri-plugin-autostart | 2.7 | start at login |
 | tauri-plugin-window-state | 2.5 | window size and position |
-| tauri-plugin-updater | 2.14 | updates, only when configured |
-| tauri-plugin-opener | 2.5 | links in the default browser |
+| tauri-plugin-updater | 2.14 | updates, `updater` feature only |
+| tauri-plugin-opener | 2.5 | links in the default browser (its Rust function only; the plugin is not registered) |
 | @tauri-apps/cli (npm, dev only) | 2.12.4 | `tauri dev`, `tauri build`, `tauri icon` |
 
-Also `getrandom` 0.3 (MIT OR Apache-2.0), `tokio`, `serde`, `serde_json`,
+Also `getrandom` 0.3 (MIT OR Apache-2.0), `tokio`, `serde_json`,
 `url` (MIT OR Apache-2.0), already used by the core crates. Their
 transitive dependencies are mostly MIT and/or Apache-2.0, plus BSD-2/3-Clause,
 ISC, Zlib, Unicode-3.0 (ICU data), and MPL-2.0 (file-level copyleft, used
