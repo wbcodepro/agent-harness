@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:198c92ba-4c54-5ea3-8f85-7a97592a526a",
+  "serialNumber": "urn:uuid:b3d07940-70ba-568c-8823-bfb2991cab3a",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T09:04:16+07:00",
+    "timestamp": "2026-11-15T14:20:29+07:00",
     "tools": {
       "components": [
         {
@@ -29,7 +29,7 @@
       "properties": [
         {
           "name": "hame:cargo-lock-sha256",
-          "value": "3bb2e4bba46c35b8c594fe2ae7fbbdd33e0908db0c357242f000e755f423ed07"
+          "value": "6a946d96585abbb8a916896b45ae11912a47bfd322c64f76a42f4a2b3faf34c6"
         }
       ]
     }
@@ -4122,6 +4122,58 @@
         {
           "type": "vcs",
           "url": "https://github.com/bodil/im-rs"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/include_dir@0.7.4",
+      "name": "include_dir",
+      "version": "0.7.4",
+      "purl": "pkg:cargo/include_dir@0.7.4",
+      "scope": "required",
+      "description": "Embed the contents of a directory in your binary",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Michael-F-Bryan/include_dir"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hame:platforms",
+          "value": "all"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/include_dir_macros@0.7.4",
+      "name": "include_dir_macros",
+      "version": "0.7.4",
+      "purl": "pkg:cargo/include_dir_macros@0.7.4",
+      "scope": "excluded",
+      "description": "The procedural macro used by include_dir",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Michael-F-Bryan/include_dir"
         }
       ],
       "properties": [
@@ -11267,6 +11319,7 @@
         "pkg:cargo/futures-util@0.3.34",
         "pkg:cargo/globset@0.4.21",
         "pkg:cargo/ignore@0.4.34",
+        "pkg:cargo/include_dir@0.7.4",
         "pkg:cargo/landlock@0.4.7",
         "pkg:cargo/libc@0.2.191",
         "pkg:cargo/ratatui@0.30.2",
@@ -12417,6 +12470,19 @@
         "pkg:cargo/sized-chunks@0.6.5",
         "pkg:cargo/typenum@1.20.1",
         "pkg:cargo/version_check@0.9.5"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/include_dir@0.7.4",
+      "dependsOn": [
+        "pkg:cargo/include_dir_macros@0.7.4"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/include_dir_macros@0.7.4",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47"
       ]
     },
     {
