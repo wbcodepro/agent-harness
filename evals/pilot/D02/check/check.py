@@ -6,6 +6,7 @@ Plain text selected (the reopened setting). Teardown restores the
 original preference."""
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -32,11 +33,17 @@ def verify_pref(value, before, after):
     return "new documents are plain text; no other setting changed"
 
 
+WRITES = re.compile(r"defaults\s+(-currentHost\s+)?(write|delete|import|rename)"
+                    r"|PlistBuddy\s+-c\s+.?(Set|Add|Delete)|plutil\s+-(replace|insert|remove)")
+
+
 def verify_no_shortcut(calls):
+    """Reading the preference back is fine; writing it outside TextEdit is
+    not the task."""
     for call in calls:
         text = json.dumps(call.get("input", {}))
-        if "defaults" in text and ("write" in text or "RichText" in text):
-            raise Problem(f"the setting was written with the defaults command: {text[:160]}")
+        if WRITES.search(text):
+            raise Problem(f"the setting was written outside TextEdit: {text[:160]}")
 
 
 def reopened_setting():
