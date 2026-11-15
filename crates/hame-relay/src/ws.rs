@@ -544,7 +544,7 @@ impl Connection {
         }
         let limit = Limit {
             burst: 1,
-            per_minute: 2,
+            per_hour: 120,
         };
         if self
             .state

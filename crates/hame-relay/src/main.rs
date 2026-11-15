@@ -6,6 +6,9 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        std::process::exit(healthcheck().await);
+    }
     let filter = EnvFilter::try_from_env("RELAY_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     let json = std::env::var("RELAY_LOG_FORMAT")
         .map(|v| v == "json")
@@ -23,6 +26,25 @@ async fn main() {
     if let Err(e) = run().await {
         tracing::error!(error = %e, "relay stopped");
         std::process::exit(1);
+    }
+}
+
+/// `hame-relay healthcheck`: exit 0 when `/healthz` on the local port
+/// answers OK (for container health checks; the image has no curl).
+async fn healthcheck() -> i32 {
+    let bind = std::env::var("RELAY_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let port = bind.rsplit(':').next().unwrap_or("8080");
+    let url = format!("http://127.0.0.1:{port}/healthz");
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return 1,
+    };
+    match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => 0,
+        _ => 1,
     }
 }
 

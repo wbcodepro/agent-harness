@@ -75,15 +75,34 @@ impl AppState {
             ip: ip.map(|i| i.to_string()),
             detail,
         };
-        tracing::info!(event, account = ?account_id, device = ?device_id, "audit");
+        tracing::info!(
+            event,
+            account = account_id.unwrap_or("-"),
+            device = device_id.unwrap_or("-"),
+            "audit"
+        );
         if let Err(e) = self.repo.audit(&entry).await {
             tracing::error!(error = %e, "audit log write failed");
         }
     }
 
     /// Sends an email in the background, so that response time does not
-    /// depend on whether a message was sent.
+    /// depend on whether a message was sent. At most three messages at once
+    /// and six an hour go to one address; further ones are dropped silently
+    /// (the HTTP answer stays the same).
     pub fn send_email(&self, email: Email) {
+        let limit = Limit {
+            burst: 3,
+            per_hour: 6,
+        };
+        if self
+            .limiter
+            .check(&format!("mail:{}", email.to), limit)
+            .is_err()
+        {
+            tracing::warn!("email to one address rate limited; not sent");
+            return;
+        }
         let mailer = self.mailer.clone();
         tokio::spawn(async move {
             if let Err(e) = mailer.send(email).await {

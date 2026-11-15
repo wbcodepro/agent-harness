@@ -629,3 +629,21 @@ async fn push_tokens_belong_to_their_device() {
         .clone();
     assert_eq!(phone_entry["push"], "apns");
 }
+
+#[tokio::test]
+async fn mail_to_one_address_is_limited() {
+    let r = spawn(|_| {}).await;
+    r.account("Max", "max@example.com").await; // one verification mail
+    for _ in 0..5 {
+        let (s, _) = r
+            .post(
+                "/v1/auth/password/forgot",
+                json!({ "email": "max@example.com" }),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(r.mailer.messages_to("max@example.com").len(), 3);
+}

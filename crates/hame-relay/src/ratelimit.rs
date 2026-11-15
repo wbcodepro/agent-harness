@@ -5,18 +5,19 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// A limit: `burst` requests at once, refilled at `per_minute`.
+/// A limit: `burst` requests at once, refilled at `per_hour`.
 #[derive(Clone, Copy, Debug)]
 pub struct Limit {
     pub burst: u32,
-    pub per_minute: u32,
+    pub per_hour: u32,
 }
 
 impl Limit {
+    /// `n` at once and `n` per minute.
     pub fn per_minute(n: u32) -> Self {
         Self {
             burst: n.max(1),
-            per_minute: n.max(1),
+            per_hour: n.max(1).saturating_mul(60),
         }
     }
 }
@@ -40,7 +41,7 @@ impl RateLimiter {
         let Ok(mut map) = self.buckets.lock() else {
             return Ok(());
         };
-        let rate = f64::from(limit.per_minute) / 60.0;
+        let rate = f64::from(limit.per_hour.max(1)) / 3600.0;
         let burst = f64::from(limit.burst);
         let bucket = map.entry(key.to_string()).or_insert(Bucket {
             tokens: burst,
