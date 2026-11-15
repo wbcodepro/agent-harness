@@ -754,8 +754,14 @@ async fn background_mode_creates_and_opens_documents() {
             let ctx = &gui.ctx;
             async move { tool.call(&input, ctx).await }
         };
-        let made = call(json!({"action": "new_document", "app": TEXTEDIT})).await;
+        // Created as its own file, so it has no untitled draft in
+        // TextEdit's iCloud folder and an in-place save writes there.
+        let out = granted.join("made.txt");
+        let made = call(json!({"action": "new_document", "app": TEXTEDIT,
+                               "path": out.to_str().unwrap()}))
+        .await;
         assert!(!made.is_error, "{}", made.text);
+        assert!(made.text.contains("made.txt\"]"), "{}", made.text);
         let new_id: u64 = made
             .text
             .split("window ")
@@ -771,12 +777,17 @@ async fn background_mode_creates_and_opens_documents() {
                                 "text": "made in the background"}))
         .await;
         assert!(!typed.is_error, "{}", typed.text);
-        let out = granted.join("made.txt");
-        let saved = call(json!({"action": "save", "app": TEXTEDIT, "window": new_id,
+        let saved = call(json!({"action": "save", "app": TEXTEDIT, "window": new_id})).await;
+        assert!(!saved.is_error, "{}", saved.text);
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "made in the background"
+        );
+        assert!(!saved.text.contains("Mobile Documents"), "{}", saved.text);
+        let again = call(json!({"action": "new_document", "app": TEXTEDIT,
                                 "path": out.to_str().unwrap()}))
         .await;
-        assert!(!saved.is_error, "{}", saved.text);
-        assert!(plain_text(&out).contains("made in the background"));
+        assert!(again.is_error, "{}", again.text);
 
         let opened = call(json!({"action": "open_file", "app": TEXTEDIT,
                                  "path": existing.to_str().unwrap()}))

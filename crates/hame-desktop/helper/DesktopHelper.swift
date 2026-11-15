@@ -2184,6 +2184,8 @@ func handle(_ req: [String: Any]) {
                       "frontmost_pid": Int(frontmostPid() ?? 0)]
         case "script_save":
             result = try scriptSave(req)
+        case "frontmost":
+            result = ["pid": Int(frontmostPid() ?? 0)]
         case "app_info":
             let app = try resolveApp(req)
             result = ["pid": Int(app.processIdentifier), "bundle_id": app.bundleIdentifier ?? "",

@@ -807,7 +807,59 @@ impl DesktopTool {
         let caps = vec![Capability::Interact];
         self.authorize(&target, &caps)?;
         let mut request = json!({"pid": info["pid"], "bundle_id": bundle});
-        let what = if action == "open_file" {
+        let new_at = (action == "new_document")
+            .then(|| {
+                input["path"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+            })
+            .flatten();
+        if let Some(path) = new_at {
+            // An untitled TextEdit document keeps its text in an autosave
+            // draft in TextEdit's iCloud folder, and a scripted save only
+            // copies it elsewhere (the window stays on the draft); a
+            // document opened from its own file has no draft. So the file
+            // is created here and opened.
+            if bundle != "com.apple.TextEdit" {
+                return Err(invalid(
+                    "new_document takes path for TextEdit only; for Numbers and Pages, create \
+                     the document and then save or export it to a path.",
+                ));
+            }
+            let dest = save_destination(path).map_err(invalid)?;
+            let contents: &[u8] = match dest.extension().and_then(|e| e.to_str()) {
+                Some("txt") => b"",
+                Some("rtf") => b"{\\rtf1\\ansi\\deff0\n}\n",
+                _ => {
+                    return Err(invalid(
+                        "path must end in .txt (plain text) or .rtf (rich text).",
+                    ));
+                }
+            };
+            let caps = caps::required("save", None, false);
+            self.authorize(&target, &caps)?;
+            let parent = dest.parent().map(Path::to_path_buf).unwrap_or_default();
+            self.check_save_path(&target, &parent, ctx)?;
+            // Created by the desktop tool (outside the shell sandbox), never
+            // over an existing file.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&dest)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, contents))
+                .map_err(|e| {
+                    Outcome::err(format!(
+                        "failed: cannot create {} ({e}); if it exists, open it with open_file.",
+                        dest.display()
+                    ))
+                })?;
+        }
+        let what = if let Some(path) = new_at {
+            request["mode"] = json!("open");
+            request["path"] = json!(path);
+            format!("new document {path}")
+        } else if action == "open_file" {
             let path = PathBuf::from(input["path"].as_str().unwrap_or("").trim());
             if !path.is_absolute() || !path.is_file() {
                 return Err(invalid(format!(
@@ -2241,6 +2293,27 @@ impl DesktopTool {
         {
             return Outcome::err(why);
         }
+        // In background mode, notice an app that comes to the front by
+        // itself during an acting operation.
+        let acting = matches!(
+            action,
+            "press"
+                | "set_value"
+                | "select"
+                | "type"
+                | "key"
+                | "save"
+                | "new_document"
+                | "open_file"
+        );
+        let front_before = if self.config.background && acting {
+            self.req_quick("frontmost", json!({}))
+                .await
+                .ok()
+                .and_then(|r| r["pid"].as_u64())
+        } else {
+            None
+        };
         let result = match action {
             "apps" => self.apps(ctx).await,
             "windows" => self.windows(input, ctx).await,
@@ -2267,9 +2340,21 @@ impl DesktopTool {
                 ACTIONS.join(", ")
             ))),
         };
-        let outcome = result.unwrap_or_else(|failure| failure);
+        let mut outcome = result.unwrap_or_else(|failure| failure);
         if action == "focus" && !outcome.output.is_error && outcome.window.is_some() {
             self.state().focused = outcome.window;
+        }
+        if let Some(before) = front_before
+            && let Some(key) = outcome.window
+            && let Ok(now) = self.req_quick("frontmost", json!({})).await
+            && now["pid"].as_u64() == Some(key.pid)
+            && before != key.pid
+        {
+            outcome.output.text.push_str(&format!(
+                "\nNote: the application came to the front during this {action}; hame did not \
+                 activate it (background mode). The user's work was interrupted: say so in your \
+                 report."
+            ));
         }
         outcome
     }
@@ -2767,7 +2852,7 @@ impl Tool for DesktopTool {
                     "cell": {"type": "string", "description": "select: a cell address or range, e.g. C2 or A1:C4."},
                     "occurrence": {"type": "integer", "description": "select: which appearance of text (default 1)."},
                     "caret": {"type": "string", "enum": ["before", "after"], "description": "select: put the insertion point before or after the text instead of selecting it."},
-                    "path": {"type": "string", "description": "menu: e.g. File > Save…. save: the absolute file to write (omit to save the document where it is). open_file: the absolute file to open."},
+                    "path": {"type": "string", "description": "menu: e.g. File > Save…. save: the absolute file to write (omit to save the document where it is). open_file: the absolute file to open. new_document (TextEdit): create the document as this .txt or .rtf file, so save writes there."},
                     "format": {"type": "string", "enum": ["pdf", "xlsx", "csv", "docx"], "description": "save: export in this format (Numbers: pdf, xlsx, csv; Pages: pdf, docx)."},
                     "overwrite": {"type": "boolean", "description": "save: replace an existing file."},
                     "keys": {"type": "string", "description": "key: e.g. cmd+s, return, cmd+shift+g."},
@@ -2800,8 +2885,9 @@ impl Tool for DesktopTool {
                  plain keys go to the named window without bringing its app in front (place the \
                  insertion point first with select caret before/after, or select a cell); focus, \
                  menu, click_at and keys with cmd, ctrl or opt are refused as needs_foreground. \
-                 Create, open and save TextEdit, Numbers and Pages documents with new_document, \
-                 open_file and save, not menus or panels. Finish what you can, then tell the user \
+                 Create, open and save TextEdit, Numbers and Pages documents with new_document \
+                 (for TextEdit give path, so the document is its own file), open_file and save, \
+                 not menus or panels. Finish what you can, then tell the user \
                  which step needs the app in front.",
             );
         }
