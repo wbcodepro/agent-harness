@@ -10,6 +10,7 @@ mod escalate;
 mod facts;
 pub mod outcome;
 mod redcheck;
+pub mod task_file;
 pub mod workflow;
 
 use std::sync::Arc;
