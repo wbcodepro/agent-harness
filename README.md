@@ -50,6 +50,7 @@ hame run --output json "..."          # one JSON object when done (stream-json: 
 hame web                              # web interface on 127.0.0.1
 hame acp                              # Agent Client Protocol server for editors
 hame sessions | show <id> | fork <id> | rewind <id> | recover <id>
+hame sessions gc [--older-than-hours 24] [--dry-run]   # delete stored images no session refers to
 hame import dsh <session.jsonl>       # import a DeepSeek Harness session (v2–v4)
 hame eval evals/harder                # run a task suite; report pass rate, time and tokens
                                       # (--keep <dir>: keep logs of failed tasks; --runs N: N runs, per-task pass rate)
@@ -253,6 +254,8 @@ A project can declare its own check commands in `.hame/config.toml` (the `[verif
 `hame skill install` reads every file of a skill before copying it: invisible characters, sentences telling the model to ignore instructions or hide things from the user, commands that download and pipe straight into a shell, code hidden in base64, paths to keys and secret files, symlinks. When it sees danger signs it does not install unless you add `--force`. This is pattern matching, not proof: a clean scan means no known trick was found, not that the skill is safe.
 
 Example plugin and ABI description: `plugins/wordcount`.
+
+Sessions and artifacts: each session is a directory in `~/.hame/sessions/` holding its log and, for tools that act outside the sandbox (browser, desktop), an action journal. Images and files that tools return are stored once, by SHA-256, in `~/.hame/artifacts/`, shared by all sessions, forks and imports; logs hold only references. The model is shown the 3 most recent images from tool results; older ones become a note naming the artifact. Resuming a session warns about artifacts that are missing or damaged; the session still works and the model gets a note in their place. Nothing is deleted automatically: `hame sessions gc` removes artifacts no session log refers to that are older than 24 hours (`--older-than-hours N`, `--dry-run` to only report), and temporary files of interrupted writes. A crash between storing an image and logging it leaves such an unreferenced file. Deleting a session directory makes its artifacts collectable. There is no export command; to move a session, copy its directory together with `~/.hame/artifacts/`. After a crash, actions that were dispatched but never confirmed are recorded as `outcome_unknown` and the model is told to check the current state before retrying; hame never repeats them itself. A fork carries every settled action receipt of its source, since forking undoes nothing outside the workspace.
 
 ## Code layout
 

@@ -135,6 +135,9 @@ pub async fn run(home: &Path, store: &SessionStore, args: RunArgs) -> Result<Exi
         }
     };
     let mut session = Session::new(records, writer);
+    if let Some(id) = &existing {
+        crate::warn_missing_artifacts(store, id);
+    }
     match args.output {
         OutputArg::Text => {
             eprintln!("session: {}", session.id());

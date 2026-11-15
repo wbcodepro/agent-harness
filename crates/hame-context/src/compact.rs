@@ -21,6 +21,101 @@ Be specific and complete rather than brief; do not mention this summarization.";
 /// Bytes of one tool result kept in the transcript given to the summarizer.
 const TRANSCRIPT_RESULT_BYTES: usize = 2000;
 
+/// Heads the section of a compaction summary the harness writes itself.
+pub const DURABLE_FACTS_HEADING: &str = "## Durable task facts";
+
+/// Most artifacts listed in the durable facts; the most recent are kept.
+const DURABLE_ARTIFACTS: usize = 20;
+
+/// Facts that must survive any number of compactions word for word, taken
+/// from the log rather than from the summarizer, which may drop or garble
+/// them: the current task contract, every action that may have changed the
+/// world, and where each artifact referred to so far came from.
+///
+/// Built from every record up to `cut`, not only those since the last
+/// compaction, so a later summary never loses what an earlier one carried.
+/// `None` when there is nothing to record.
+pub fn durable_facts(records: &[Record]) -> Option<String> {
+    use std::fmt::Write as _;
+
+    let contract = records.iter().rev().find_map(|record| match &record.event {
+        Event::TaskStart { contract } => Some(contract),
+        _ => None,
+    });
+    let mut receipts: Vec<&hame_session::contract::ActionReceipt> = Vec::new();
+    for record in records {
+        if let Event::ActionReceipt { receipt } = &record.event {
+            receipts.retain(|seen| seen.op_id != receipt.op_id);
+            receipts.push(receipt);
+        }
+    }
+    receipts.retain(|receipt| receipt.status.may_have_taken_effect());
+    let artifacts = hame_session::session_artifacts(records);
+    if contract.is_none() && receipts.is_empty() && artifacts.is_empty() {
+        return None;
+    }
+
+    let mut out = format!(
+        "{DURABLE_FACTS_HEADING}\n(Copied from the session log by the harness, not summarized.)\n"
+    );
+    if let Some(contract) = contract {
+        let _ = writeln!(out, "\nTask {}: {}", contract.id, contract.outcome);
+        if !contract.constraints.is_empty() {
+            out.push_str("Constraints:\n");
+            for constraint in &contract.constraints {
+                let _ = writeln!(out, "- {constraint}");
+            }
+        }
+        if !contract.acceptance.is_empty() {
+            out.push_str("Done when:\n");
+            for predicate in &contract.acceptance {
+                let rendered = serde_json::to_string(predicate).unwrap_or_default();
+                let _ = writeln!(out, "- {rendered}");
+            }
+        }
+    }
+    if !receipts.is_empty() {
+        out.push_str(
+            "\nActions that may have changed the world (do not repeat one without checking \
+             the current state first):\n",
+        );
+        for receipt in &receipts {
+            let status = serde_json::to_value(receipt.status)
+                .ok()
+                .and_then(|value| value.as_str().map(String::from))
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "- op {}: {} on {}: {status}",
+                receipt.op_id,
+                receipt.action,
+                receipt.target.label()
+            );
+        }
+    }
+    if !artifacts.is_empty() {
+        out.push_str("\nArtifacts:\n");
+        let skipped = artifacts.len().saturating_sub(DURABLE_ARTIFACTS);
+        if skipped > 0 {
+            let _ = writeln!(out, "- ({skipped} earlier artifacts not listed)");
+        }
+        for artifact in &artifacts[skipped..] {
+            let _ = write!(out, "- {} {}", artifact.sha256, artifact.mime);
+            if let (Some(w), Some(h)) = (artifact.width, artifact.height) {
+                let _ = write!(out, " {w}x{h}");
+            }
+            if let Some(name) = &artifact.name {
+                let _ = write!(out, " name={name}");
+            }
+            if let Some(capture) = &artifact.capture {
+                let _ = write!(out, " captured from {} at {}", capture.target, capture.ts);
+            }
+            out.push('\n');
+        }
+    }
+    Some(out)
+}
+
 /// Replaces history with a summary when the context passes a threshold.
 pub struct Compactor {
     /// Model that writes the summary.
@@ -441,12 +536,17 @@ impl Compactor {
         usage: hame_session::Usage,
     ) -> Result<(), AgentError> {
         let up_to_seq = session.records()[cut].seq - 1;
+        let mut summary = format!(
+            "[The earlier part of this session was summarized to save context. The most recent \
+             steps follow this summary unchanged. Summary:]\n\n{}",
+            strip_durable_facts(summary.trim())
+        );
+        if let Some(facts) = durable_facts(&session.records()[..cut]) {
+            summary.push_str("\n\n");
+            summary.push_str(&facts);
+        }
         session.append(Event::Compaction {
-            summary: format!(
-                "[The earlier part of this session was summarized to save context. The most \
-                 recent steps follow this summary unchanged. Summary:]\n\n{}",
-                summary.trim()
-            ),
+            summary,
             up_to_seq,
             usage,
         })?;
@@ -468,6 +568,15 @@ impl Compactor {
         let completion = self.llm.stream(&request, &mut collect).await.ok()?;
         (completion.stop == StopReason::EndTurn && !summary.trim().is_empty())
             .then_some((summary, completion.usage))
+    }
+}
+
+/// A summary model shown an earlier summary may copy its facts section;
+/// the harness writes a fresh one, so a copy is dropped rather than doubled.
+fn strip_durable_facts(summary: &str) -> &str {
+    match summary.find(DURABLE_FACTS_HEADING) {
+        Some(at) => summary[..at].trim_end(),
+        None => summary,
     }
 }
 
@@ -519,7 +628,7 @@ mod tests {
     use hame_session::{CreateOptions, SessionStore, StopReason, Usage};
 
     fn session(dir: &std::path::Path) -> Session {
-        let store = SessionStore::new(dir);
+        let store = SessionStore::new(dir.join("sessions"));
         let writer = store.create(CreateOptions::default()).unwrap();
         let records = store.read(writer.id()).unwrap();
         Session::new(records, writer)
@@ -925,5 +1034,144 @@ mod tests {
         assert!(text.contains("[called bash with {\"command\":\"ls\"}]"));
         assert!(text.contains("[... truncated ...]"));
         assert!(text.len() < 2400);
+    }
+
+    #[tokio::test]
+    async fn compaction_keeps_task_facts_receipts_and_artifact_provenance_verbatim() {
+        use hame_session::artifact::Capture;
+        use hame_session::contract::{
+            ActionReceipt, ActionStatus, Capability, Channel, Predicate, Target, TaskContract,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = session(dir.path());
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52,
+            0, 0, 0, 4, 0, 0, 0, 3, 8, 6, 0, 0, 0,
+        ];
+        let mut image = session.artifacts().put(png, "image/png").unwrap();
+        image.capture = Some(Capture {
+            target: "browser:tab=3".into(),
+            ts: 77,
+            space: "css-pixels".into(),
+            crop: [0.0, 0.0, 4.0, 3.0],
+            scale: 1.0,
+            redacted: false,
+            derived_from: None,
+        });
+        let contract = TaskContract {
+            version: 1,
+            id: "t1".into(),
+            outcome: "Order the blue mug".into(),
+            constraints: vec!["Spend at most 20 EUR".into()],
+            acceptance: vec![Predicate::FileExists {
+                path: "receipt.pdf".into(),
+            }],
+            authorization: Default::default(),
+            budget: Default::default(),
+        };
+        let receipt = |op: &str, status| ActionReceipt {
+            version: 1,
+            op_id: op.into(),
+            action: "browser.click".into(),
+            target: Target {
+                channel: Some(Channel::Browser),
+                origin: Some("https://shop.example".into()),
+                ..Target::default()
+            },
+            observation_id: None,
+            capability: Capability::Commit,
+            status,
+            idempotency_key: None,
+            emitted: vec![],
+            completed_prefix: 0,
+            resulting_observation: None,
+            evidence: vec![],
+            error: None,
+            ts: 1,
+        };
+        session.append(Event::TurnStart { turn: 1 }).unwrap();
+        session
+            .append(Event::TaskStart {
+                contract: Box::new(contract),
+            })
+            .unwrap();
+        session
+            .append(Event::UserMessage {
+                content: vec![Block::text("Order the blue mug.")],
+            })
+            .unwrap();
+        step(&mut session, 1, 400);
+        session
+            .append(Event::ToolResult {
+                call_id: "c1".into(),
+                content: vec![Block::Image {
+                    artifact: image.clone(),
+                }],
+                is_error: false,
+            })
+            .unwrap();
+        for (op, status) in [
+            ("op-submit", ActionStatus::Completed),
+            ("op-failed", ActionStatus::Failed),
+            ("op-unknown", ActionStatus::OutcomeUnknown),
+        ] {
+            session
+                .append(Event::ActionReceipt {
+                    receipt: Box::new(receipt(op, status)),
+                })
+                .unwrap();
+        }
+        for n in 2..=6 {
+            step(&mut session, n, 400);
+        }
+        session
+            .append(Event::StepStart { turn: 1, step: 7 })
+            .unwrap();
+
+        // The summarizer forgets everything; the facts survive anyway.
+        let compactor = compactor(vec![ScriptedResponse::text("Did some things.")], 300);
+        compactor.before_step(&mut session).await.unwrap();
+        let summary = session
+            .records()
+            .iter()
+            .find_map(|record| match &record.event {
+                Event::Compaction { summary, .. } => Some(summary.clone()),
+                _ => None,
+            })
+            .expect("compacted");
+        let facts = &summary[summary.find(DURABLE_FACTS_HEADING).unwrap()..];
+        assert!(summary.find("Did some things.").unwrap() < summary.find(facts).unwrap());
+        assert!(facts.contains("Task t1: Order the blue mug"));
+        assert!(facts.contains("- Spend at most 20 EUR"));
+        assert!(facts.contains(r#"{"kind":"file_exists","path":"receipt.pdf"}"#));
+        assert!(facts.contains(
+            "- op op-submit: browser.click on browser origin=https://shop.example gen=0: completed"
+        ));
+        assert!(facts.contains("op-unknown"));
+        assert!(
+            !facts.contains("op-failed"),
+            "a failed action changed nothing"
+        );
+        assert!(facts.contains(&format!(
+            "- {} image/png 4x3 captured from browser:tab=3 at 77",
+            image.sha256
+        )));
+        // Deterministic: the same records give the same facts.
+        let cut = session
+            .records()
+            .iter()
+            .position(|r| matches!(r.event, Event::Compaction { .. }))
+            .unwrap();
+        assert_eq!(
+            durable_facts(&session.records()[..cut]).as_deref(),
+            Some(facts)
+        );
+        assert!(
+            session.history().messages[0].content[0]
+                .as_text()
+                .unwrap()
+                .contains("op-submit")
+        );
     }
 }

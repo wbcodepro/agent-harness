@@ -50,6 +50,32 @@ fn first_line(text: &str, max: usize) -> String {
     shown
 }
 
+/// One line for a message or tool result: the first line of its text, then
+/// a short description of each image or stored file in it.
+fn summary_line(content: &[Block], max: usize) -> String {
+    let text = content
+        .iter()
+        .find_map(|block| match block {
+            Block::Text { text } if !text.is_empty() => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap_or("");
+    let mut line = first_line(text, max);
+    for block in content {
+        if matches!(
+            block,
+            Block::Image { .. } | Block::Artifact { .. } | Block::Unsupported { .. }
+        ) && let Some(description) = block.as_text()
+        {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(&description);
+        }
+    }
+    line
+}
+
 /// Breaks `text` into rows at most `width` columns wide, honouring newlines
 /// and wide characters.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -162,7 +188,16 @@ impl App {
                 if text.starts_with("[hame verify]") {
                     self.push(Kind::Notice, "checks failed; sent back to the model");
                 } else {
-                    self.push(Kind::User, text);
+                    let mut shown = text.to_string();
+                    for block in content.iter().skip(1) {
+                        if let Some(description) = block.as_text()
+                            && !matches!(block, Block::Text { .. })
+                        {
+                            shown.push('\n');
+                            shown.push_str(&description);
+                        }
+                    }
+                    self.push(Kind::User, shown);
                 }
             }
             Event::AssistantAttempt { .. } => {
@@ -185,16 +220,12 @@ impl App {
             Event::ToolResult {
                 content, is_error, ..
             } => {
-                let text = match content.first() {
-                    Some(Block::Text { text }) => text.as_str(),
-                    _ => "",
-                };
                 let kind = if *is_error {
                     Kind::ToolError
                 } else {
                     Kind::ToolOk
                 };
-                self.push(kind, first_line(text, 200));
+                self.push(kind, summary_line(content, 200));
             }
             Event::Compaction { .. } => self.push(Kind::Notice, "earlier history summarized"),
             Event::TurnEnd { reason, .. } => match reason {
@@ -409,5 +440,32 @@ mod tests {
         app.approval = Some("Allow bash rm -rf build?".into());
         let screen = screen(&app, 60, 8);
         assert!(screen.contains("approve? y / n") && screen.contains("Allow bash rm -rf build?"));
+    }
+
+    #[test]
+    fn images_and_files_show_as_one_line_descriptions() {
+        let mut app = App::new();
+        app.apply(&record(Event::ToolResult {
+            call_id: "c0".into(),
+            content: vec![
+                Block::text("Took a screenshot"),
+                Block::Image {
+                    artifact: hame_session::ArtifactRef {
+                        sha256: "ab".repeat(32),
+                        mime: "image/png".into(),
+                        bytes: 2048,
+                        width: Some(800),
+                        height: Some(600),
+                        name: None,
+                        capture: None,
+                    },
+                },
+            ],
+            is_error: false,
+        }));
+        assert_eq!(
+            app.entries.last().unwrap().text,
+            "Took a screenshot [image image/png 800x600 2048 bytes, artifact abababababab]"
+        );
     }
 }

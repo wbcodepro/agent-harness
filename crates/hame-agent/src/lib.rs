@@ -16,9 +16,10 @@ use std::sync::Arc;
 use hame_kernel::BoxFuture;
 use hame_kernel::Chain;
 use hame_llm::{Llm, LlmError, Request, SinkError};
+use hame_session::contract::ActionJournal;
 use hame_session::{
-    AttemptReason, Block, Delta, Event, History, Record, SessionError, SessionId, SessionWriter,
-    StopReason, ToolSpec, TurnEndReason, assemble, derive_history, plan_close,
+    ArtifactStore, AttemptReason, Block, Delta, Event, History, Record, SessionError, SessionId,
+    SessionWriter, StopReason, ToolSpec, TurnEndReason, assemble, derive_history, plan_close,
 };
 use hame_tools::{Effect, Tool, ToolContext, ToolOutput, ToolRunner, ToolSet};
 use serde_json::Value;
@@ -87,6 +88,37 @@ impl Session {
         derive_history(&self.records)
     }
 
+    /// The artifact store the session's images and files live in.
+    pub fn artifacts(&self) -> &ArtifactStore {
+        self.writer.artifacts()
+    }
+
+    /// The session's action journal.
+    pub fn journal(&self) -> &Arc<ActionJournal> {
+        self.writer.journal()
+    }
+
+    /// The tool context for a call made in this session: `base` with this
+    /// session's artifact store, action journal and id. One agent can serve
+    /// several sessions, so these come from the session, never the agent.
+    pub fn tool_context(&self, base: &ToolContext) -> ToolContext {
+        base.clone()
+            .with_artifacts(self.artifacts().clone())
+            .with_journal(Arc::clone(self.journal()))
+            .with_session(self.id().to_string())
+    }
+
+    /// Appends an `action/receipt` event for every receipt that settled in
+    /// the action journal since the last look. Each is logged once.
+    pub fn log_settled_receipts(&mut self) -> Result<(), SessionError> {
+        for receipt in self.writer.take_settled_receipts()? {
+            self.append(Event::ActionReceipt {
+                receipt: Box::new(receipt),
+            })?;
+        }
+        Ok(())
+    }
+
     /// Calls `observer` with every record appended from now on.
     pub fn observe(&mut self, observer: impl FnMut(&Record) + Send + 'static) {
         self.observer = Some(Box::new(observer));
@@ -104,7 +136,19 @@ impl Session {
     /// Ends whatever turn is in progress for `reason`, settling a partial
     /// response and answering every outstanding tool call. Does nothing when
     /// no turn is open.
+    ///
+    /// Actions an abandoned tool call had dispatched will never be seen to
+    /// settle: they are marked `outcome_unknown` in the journal and logged,
+    /// and the abandoned call's result names them.
     pub fn close_open_turn(&mut self, reason: TurnEndReason) -> Result<(), SessionError> {
+        if plan_close(&self.records, reason).is_empty() {
+            return Ok(());
+        }
+        for receipt in self.writer.settle_abandoned_actions()? {
+            self.append(Event::ActionReceipt {
+                receipt: Box::new(receipt),
+            })?;
+        }
         for event in plan_close(&self.records, reason) {
             self.append(event)?;
         }
@@ -305,6 +349,9 @@ pub struct Agent {
     /// Shared, so a tool that makes calls of its own can send them through
     /// the same layers.
     pub pipeline: Arc<ToolPipeline>,
+    /// The context tool calls start from. Each turn adds the session's
+    /// artifact store, action journal and id to it (see
+    /// [`Session::tool_context`]), whatever this one holds.
     pub tool_context: ToolContext,
     /// Executes tool bodies, in process or in a confined worker.
     pub runner: Arc<dyn ToolRunner>,
@@ -371,6 +418,10 @@ impl Agent {
         session.append(Event::UserMessage { content: input })?;
         self.checkpoint(session).await?;
 
+        // Calls in this turn act for this session: its artifact store, its
+        // action journal, its id.
+        let context = session.tool_context(&self.tool_context);
+
         // One flag per hook: a hook that has spoken about a change has had
         // its say, but the hooks after it have not seen that change yet.
         let mut changed = vec![false; self.hooks.len()];
@@ -381,11 +432,9 @@ impl Agent {
                 hook.before_step(session).await?;
             }
 
-            let artifacts = self
-                .tool_context
-                .artifacts
-                .clone()
-                .map(|store| hame_session::ArtifactSource(Arc::new(store)));
+            let artifacts = Some(hame_session::ArtifactSource(Arc::new(
+                session.artifacts().clone(),
+            )));
             let mut request = Request::from(session.history());
             request.max_tokens = self.max_tokens;
             request.cache_key = Some(session.id().to_string());
@@ -541,7 +590,7 @@ impl Agent {
                     let outputs = futures_util::future::join_all(
                         batch
                             .into_iter()
-                            .map(|(id, name, input)| self.execute(id, name, input)),
+                            .map(|(id, name, input)| self.execute(&context, id, name, input)),
                     )
                     .await;
                     for (id, mut output) in ids.into_iter().zip(outputs) {
@@ -559,6 +608,10 @@ impl Agent {
                     }
                 }
             }
+
+            // What this step's tools did to the world, as the journal has
+            // it, goes into the log before the step ends.
+            session.log_settled_receipts()?;
 
             if may_have_changed {
                 changed.fill(true);
@@ -685,7 +738,13 @@ impl Agent {
     /// Runs a call, and for a change that names a follow-up command, that
     /// command too: an edit is nearly always followed by the check for it,
     /// and doing both in one call saves a request to the model.
-    async fn execute(&self, call_id: String, name: String, mut input: Value) -> ToolOutput {
+    async fn execute(
+        &self,
+        context: &ToolContext,
+        call_id: String,
+        name: String,
+        mut input: Value,
+    ) -> ToolOutput {
         let then_run = match input.as_object_mut() {
             Some(fields) if self.fuse_actions && FUSED_TOOLS.contains(&name.as_str()) => {
                 match fields.remove(THEN_RUN) {
@@ -695,7 +754,9 @@ impl Agent {
             }
             _ => None,
         };
-        let mut output = self.execute_one(call_id.clone(), name, input).await;
+        let mut output = self
+            .execute_one(context, call_id.clone(), name, input)
+            .await;
         let Some(command) = then_run else {
             return output;
         };
@@ -709,6 +770,7 @@ impl Agent {
         // rules, approval and the sandbox apply to it as they would.
         let ran = self
             .execute_one(
+                context,
                 format!("{call_id}-then"),
                 SHELL_TOOL.into(),
                 serde_json::json!({ "command": command }),
@@ -729,7 +791,13 @@ impl Agent {
         output
     }
 
-    async fn execute_one(&self, call_id: String, name: String, input: Value) -> ToolOutput {
+    async fn execute_one(
+        &self,
+        context: &ToolContext,
+        call_id: String,
+        name: String,
+        input: Value,
+    ) -> ToolOutput {
         let Some((tool, name, input)) = self.resolve(&name, &input) else {
             return ToolOutput::error(if name == deferred::CALL_TOOL {
                 format!(
@@ -747,7 +815,6 @@ impl Agent {
             input,
             effect: tool.effect(),
         };
-        let context = &self.tool_context;
         self.pipeline
             .run(request, |request: ToolRequest| {
                 let tool = Arc::clone(&tool);

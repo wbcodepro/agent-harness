@@ -177,6 +177,15 @@ impl Driver {
                                 .as_str()
                                 .unwrap_or("")
                                 .to_string();
+                            let missing = result["_meta"]["hame"]["missingArtifacts"]
+                                .as_array()
+                                .map_or(0, Vec::len);
+                            if missing > 0 {
+                                app.notice(format!(
+                                    "warning: {missing} image(s) or file(s) of this session are \
+                                     missing from the store; the model sees a note in their place"
+                                ));
+                            }
                             app.plan_mode = false;
                             self.refresh_status(app);
                             if std::mem::take(start_in_plan) {

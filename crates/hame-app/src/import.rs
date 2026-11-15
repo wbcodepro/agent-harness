@@ -3,33 +3,101 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use base64::Engine as _;
 use hame_session::{
-    AttemptReason, Block, CreateOptions, Event, SessionId, SessionStore, StopReason, TurnEndReason,
-    Usage,
+    ArtifactStore, AttemptReason, Block, CreateOptions, Event, SessionId, SessionStore, StopReason,
+    TurnEndReason, Usage,
 };
 use serde_json::Value;
 
-fn text_of(content: &Value) -> Vec<Block> {
-    let mut blocks = Vec::new();
+/// An image block of an imported transcript, stored in the artifact store.
+///
+/// Understands the shapes transcripts carry images in: `data` with
+/// `mimeType`/`mediaType`/`mime_type` beside it, an Anthropic-style
+/// `source: {type: "base64", media_type, data}`, and an OpenAI-style
+/// `image_url` holding a `data:` URL. An image that cannot be decoded or
+/// stored becomes an `unsupported` block saying so, never silence.
+pub fn import_image(item: &Value, store: &ArtifactStore) -> Block {
+    let source = &item["source"];
+    let url = item["image_url"]["url"]
+        .as_str()
+        .or_else(|| item["image_url"].as_str())
+        .or_else(|| item["url"].as_str());
+    let (mime, data) = if let Some(data) = item["data"].as_str() {
+        let mime = ["mimeType", "mediaType", "mime_type", "media_type"]
+            .iter()
+            .find_map(|key| item[*key].as_str())
+            .unwrap_or("image/png");
+        (mime.to_string(), data.to_string())
+    } else if source["type"] == "base64" {
+        (
+            source["media_type"]
+                .as_str()
+                .unwrap_or("image/png")
+                .to_string(),
+            source["data"].as_str().unwrap_or("").to_string(),
+        )
+    } else if let Some(rest) = url.and_then(|url| url.strip_prefix("data:")) {
+        match rest.split_once(";base64,") {
+            Some((mime, data)) => (mime.to_string(), data.to_string()),
+            None => (String::new(), String::new()),
+        }
+    } else {
+        return Block::Unsupported {
+            kind: "image".into(),
+            note: "the imported log refers to an image by location, not by its bytes".into(),
+        };
+    };
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(data.trim()) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => {
+            return Block::Unsupported {
+                kind: "image".into(),
+                note: "the imported log holds image data that is not valid base64".into(),
+            };
+        }
+    };
+    match store.put(&bytes, &mime) {
+        Ok(artifact) if artifact.is_image() => Block::Image { artifact },
+        Ok(artifact) => Block::Artifact { artifact },
+        Err(e) => Block::Unsupported {
+            kind: "image".into(),
+            note: format!("could not be stored on import: {e}"),
+        },
+    }
+}
+
+/// The content blocks of a message: its text parts as one text block, as
+/// before, followed by its images, stored in the artifact store. Parts of
+/// other kinds are named in the text.
+fn content_of(content: &Value, store: &ArtifactStore) -> Vec<Block> {
+    let mut texts = Vec::new();
+    let mut media = Vec::new();
     for item in content.as_array().into_iter().flatten() {
         match item["type"].as_str() {
-            Some("text") => blocks.push(Block::text(item["text"].as_str().unwrap_or(""))),
-            Some(other) => blocks.push(Block::text(format!("[{other} omitted on import]"))),
+            Some("text") => texts.push(item["text"].as_str().unwrap_or("").to_string()),
+            Some("image" | "image_url" | "input_image") => media.push(import_image(item, store)),
+            Some(other) => texts.push(format!("[{other} omitted on import]")),
             None => {}
         }
     }
-    if blocks.is_empty() {
-        blocks.push(Block::text(""));
+    let mut blocks = Vec::new();
+    if !texts.is_empty() || media.is_empty() {
+        blocks.push(Block::text(texts.join("\n")));
     }
+    blocks.extend(media);
     blocks
 }
 
 fn joined(content: &Value) -> String {
-    text_of(content)
+    content
+        .as_array()
         .into_iter()
-        .filter_map(|block| match block {
-            Block::Text { text } => Some(text),
-            _ => None,
+        .flatten()
+        .filter_map(|item| match item["type"].as_str() {
+            Some("text") => Some(item["text"].as_str().unwrap_or("").to_string()),
+            Some(other) => Some(format!("[{other} omitted on import]")),
+            None => None,
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -40,9 +108,11 @@ fn joined(content: &Value) -> String {
 ///
 /// The conversation carries over: system prompt, user and assistant
 /// messages with their reasoning, tool calls and results, turn structure
-/// and compaction summaries. Events with no counterpart here (approval
-/// policy, titles, jobs, subagent bookkeeping) are left out. Anything the
-/// source left unfinished is closed the way a crashed hame session is.
+/// and compaction summaries. Images in messages and tool results are stored
+/// in the artifact store and kept as image blocks. Events with no
+/// counterpart here (approval policy, titles, jobs, subagent bookkeeping)
+/// are left out. Anything the source left unfinished is closed the way a
+/// crashed hame session is.
 pub fn import_dsh(
     store: &SessionStore,
     source: &Path,
@@ -73,6 +143,7 @@ pub fn import_dsh(
         })
         .map_err(|e| e.to_string())?;
     let id = writer.id().clone();
+    let artifacts = writer.artifacts().clone();
 
     // Source event number -> the last hame record written for it or before
     // it, so a compaction's range can be carried over.
@@ -108,7 +179,7 @@ pub fn import_dsh(
                 text: joined(&data["message"]["content"]),
             }),
             "user/message" | "developer/message" => Some(Event::UserMessage {
-                content: text_of(&data["content"]),
+                content: content_of(&data["content"], &artifacts),
             }),
             "assistant/message" => {
                 let mut content = Vec::new();
@@ -169,7 +240,7 @@ pub fn import_dsh(
                     .as_str()
                     .unwrap_or("")
                     .to_string(),
-                content: vec![Block::text(joined(&data["message"]["content"]))],
+                content: content_of(&data["message"]["content"], &artifacts),
                 is_error: data["message"]["isError"].as_bool().unwrap_or(false),
             }),
             "compaction/summary" => {
@@ -276,11 +347,47 @@ mod tests {
                 },
             ]
         );
+        // An image whose data is not valid is kept as visibly unsupported.
         assert!(matches!(&history.messages[2].content[0],
             Block::ToolResult { content, .. }
-                if content == &vec![Block::text("a.rs\n[image omitted on import]")]));
+                if matches!(&content[..], [Block::Text { text }, Block::Unsupported { kind, .. }]
+                    if text == "a.rs" && kind == "image")));
 
         assert!(import_dsh(&store, &dir.path().join("missing"), None).is_err());
+
+        // A real image, base64 in the source, is stored and referenced.
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52,
+            0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0,
+        ];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let lines = [
+            json!({"type": "session", "version": 4, "id": "img", "cwd": "/src"}),
+            json!({"type": "turn/start", "data": {"turn": 1}}),
+            json!({"type": "user/message", "data": {"content": [
+                {"type": "text", "text": "What is this?"},
+                {"type": "image", "data": encoded, "mimeType": "image/png"}]}}),
+            json!({"type": "assistant/message", "data": {"message": {"content": [
+                {"type": "tool-call", "id": "t1", "name": "screenshot", "arguments": "{}"}]}}}),
+            json!({"type": "tool/result", "data": {"message": {"toolCallId": "t1", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                    "data": encoded}}]}}}),
+            json!({"type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}),
+        ];
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(&source, text).unwrap();
+        let id = import_dsh(&store, &source, None).unwrap();
+        let records = store.read(&id).unwrap();
+        let images = hame_session::session_artifacts(&records);
+        assert_eq!(images.len(), 1, "the same bytes are stored once");
+        assert_eq!((images[0].width, images[0].height), (Some(2), Some(2)));
+        assert_eq!(store.artifacts().get(&images[0]).unwrap(), png);
+        let history = derive_history(&records);
+        assert!(matches!(&history.messages[0].content[..],
+            [Block::Text { text }, Block::Image { .. }] if text == "What is this?"));
+        assert!(matches!(&history.messages[2].content[0],
+            Block::ToolResult { content, .. } if matches!(&content[..], [Block::Image { .. }])));
+        assert!(store.check_artifacts(&id).unwrap().is_empty());
         std::fs::write(&source, "{\"type\":\"session\",\"version\":9}\n").unwrap();
         assert!(
             import_dsh(&store, &source, None)

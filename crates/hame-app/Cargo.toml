@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64.workspace = true
 hame-agent.workspace = true
 hame-checkpoint.workspace = true
 hame-context.workspace = true

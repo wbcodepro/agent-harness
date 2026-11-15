@@ -7,6 +7,9 @@
 //! The server is reachable only from this machine, and every API call must
 //! carry the token printed at startup, so another site open in the browser
 //! cannot drive the agent.
+//!
+//! Images a session refers to are served from `/api/artifacts/<sha256>`,
+//! only to a page that names a session referring to them.
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -16,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
@@ -107,6 +110,7 @@ pub async fn start(
         .route("/sessions/{id}/prompt", post(prompt))
         .route("/sessions/{id}/cancel", post(cancel))
         .route("/sessions/{id}/approval", post(approval))
+        .route("/artifacts/{sha256}", get(artifact))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&app),
             guard,
@@ -262,6 +266,28 @@ async fn events(
         .iter()
         .map(|record| json!({"kind": "record", "record": record}).to_string())
         .collect();
+    let missing: Vec<Value> = hame_app::session_store(&app.home)
+        .check_artifacts(&session)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(artifact, error)| {
+            json!({"sha256": artifact.sha256, "mime": artifact.mime, "error": error.to_string()})
+        })
+        .collect();
+    if !missing.is_empty() {
+        replay.push_back(
+            json!({
+                "kind": "warning",
+                "text": format!(
+                    "{} image(s) or file(s) of this session are missing from the store; the \
+                     model sees a note in their place.",
+                    missing.len()
+                ),
+                "missing_artifacts": missing,
+            })
+            .to_string(),
+        );
+    }
     if entry.busy.load(Ordering::Relaxed) {
         replay.push_back(json!({"kind": "turn", "state": "started"}).to_string());
     }
@@ -338,6 +364,84 @@ async fn cancel(
     let entry = app.entry(Some(&id)).await?;
     entry.cancel.notify_waiters();
     Ok(Json(json!({})))
+}
+
+/// Serves the bytes of an artifact, for an `<img>` on the page.
+///
+/// The id must be a well-formed hash, and the session named by the
+/// `session` query parameter must refer to it: the page can only fetch what
+/// it is showing. The type sent is the one the log recorded, which the
+/// store checked against the bytes for images; anything that is not an
+/// image is sent as a download, never rendered on this origin.
+async fn artifact(
+    State(app): State<Arc<App>>,
+    Path(sha256): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, Failure> {
+    let well_formed = sha256.len() == 64
+        && sha256
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !well_formed {
+        return Err(bad("not an artifact id"));
+    }
+    let session = query
+        .get("session")
+        .ok_or_else(|| bad("name the session the artifact belongs to"))?;
+    let session = SessionId::parse(session).map_err(|e| bad(e.to_string()))?;
+    let store = hame_app::session_store(&app.home);
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            "no such artifact in this session".to_string(),
+        )
+    };
+    let records = store.read(&session).map_err(|_| not_found())?;
+    let artifact = hame_session::session_artifacts(&records)
+        .into_iter()
+        .find(|artifact| artifact.sha256 == sha256)
+        .ok_or_else(not_found)?;
+    let bytes = match store.artifacts().get(&artifact) {
+        Ok(bytes) => bytes,
+        Err(hame_session::artifact::ArtifactError::Missing(_)) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "the artifact is missing from the store".into(),
+            ));
+        }
+        Err(e) => return Err(failed(e.to_string())),
+    };
+    let mime = if hame_session::artifact::KNOWN_MIME.contains(&artifact.mime.as_str()) {
+        artifact.mime.as_str()
+    } else {
+        "application/octet-stream"
+    };
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
+    // Content-addressed: the bytes behind this id never change.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    if !artifact.is_image() {
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment"),
+        );
+    }
+    Ok(response)
 }
 
 #[derive(Deserialize)]

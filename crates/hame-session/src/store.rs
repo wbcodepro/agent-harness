@@ -2,10 +2,13 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::SessionError;
+use crate::artifact::{ArtifactError, ArtifactRef, ArtifactStore};
+use crate::contract::{ActionJournal, ActionReceipt};
 use crate::model::{Event, FORMAT_VERSION, Header, ParentRef, Record, SessionId};
+use crate::projection::session_artifacts;
 use crate::recover::plan_recovery;
 
 const LOG_FILE: &str = "session.v1.jsonl";
@@ -79,6 +82,131 @@ impl SessionStore {
         self.root.join(id.as_str()).join(LOG_FILE)
     }
 
+    fn journal(&self, id: &SessionId) -> Result<Arc<ActionJournal>, SessionError> {
+        Ok(Arc::new(ActionJournal::open(self.journal_path(id))?))
+    }
+
+    /// Artifacts the session refers to that cannot be read back intact:
+    /// missing from the store, or with bytes that no longer match their
+    /// hash. History still derives without them; a provider is sent a note
+    /// in place of each.
+    pub fn check_artifacts(
+        &self,
+        id: &SessionId,
+    ) -> Result<Vec<(ArtifactRef, ArtifactError)>, SessionError> {
+        let records = self.read(id)?;
+        let store = self.artifacts();
+        Ok(session_artifacts(&records)
+            .into_iter()
+            .filter_map(|artifact| match store.get(&artifact) {
+                Ok(_) => None,
+                Err(e) => Some((artifact, e)),
+            })
+            .collect())
+    }
+
+    /// Deletes artifacts that no session refers to and that are older than
+    /// `min_age`, and temporary files left by writes that never finished.
+    ///
+    /// An artifact is written before the event that refers to it, so a
+    /// crash in between leaves an unreferenced file; `min_age` keeps this
+    /// from deleting one a running session has just written and is about to
+    /// log. Every file in every session directory (logs of forks and
+    /// imports included, and action journals) is searched for artifact ids,
+    /// whatever its format version, so nothing a log mentions is deleted.
+    /// A session directory that cannot be read stops the collection.
+    pub fn gc_artifacts(&self, min_age: Duration) -> Result<GcReport, SessionError> {
+        self.collect_artifacts(min_age, true)
+    }
+
+    /// What [`Self::gc_artifacts`] would delete, deleting nothing.
+    pub fn gc_artifacts_dry_run(&self, min_age: Duration) -> Result<GcReport, SessionError> {
+        self.collect_artifacts(min_age, false)
+    }
+
+    fn collect_artifacts(&self, min_age: Duration, delete: bool) -> Result<GcReport, SessionError> {
+        let referenced = self.referenced_ids()?;
+        let store = self.artifacts();
+        let mut report = GcReport::default();
+        let shards = match fs::read_dir(store.root()) {
+            Ok(shards) => shards,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(report),
+            Err(e) => return Err(e.into()),
+        };
+        let now = SystemTime::now();
+        let old_enough = |meta: &fs::Metadata| {
+            meta.modified()
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age >= min_age)
+        };
+        for shard in shards {
+            let shard = shard?.path();
+            if !shard.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&shard)? {
+                let entry = entry?;
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let meta = entry.metadata()?;
+                if !meta.is_file() {
+                    continue;
+                }
+                if name.starts_with('.') && name.ends_with(".tmp") {
+                    if old_enough(&meta) {
+                        if delete {
+                            fs::remove_file(&path)?;
+                        }
+                        report.temp_removed += 1;
+                    }
+                    continue;
+                }
+                if store.path_of(&name).ok().as_deref() != Some(path.as_path()) {
+                    // Not something the store wrote; leave it alone.
+                    continue;
+                }
+                if referenced.contains(&name) || !old_enough(&meta) {
+                    report.kept += 1;
+                    continue;
+                }
+                if delete {
+                    fs::remove_file(&path)?;
+                }
+                report.removed += 1;
+                report.bytes_freed += meta.len();
+            }
+            if delete {
+                // Only succeeds when the shard is empty.
+                let _ = fs::remove_dir(&shard);
+            }
+        }
+        Ok(report)
+    }
+
+    /// Every artifact id mentioned in any file of any session directory.
+    fn referenced_ids(&self) -> Result<std::collections::HashSet<String>, SessionError> {
+        let mut ids = std::collections::HashSet::new();
+        let sessions = match fs::read_dir(&self.root) {
+            Ok(sessions) => sessions,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ids),
+            Err(e) => return Err(e.into()),
+        };
+        for session in sessions {
+            let dir = session?.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            for file in fs::read_dir(&dir)? {
+                let path = file?.path();
+                if path.is_file() && path.file_name() != Some(LOCK_FILE.as_ref()) {
+                    collect_hex_ids(&fs::read(&path)?, &mut ids);
+                }
+            }
+        }
+        Ok(ids)
+    }
+
     pub fn create(&self, options: CreateOptions) -> Result<SessionWriter, SessionError> {
         self.create_with_parent(options, None)
     }
@@ -110,6 +238,9 @@ impl SessionStore {
             id: id.clone(),
             next_seq: 0,
             clock: Arc::clone(&self.clock),
+            artifacts: self.artifacts(),
+            journal: self.journal(&id)?,
+            receipts_seen: 0,
         };
         let ts = writer.clock.now_ms();
         writer.write(
@@ -146,6 +277,12 @@ impl SessionStore {
     /// A partially written last record is discarded, and anything the log
     /// left open (see [`plan_recovery`]) is closed, so the returned records
     /// always describe a well-formed session with no turn in progress.
+    ///
+    /// Actions the journal shows as dispatched but never settled are marked
+    /// `outcome_unknown` there, and every settled receipt the log does not
+    /// have yet is appended to it, before the open turn is closed; the
+    /// interrupted tool calls' results then name those actions. Nothing is
+    /// ever replayed.
     pub fn open(&self, id: &SessionId) -> Result<(Vec<Record>, SessionWriter), SessionError> {
         // The lock comes first, so two processes cannot both repair and
         // extend the log.
@@ -180,7 +317,18 @@ impl SessionStore {
             id: id.clone(),
             next_seq: records.len() as u64,
             clock: Arc::clone(&self.clock),
+            artifacts: self.artifacts(),
+            journal: self.journal(id)?,
+            receipts_seen: 0,
         };
+        writer.journal.settle_after_crash(writer.clock.now_ms())?;
+        let journal = ActionJournal::read(writer.journal.path())?;
+        for receipt in unlogged_receipts(&records, &journal) {
+            records.push(writer.append(Event::ActionReceipt {
+                receipt: Box::new(receipt),
+            })?);
+        }
+        writer.receipts_seen = journal.len();
         for event in plan_recovery(&records) {
             records.push(writer.append(event)?);
         }
@@ -191,6 +339,13 @@ impl SessionStore {
     ///
     /// Copied records keep their sequence numbers and timestamps. Forking in
     /// the middle of a turn closes that turn in the fork as interrupted.
+    ///
+    /// The fork shares the artifact store, so its images stay readable. It
+    /// also shares the world: forking undoes no external effect. Every
+    /// settled receipt of the source's journal is copied into the fork's
+    /// journal, so an adapter still refuses to repeat an effect that may
+    /// have happened, and the ones the copied records do not show (made
+    /// after the fork point) are appended to the fork's log.
     pub fn fork(
         &self,
         source: &SessionId,
@@ -218,6 +373,19 @@ impl SessionStore {
         for event in plan_recovery(&records) {
             records.push(writer.append(event)?);
         }
+        let carried: Vec<ActionReceipt> = ActionJournal::read(&self.journal_path(source))?
+            .into_iter()
+            .filter(|receipt| receipt.status.is_settled())
+            .collect();
+        for receipt in &carried {
+            writer.journal.record(receipt)?;
+        }
+        for receipt in unlogged_receipts(&records, &carried) {
+            records.push(writer.append(Event::ActionReceipt {
+                receipt: Box::new(receipt),
+            })?);
+        }
+        writer.receipts_seen = carried.len();
         Ok((records, writer))
     }
 
@@ -241,6 +409,57 @@ impl SessionStore {
     }
 }
 
+/// What [`SessionStore::gc_artifacts`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GcReport {
+    /// Unreferenced artifacts deleted.
+    pub removed: usize,
+    pub bytes_freed: u64,
+    /// Artifacts kept: referenced, or too recent to judge.
+    pub kept: usize,
+    /// Temporary files of interrupted writes deleted.
+    pub temp_removed: usize,
+}
+
+/// Collects every run of exactly 64 lowercase hex digits in `bytes`.
+fn collect_hex_ids(bytes: &[u8], ids: &mut std::collections::HashSet<String>) {
+    let hex = |b: &u8| b.is_ascii_digit() || (b'a'..=b'f').contains(b);
+    let mut start = None;
+    for (index, byte) in bytes.iter().chain(std::iter::once(&b' ')).enumerate() {
+        match (hex(byte), start) {
+            (true, None) => start = Some(index),
+            (false, Some(from)) => {
+                if index - from == 64 {
+                    ids.insert(String::from_utf8_lossy(&bytes[from..index]).into_owned());
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Settled receipts in `journal` that `records` do not already hold.
+fn unlogged_receipts(records: &[Record], journal: &[ActionReceipt]) -> Vec<ActionReceipt> {
+    let mut logged: Vec<&ActionReceipt> = records
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ActionReceipt { receipt } => Some(&**receipt),
+            _ => None,
+        })
+        .collect();
+    let mut missing = Vec::new();
+    for receipt in journal.iter().filter(|r| r.status.is_settled()) {
+        match logged.iter().position(|seen| *seen == receipt) {
+            Some(index) => {
+                logged.swap_remove(index);
+            }
+            None => missing.push(receipt.clone()),
+        }
+    }
+    missing
+}
+
 /// The only handle that can append to a session. Holds the session's
 /// exclusive lock until dropped.
 pub struct SessionWriter {
@@ -250,11 +469,51 @@ pub struct SessionWriter {
     id: SessionId,
     next_seq: u64,
     clock: Arc<dyn Clock>,
+    artifacts: ArtifactStore,
+    journal: Arc<ActionJournal>,
+    /// Journal receipts already looked at by [`Self::take_settled_receipts`].
+    receipts_seen: usize,
 }
 
 impl SessionWriter {
     pub fn id(&self) -> &SessionId {
         &self.id
+    }
+
+    /// The artifact store this session's images and files are kept in,
+    /// shared with every session of the same store.
+    pub fn artifacts(&self) -> &ArtifactStore {
+        &self.artifacts
+    }
+
+    /// The session's action journal, for tools that act outside the
+    /// sandbox.
+    pub fn journal(&self) -> &Arc<ActionJournal> {
+        &self.journal
+    }
+
+    /// Receipts that settled in the journal since the last call (or since
+    /// the session was opened), in journal order. The caller appends them
+    /// to the log as `action/receipt` events.
+    pub fn take_settled_receipts(&mut self) -> Result<Vec<ActionReceipt>, SessionError> {
+        let all = ActionJournal::read(self.journal.path())?;
+        let fresh = all
+            .iter()
+            .skip(self.receipts_seen)
+            .filter(|receipt| receipt.status.is_settled())
+            .cloned()
+            .collect();
+        self.receipts_seen = all.len();
+        Ok(fresh)
+    }
+
+    /// Marks actions that were dispatched and will now never be seen to
+    /// settle (their tool call was abandoned) as `outcome_unknown`, then
+    /// returns every receipt settled since the last look, as
+    /// [`Self::take_settled_receipts`] does.
+    pub fn settle_abandoned_actions(&mut self) -> Result<Vec<ActionReceipt>, SessionError> {
+        self.journal.settle_after_crash(self.clock.now_ms())?;
+        self.take_settled_receipts()
     }
 
     /// Sequence number the next appended record will get.
