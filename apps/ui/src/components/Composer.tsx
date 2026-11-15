@@ -225,7 +225,14 @@ export function Composer(props: ComposerProps) {
               </span>
             )}
           </label>
-          <label className={styles.pill} title={info?.modes.find((m) => m.name === props.mode)?.description}>
+          <label
+            className={styles.pill}
+            title={
+              info?.enforced
+                ? "This host asks before every change, whatever the mode."
+                : info?.modes.find((m) => m.name === props.mode)?.description
+            }
+          >
             <Shield size={14} aria-hidden />
             <select
               aria-label="Permission mode"
@@ -238,7 +245,7 @@ export function Composer(props: ComposerProps) {
             >
               {(info?.modes ?? [{ name: props.mode, label: props.mode, description: "" }]).map((mode) => (
                 <option key={mode.name} value={mode.name}>
-                  {mode.label}
+                  {info?.enforced && mode.name !== "read-only" ? `${mode.label} (asks first)` : mode.label}
                 </option>
               ))}
             </select>

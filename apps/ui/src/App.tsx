@@ -450,6 +450,7 @@ export function App({ transport }: { transport: Transport }) {
             canRename={!!activeId}
             cwd={cwd}
             mode={mode}
+            enforced={detail?.enforced ?? (info?.enforced ? "ask" : null)}
             status={status}
             subagents={view.subagents.filter((agent) => agent.status === "running" || agent.status === "waiting").length}
             grants={view.grants}

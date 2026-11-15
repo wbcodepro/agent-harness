@@ -105,6 +105,10 @@ pub struct Options {
     /// and rules that allow are all ignored (rules that ask or deny still
     /// apply). For sessions driven from another device (`hame connect`).
     pub ask_before_changes: bool,
+    /// Answers true while a turn is driven from another device: browser
+    /// and desktop actions that act are then asked about too (looking
+    /// still runs). `ask_before_changes` implies it always.
+    pub ask_control: Option<hame_policy::AskControl>,
     /// `deepseek`, `openai` or `anthropic`. Defaults to the configuration,
     /// then to whichever provider a key is available for.
     pub provider: Option<String>,
@@ -579,10 +583,16 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     } else {
         (config.rules.clone(), configured)
     };
+    let ask_control: Option<hame_policy::AskControl> = if strict {
+        Some(Arc::new(|| true))
+    } else {
+        options.ask_control.clone()
+    };
     pipeline.push(ApprovalLayer {
         rules,
         default,
         prompter,
+        ask_control,
     });
 
     // Inside the approval layer, so only calls that are let through count

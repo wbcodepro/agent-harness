@@ -128,7 +128,45 @@ async fn remote_callers_get_the_remote_policy() {
         )
         .await;
     assert_eq!(status, 403);
+    // Nor see it: with roots set, sessions outside them are left out of
+    // the list and answered 404 (their existence does not leak).
+    let (status, listed) = page.remote("GET", "/sessions", None).await;
+    assert_eq!(status, 200);
+    let ids: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .collect();
+    assert!(!ids.contains(&session.as_str()) && !ids.contains(&local.as_str()));
+    assert_eq!(ids.len(), 1, "only the session under the root: {listed}");
+    for (method, path, body) in [
+        ("GET", format!("/sessions/{session}"), None),
+        ("GET", format!("/sessions/{session}/events"), None),
+        (
+            "PATCH",
+            format!("/sessions/{session}"),
+            Some(json!({"title": "x"})),
+        ),
+        (
+            "GET",
+            format!("/artifacts/{}?session={session}", "a".repeat(64)),
+            None,
+        ),
+    ] {
+        let (status, body) = page.remote(method, &path, body).await;
+        assert_eq!(status, 404, "{method} {path}: {body}");
+    }
+    // The page on this computer still sees everything.
+    assert_eq!(page.get(&format!("/sessions/{session}")).await.0, 200);
     write_config(dir.path(), "");
+    // Without roots, a remote device sees every session, as before.
+    assert_eq!(
+        page.remote("GET", &format!("/sessions/{session}"), None)
+            .await
+            .0,
+        200
+    );
 
     // No Full access for a remote device unless allowed.
     let settings = format!("/sessions/{session}/settings");
@@ -138,6 +176,15 @@ async fn remote_callers_get_the_remote_policy() {
     assert_eq!(status, 403, "{body}");
     let (status, _) = page
         .remote("POST", "/sessions", Some(json!({"mode": "full-access"})))
+        .await;
+    assert_eq!(status, 403);
+    // Accept edits lets changes run unasked: the same rule.
+    let (status, body) = page
+        .remote("PUT", &settings, Some(json!({"mode": "accept-edits"})))
+        .await;
+    assert_eq!(status, 403, "{body}");
+    let (status, _) = page
+        .remote("POST", "/sessions", Some(json!({"mode": "accept-edits"})))
         .await;
     assert_eq!(status, 403);
     // Other modes are fine, and recorded with the device.
@@ -155,6 +202,10 @@ async fn remote_callers_get_the_remote_policy() {
         )]
     );
     write_config(dir.path(), "[remote]\nallow_full_access = true\n");
+    let (status, body) = page
+        .remote("PUT", &settings, Some(json!({"mode": "accept-edits"})))
+        .await;
+    assert_eq!(status, 200, "allowed with allow_full_access: {body}");
     let (status, body) = page
         .remote("PUT", &settings, Some(json!({"mode": "full-access"})))
         .await;
@@ -666,4 +717,38 @@ async fn accept_edits_asks_about_a_write_outside_the_folder() {
     .await;
     events.until("the end", turn_ended).await;
     assert!(!dir.path().join("outside.txt").exists());
+}
+
+#[tokio::test]
+async fn a_host_that_always_asks_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = common::start_with(dir.path(), vec![], 0, |options| {
+        options.sandbox = Some(hame_app::SandboxMode::WorkspaceWrite);
+        options.ask_before_changes = true;
+    })
+    .await;
+    let (_, info) = page.get("/info").await;
+    assert_eq!(info["enforced"], "ask");
+    // A remote device's new session is recorded as Ask, which it gets.
+    let (status, created) = page.remote("POST", "/sessions", Some(json!({}))).await;
+    assert_eq!(status, 200, "{created}");
+    let session = created["id"].as_str().unwrap();
+    let (_, detail) = page.get(&format!("/sessions/{session}")).await;
+    assert_eq!(detail["mode"], "ask");
+    assert_eq!(detail["enforced"], "ask");
+    // Full access chosen on this computer still asks there, without the
+    // sandbox, and says so.
+    let (status, first) = page
+        .call("POST", "/sessions", Some(json!({"mode": "full-access"})))
+        .await;
+    assert_eq!(status, 428, "{first}");
+    let local = page
+        .session(json!({"mode": "full-access", "confirm": first["confirm"]}))
+        .await;
+    let (_, detail) = page.get(&format!("/sessions/{local}")).await;
+    assert_eq!(detail["enforced"], "ask-without-sandbox");
+    // A server that does not enforce asking reports nothing.
+    let other = tempfile::tempdir().unwrap();
+    let plain = start(other.path(), vec![], 0).await;
+    assert_eq!(plain.get("/info").await.1["enforced"], Value::Null);
 }

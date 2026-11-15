@@ -105,6 +105,9 @@ pub(crate) async fn info(State(app): State<Arc<App>>) -> Result<Json<Value>, Fai
         "models": models(&app),
         "limits": {"upload_bytes": MAX_UPLOAD_BYTES},
         "warnings": warnings,
+        // This host asks before every change whatever the mode (hame
+        // connect); the interface says so instead of the mode alone.
+        "enforced": app.options.ask_before_changes.then_some("ask"),
     })))
 }
 
@@ -137,11 +140,15 @@ fn models(app: &App) -> Value {
     json!({"fixed": false, "current": current, "providers": providers})
 }
 
-pub(crate) async fn list(State(app): State<Arc<App>>) -> Result<Json<Value>, Failure> {
+pub(crate) async fn list(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+) -> Result<Json<Value>, Failure> {
     let headers = app.store().list().map_err(|e| failed(e.to_string()))?;
     let meta = app.meta.all();
     let mut rows: Vec<Value> = headers
         .into_iter()
+        .filter(|header| app.remote_may_see(&caller, std::path::Path::new(&header.cwd)))
         .map(|header| {
             let id = header.id.to_string();
             let seen = app.overview_of(&header.id);
@@ -176,13 +183,18 @@ pub(crate) async fn create(
     };
     app.check_folder(&caller, &cwd)?;
     check_model(&body.provider, &body.model)?;
-    let mode = body
+    let mut mode = body
         .mode
         .as_deref()
         .map(parse_mode)
         .transpose()?
         .unwrap_or_default();
     app.check_mode(&caller, mode)?;
+    // A host that asks before every change records a remote device's new
+    // session as Ask, which is what it gets.
+    if app.options.ask_before_changes && caller.is_remote() && mode == Mode::Default {
+        mode = Mode::Ask;
+    }
     // A confirmation counts only for this folder, this mode and this caller.
     let nonce = if mode == Mode::FullAccess {
         let scope = format!("new:{}:{}:{}", cwd.display(), mode.name(), caller.by().0);
@@ -215,8 +227,12 @@ pub(crate) async fn create(
 pub(crate) async fn detail(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
 ) -> Result<Json<Value>, Failure> {
     let entry = app.view(&id)?;
+    if !app.remote_may_see(&caller, &entry.cwd) {
+        return Err(not_found("no such session"));
+    }
     let session = session_id(&id)?;
     let records = app
         .store()
@@ -270,12 +286,16 @@ mod double_option {
 pub(crate) async fn rename(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    caller: Caller,
     body: Bytes,
 ) -> Result<Json<Value>, Failure> {
     let body: RenameBody = parse_body(&body)?;
     let session = session_id(&id)?;
     let cwd =
         hame_app::session_cwd(&app.store(), &session).map_err(|_| not_found("no such session"))?;
+    if !app.remote_may_see(&caller, &cwd) {
+        return Err(not_found("no such session"));
+    }
     let title = match body.title {
         Some(Some(title)) => {
             let title = title.trim().to_string();
@@ -482,9 +502,13 @@ pub(crate) async fn events(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
     Query(query): Query<EventsQuery>,
+    caller: Caller,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, Failure> {
     let entry = app.view(&id)?;
+    if !app.remote_may_see(&caller, &entry.cwd) {
+        return Err(not_found("no such session"));
+    }
     // What the page already has: `after` when it asks, the id of the last
     // event it saw when the browser reconnects by itself.
     let resumed = headers
@@ -924,6 +948,7 @@ pub(crate) async fn artifact(
     State(app): State<Arc<App>>,
     Path(sha256): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    caller: Caller,
 ) -> Result<Response, Failure> {
     let well_formed = sha256.len() == 64
         && sha256
@@ -938,6 +963,10 @@ pub(crate) async fn artifact(
     let session = session_id(session)?;
     let store = app.store();
     let missing = || not_found("no such artifact in this session");
+    let cwd = hame_app::session_cwd(&store, &session).map_err(|_| missing())?;
+    if !app.remote_may_see(&caller, &cwd) {
+        return Err(missing());
+    }
     let records = store.read(&session).map_err(|_| missing())?;
     let artifact = hame_session::session_artifacts(&records)
         .into_iter()

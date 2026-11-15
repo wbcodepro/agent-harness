@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Bot, Folder, KeyRound, Menu, PanelRight, Shield, X } from "lucide-react";
-import type { ModeInfo, SessionStatus, Usage } from "../model/types";
+import type { Enforced, ModeInfo, SessionStatus, Usage } from "../model/types";
+
+/** The mode label when the host enforces asking. */
+export function enforcedLabel(enforced: Enforced): string {
+  return enforced === "ask-without-sandbox" ? "Asks first · no sandbox" : "Asks first";
+}
+
+export function enforcedDescription(enforced: Enforced): string {
+  return enforced === "ask-without-sandbox"
+    ? "This host asks before every change, whatever the mode; this session runs without the sandbox."
+    : "This host asks before every change, whatever the mode.";
+}
 import { folderName, money, tokens } from "../state/util";
 import styles from "./Header.module.css";
 
@@ -153,6 +164,8 @@ export interface HeaderProps {
   canRename: boolean;
   cwd: string | null;
   mode: ModeInfo | undefined;
+  /** What the host enforces whatever the mode (hame connect asks before every change). */
+  enforced?: Enforced | null;
   status: SessionStatus | "new";
   subagents: number;
   grants: string[];
@@ -226,11 +239,18 @@ export function Header(props: HeaderProps) {
               {folderName(props.cwd)}
             </span>
           )}
-          {props.mode && (
-            <span className={styles.metaItem} title={props.mode.description}>
+          {props.enforced ? (
+            <span className={styles.metaItem} title={enforcedDescription(props.enforced)}>
               <Shield size={13} aria-hidden />
-              {props.mode.label}
+              {enforcedLabel(props.enforced)}
             </span>
+          ) : (
+            props.mode && (
+              <span className={styles.metaItem} title={props.mode.description}>
+                <Shield size={13} aria-hidden />
+                {props.mode.label}
+              </span>
+            )
           )}
           {props.connection === "reconnecting" && <span className={styles.metaItem}>reconnecting…</span>}
         </div>

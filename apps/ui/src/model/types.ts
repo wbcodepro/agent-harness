@@ -136,7 +136,12 @@ export interface SessionSummary {
   turns: number;
   usage: Usage;
   mode: ModeName;
+  /** Set when the host enforces asking whatever the mode (hame connect). */
+  enforced?: Enforced | null;
 }
+
+/** "ask": every change asks; "ask-without-sandbox": no sandbox, but every change asks. */
+export type Enforced = "ask" | "ask-without-sandbox";
 
 export interface SessionDetail extends SessionSummary {
   busy: boolean;
@@ -167,4 +172,6 @@ export interface ServerInfo {
   };
   limits: { upload_bytes: number };
   warnings?: string[];
+  /** The host asks before every change whatever the mode (hame connect). */
+  enforced?: "ask" | null;
 }

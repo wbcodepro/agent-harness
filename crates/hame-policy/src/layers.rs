@@ -79,6 +79,32 @@ pub struct ApprovalLayer {
     /// Applied to calls that are not read-only when no rule matches.
     pub default: RuleAction,
     pub prompter: Arc<dyn Prompter>,
+    /// When it answers true (a turn driven from another device), browser
+    /// and desktop actions that act (click, type, navigate, …) are asked
+    /// about under an asking default instead of being left to their
+    /// grants; looking (observe, screenshot, …) still runs.
+    pub ask_control: Option<AskControl>,
+}
+
+/// Whether control actions must be asked about right now.
+pub type AskControl = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Browser and desktop actions that only look.
+const LOOKING: &[&str] = &[
+    "observe",
+    "extract",
+    "screenshot",
+    "tabs",
+    "wait",
+    "apps",
+    "windows",
+];
+
+/// Whether a control request only looks at an application.
+fn only_looks(request: &ToolRequest) -> bool {
+    request.input["action"]
+        .as_str()
+        .is_some_and(|action| LOOKING.contains(&action))
 }
 
 /// Deny outranks ask, which outranks allow.
@@ -124,7 +150,13 @@ impl ApprovalLayer {
         // tool. A rule can still ask about or deny it.
         let fallback = match request.effect {
             Effect::ReadOnly => RuleAction::Allow,
-            Effect::Control if self.default == RuleAction::Ask => RuleAction::Allow,
+            Effect::Control
+                if self.default == RuleAction::Ask
+                    && (only_looks(request)
+                        || !self.ask_control.as_ref().is_some_and(|asks| asks())) =>
+            {
+                RuleAction::Allow
+            }
             _ => self.default,
         };
         let whole = self.rule_for(request, subject);
@@ -235,6 +267,7 @@ mod tests {
     #[test]
     fn application_tools_follow_a_deny_default_but_are_not_asked_about() {
         let layer = |default| ApprovalLayer {
+            ask_control: None,
             rules: vec![],
             default,
             prompter: Arc::new(Scripted {
@@ -251,6 +284,63 @@ mod tests {
         assert_eq!(layer(RuleAction::Ask).decide(&click), RuleAction::Allow);
         assert_eq!(layer(RuleAction::Deny).decide(&click), RuleAction::Deny);
         assert_eq!(layer(RuleAction::Allow).decide(&click), RuleAction::Allow);
+    }
+
+    #[test]
+    fn remote_turns_ask_before_application_actions_that_act() {
+        let remote = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = std::sync::Arc::clone(&remote);
+        let layer = ApprovalLayer {
+            ask_control: Some(Arc::new(move || {
+                flag.load(std::sync::atomic::Ordering::SeqCst)
+            })),
+            rules: vec![],
+            default: RuleAction::Ask,
+            prompter: Arc::new(Scripted {
+                answer: None,
+                asked: Mutex::new(vec![]),
+            }),
+        };
+        let request = |tool: &str, action: &str| ToolRequest {
+            call_id: "c".into(),
+            name: tool.into(),
+            input: json!({"action": action}),
+            effect: Effect::Control,
+        };
+        for (tool, action) in [
+            ("browser", "click"),
+            ("browser", "fill"),
+            ("browser", "navigate"),
+            ("browser", "upload"),
+            ("browser", "download"),
+            ("desktop", "type"),
+            ("desktop", "key"),
+            ("desktop", "click_at"),
+            ("desktop", "batch"),
+        ] {
+            assert_eq!(
+                layer.decide(&request(tool, action)),
+                RuleAction::Ask,
+                "{tool} {action}"
+            );
+        }
+        for (tool, action) in [
+            ("browser", "observe"),
+            ("browser", "screenshot"),
+            ("desktop", "windows"),
+        ] {
+            assert_eq!(
+                layer.decide(&request(tool, action)),
+                RuleAction::Allow,
+                "{tool} {action}"
+            );
+        }
+        // A local turn leaves application actions to their grants.
+        remote.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            layer.decide(&request("browser", "click")),
+            RuleAction::Allow
+        );
     }
 
     #[test]
@@ -311,6 +401,7 @@ mod tests {
         });
         let chain = Chain::new();
         chain.push(ApprovalLayer {
+            ask_control: None,
             rules: vec![
                 rule("bash", Some("git push*"), RuleAction::Ask),
                 rule("bash", Some("rm *"), RuleAction::Deny),
@@ -398,6 +489,7 @@ mod tests {
     async fn an_allow_rule_covers_a_line_only_if_it_covers_every_command() {
         let chain = Chain::new();
         chain.push(ApprovalLayer {
+            ask_control: None,
             rules: vec![
                 Rule {
                     tool: "bash".into(),
@@ -442,6 +534,7 @@ mod tests {
     async fn a_call_a_person_approved_says_so_in_its_result() {
         let chain = Chain::new();
         chain.push(ApprovalLayer {
+            ask_control: None,
             rules: Vec::new(),
             default: RuleAction::Ask,
             prompter: Arc::new(Scripted {
@@ -471,6 +564,7 @@ mod tests {
     async fn asking_with_nobody_there_denies_and_reads_never_ask() {
         let chain = Chain::new();
         chain.push(ApprovalLayer {
+            ask_control: None,
             rules: Vec::new(),
             default: RuleAction::Ask,
             prompter: Arc::new(Scripted {

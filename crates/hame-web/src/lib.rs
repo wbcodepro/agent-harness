@@ -13,9 +13,15 @@
 //! config.toml) on every route that acts on a session: its folder must be
 //! in `roots` (by default only folders that already have a session, and the
 //! folder `hame web` started in), and unless `allow_full_access = true`
-//! they cannot choose "Full access", give session-wide grants, or drive a
-//! session that runs without the sandbox and without asking; grants given
-//! on this computer do not answer for turns they drive.
+//! they cannot choose "Full access" or "Accept edits", give session-wide
+//! grants, or drive a session that runs without the sandbox and without
+//! asking; grants given on this computer do not answer for turns they
+//! drive, and browser and desktop actions that act are asked about in
+//! them. With `roots` set, a remote device does not see (list, read,
+//! follow, rename) sessions outside them: they answer 404. A server built
+//! with `Options::ask_before_changes` (`hame connect`) reports it: `info`
+//! and every session carry `enforced`, and a remote device's new session is
+//! recorded as Ask.
 //!
 //! A session that is only being looked at is read from its log without its
 //! lock, so a terminal can resume it; its agent is built, and the lock
@@ -348,6 +354,10 @@ impl App {
     fn options_for(&self, meta: &SessionMeta, entry: &Entry) -> Options {
         let mut options = self.options.clone();
         options.prompter = Some(Arc::new(PagePrompter(Arc::clone(&entry.channel))));
+        // A turn driven from another device asks before browser and desktop
+        // actions that act, as before any other change.
+        let channel = Arc::clone(&entry.channel);
+        options.ask_control = Some(Arc::new(move || channel.remote_run.load(Ordering::SeqCst)));
         options.steering = Some(entry.steering.clone());
         if meta.provider.is_some() {
             options.provider = meta.provider.clone();
@@ -506,13 +516,39 @@ impl App {
 
     /// Remote callers may not choose "Full access" unless allowed.
     pub(crate) fn check_mode(&self, caller: &Caller, mode: Mode) -> Result<(), Failure> {
-        if caller.is_remote() && mode == Mode::FullAccess && !self.remote_full_access() {
+        // Accept edits lets file changes run unasked: for a remote device
+        // it counts as Full access does.
+        if caller.is_remote()
+            && matches!(mode, Mode::FullAccess | Mode::AcceptEdits)
+            && !self.remote_full_access()
+        {
             return Err(forbidden(
-                "a remote device cannot choose Full access; set [remote] allow_full_access = \
-                 true in config.toml on this computer to allow it",
+                "a remote device cannot choose Full access or Accept edits; set [remote] \
+                 allow_full_access = true in config.toml on this computer to allow it",
             ));
         }
         Ok(())
+    }
+
+    /// Whether a remote caller may see (list, read, follow, rename) a
+    /// session in `folder`: with `[remote] roots` set, only sessions inside
+    /// them; without roots, every session. Local callers see everything.
+    /// Routes answer 404 for a session it may not see, so its existence
+    /// does not leak.
+    pub(crate) fn remote_may_see(&self, caller: &Caller, folder: &FsPath) -> bool {
+        if !caller.is_remote() {
+            return true;
+        }
+        let Some(config) = self.config() else {
+            return false;
+        };
+        if config.remote.roots.is_empty() {
+            return true;
+        }
+        let folder = hame_kernel::real_path(folder).unwrap_or_else(|_| folder.to_path_buf());
+        config.remote.roots.iter().any(|root| {
+            hame_kernel::real_path(&expand_home(root)).is_ok_and(|root| folder.starts_with(root))
+        })
     }
 
     /// Whether turns in this session would run with no sandbox and no
@@ -674,6 +710,27 @@ impl App {
             "turns": seen.turns,
             "usage": seen.usage,
             "mode": meta.mode,
+            "enforced": self.enforced(meta),
+        })
+    }
+
+    /// What this server enforces on top of the session's mode: `"ask"`
+    /// when it was started to ask before every change (`hame connect`:
+    /// `Options::ask_before_changes`), `"ask-without-sandbox"` when such a
+    /// session also runs without the sandbox (Full access there still
+    /// asks); `null` when the mode is what applies.
+    pub(crate) fn enforced(&self, meta: &SessionMeta) -> Option<&'static str> {
+        if !self.options.ask_before_changes {
+            return None;
+        }
+        let configured = self.config().map(|config| config.sandbox.mode);
+        let unsandboxed = meta.mode == Mode::FullAccess
+            || (meta.mode == Mode::Default
+                && self.options.sandbox.or(configured) == Some(SandboxMode::DangerFullAccess));
+        Some(if unsandboxed {
+            "ask-without-sandbox"
+        } else {
+            "ask"
         })
     }
 

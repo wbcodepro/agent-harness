@@ -79,11 +79,13 @@ impl Default for WebConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct RemoteConfig {
     /// Let a remote device choose the "Full access" mode (no sandbox, no
-    /// questions) or allow a tool for the rest of a session. Off by default.
+    /// questions) or "Accept edits", or allow a tool for the rest of a
+    /// session. Off by default.
     pub allow_full_access: bool,
     /// Folders (and everything below them) a remote device may start new
-    /// sessions in. Empty (the default): only folders that already have a
-    /// session, and the folder `hame web` started in.
+    /// sessions in; when set, also the only sessions it can see. Empty (the
+    /// default): only folders that already have a session, and the folder
+    /// `hame web` started in, and it sees every session.
     pub roots: Vec<String>,
 }
 
