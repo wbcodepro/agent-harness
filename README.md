@@ -159,6 +159,8 @@ escalate_provider = "anthropic"      # optional: the stronger model is at anothe
 escalate_effort = "high"             # without escalate_to: same model, more reasoning when the turn is stuck,
                                      # so everyday effort can be set low
 escalate_after = 2              # after this many failing checks or repeated calls in a turn
+# vision = true                 # the model accepts images (default: known Claude/OpenAI models do, others are text-only)
+# pdf = true                    # the model accepts PDF documents
 
 [sandbox]
 mode = "workspace-write"        # read-only | workspace-write | danger-full-access

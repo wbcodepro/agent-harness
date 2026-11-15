@@ -1131,19 +1131,33 @@ fn llm(config: &Config, secrets: &Secrets, options: &Options) -> Result<Models, 
         }
         None => base_url != provider.base_url(),
     };
+    // What the configuration says the model accepts wins over what hame
+    // knows about it.
+    let tune = |known: hame_llm::ModelProfile| hame_llm::ModelProfile {
+        vision: config.model.vision.unwrap_or(known.vision),
+        pdf: config.model.pdf.unwrap_or(known.pdf),
+        ..known
+    };
     let build = |model: String, effort: Option<String>| -> Arc<dyn Llm> {
         match provider {
-            Provider::Anthropic => Arc::new(
-                hame_llm::Anthropic::new(&base_url, api_key.clone(), model)
-                    .with_effort(Some(effort.unwrap_or_else(|| "high".into()))),
-            ),
-            Provider::Openai if !chat_only => Arc::new(
-                hame_llm::Responses::new(&base_url, api_key.clone(), model).with_effort(effort),
-            ),
-            Provider::Deepseek | Provider::Openai => Arc::new(
-                ChatCompletions::new(&base_url, api_key.clone(), model)
-                    .with_temperature(config.model.temperature),
-            ),
+            Provider::Anthropic => {
+                let llm = hame_llm::Anthropic::new(&base_url, api_key.clone(), model)
+                    .with_effort(Some(effort.unwrap_or_else(|| "high".into())));
+                let profile = tune(llm.profile());
+                Arc::new(llm.with_profile(profile))
+            }
+            Provider::Openai if !chat_only => {
+                let llm =
+                    hame_llm::Responses::new(&base_url, api_key.clone(), model).with_effort(effort);
+                let profile = tune(llm.profile());
+                Arc::new(llm.with_profile(profile))
+            }
+            Provider::Deepseek | Provider::Openai => {
+                let llm = ChatCompletions::new(&base_url, api_key.clone(), model)
+                    .with_temperature(config.model.temperature);
+                let profile = tune(llm.profile());
+                Arc::new(llm.with_profile(profile))
+            }
         }
     };
     let effort = config.model.effort.clone();

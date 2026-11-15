@@ -165,6 +165,12 @@ pub struct ModelConfig {
     pub escalate_effort: Option<String>,
     /// How many failed checks or repeated calls in one turn it takes.
     pub escalate_after: usize,
+    /// Whether the model accepts images. Empty uses what hame knows about
+    /// the model (Claude and recent OpenAI models do; unknown models are
+    /// treated as text-only, and images sent to them become text notes).
+    pub vision: Option<bool>,
+    /// Whether the model accepts PDF documents. Empty: as known.
+    pub pdf: Option<bool>,
 }
 
 /// How many tools the model is offered. Small models choose better among
@@ -217,6 +223,8 @@ impl Default for ModelConfig {
             escalate_provider: None,
             escalate_effort: None,
             escalate_after: 2,
+            vision: None,
+            pdf: None,
         }
     }
 }
