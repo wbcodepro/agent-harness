@@ -183,9 +183,9 @@ capabilities = ["observe", "interact"]
 [[computer.grant]]              # TextEdit: read, press, type, save files through its save panel
 channel = "desktop"
 app = "com.apple.TextEdit"
-capabilities = ["observe", "interact", "global_input", "file_write"]
+capabilities = ["observe", "interact", "global_input", "commit", "file_write"]
 
-[[computer.grant]]              # TextEdit screenshots and clicks on screenshot pixels
+[[computer.grant]]              # TextEdit screenshots and clicks on screenshot pixels (not on Save, Delete, ...)
 channel = "visual"
 app = "com.apple.TextEdit"
 capabilities = ["screen", "global_input"]
@@ -197,10 +197,10 @@ A grant has a `channel` (`browser`, `desktop`, or `visual` for screenshots and p
 |---|---|
 | `observe` | read pages, windows and accessibility trees; wait; extract |
 | `interact` | click, fill, select, press, set values, menus that only open something |
-| `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model) |
-| `file_write` | downloads into the workspace (see below); confirming a save panel |
-| `clipboard` | read and set the clipboard (desktop; the previous contents are restored) |
-| `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease |
+| `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model), by whatever route: on the desktop also Return or Space where it presses a button, cmd+s, cmd+w, cmd+q, cmd+d, cmd+delete, a newline typed anywhere but a document's text area, and a pixel click on such a control or on anything hame cannot identify |
+| `file_write` | downloads into the workspace (see below); confirming a save panel (its Save button, Return or a typed newline in it, a click on Save) and cmd+s |
+| `clipboard` | read and set the clipboard (desktop; the previous contents are restored), and cmd+c, cmd+x, cmd+v |
+| `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease. Alone it covers typing and keys that do not commit; see `commit` |
 | `screen` | screenshots (stored as artifacts) |
 
 Security model:
@@ -211,7 +211,7 @@ Security model:
 - Downloads are saved only inside the workspace, and never through a symbolic link: a destination that is a link (wherever it points), or a directory path that leads outside through one, is refused. An existing file is replaced only when the call passes `overwrite: true`, and then only a regular file; the download is written to a new temporary file and renamed into place, so it never writes into an existing file, a link or another hard link of it. When the path is a directory, the page's suggested name is reduced to a plain file name (no separators, `..`, leading dots, control characters or Windows-reserved names; at most 120 bytes). An upload reads only a regular file inside the workspace, not through a link and not one with other hard links, and the browser is given a private copy.
 - Every acting operation is journalled (`not_started`, `dispatched`, then `completed`, `failed` or `outcome_unknown`) before and after it is sent. A commit carries an idempotency key; one that may already have taken effect is not repeated until the page or window has been observed again and the agent names the earlier operation (`reconciled`). After a crash, dispatched actions become `outcome_unknown` and the agent is told to check the state; hame never replays them.
 - Refs (`e12`, `o3:e7`) belong to one observation. A ref whose page navigated, whose element changed or was removed, or whose window closed is refused (`stale_ref`, `stale_window`), and two matching targets are refused as `ambiguous`; the tools never re-target a "similar" element. Physical input stops when focus moves (`interference`) or a dialog appears (`unexpected_dialog`) and reports exactly what was typed.
-- Commit detection is a heuristic over control names and form methods: a button that posts through JavaScript may count as `interact`. Do not rely on withholding `commit` as the only safeguard on a site where a click can do damage.
+- Commit detection is a heuristic over control names and form methods: a button that posts through JavaScript may count as `interact`. Do not rely on withholding `commit` as the only safeguard on a site where a click can do damage. On the desktop, physical input is classified from where keyboard focus is (or what is under a clicked pixel), read from the application right before the input is sent; the helper refuses the input if that changed in between, and when it cannot be read the stricter set is required. Typing ordinary text into a field, and Return in a document's text area, need only `global_input`.
 
 Browser profiles are persistent directories (`~/.hame/browser-profiles/<name>`), so a profile you sign in to stays signed in; treat it like a browser profile of your own. Downloads go into the workspace, under the rules above. The desktop helper is a Swift program built on first use into `~/.hame/helpers/` (about 4 seconds). Details per tool: `crates/hame-browser`, [crates/hame-desktop/README.md](crates/hame-desktop/README.md).
 

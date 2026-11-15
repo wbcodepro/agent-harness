@@ -9,6 +9,14 @@ pub struct KeyCombo {
     pub modifiers: Vec<&'static str>,
     /// The canonical spelling, e.g. `cmd+shift+g`.
     pub label: String,
+    /// The canonical name of the non-modifier key, e.g. `g` or `return`.
+    pub key: String,
+}
+
+impl KeyCombo {
+    pub fn has(&self, modifier: &str) -> bool {
+        self.modifiers.contains(&modifier)
+    }
 }
 
 const MODIFIERS: &[(&str, &[&str])] = &[
@@ -73,6 +81,7 @@ const KEYS: &[(&str, u16)] = &[
     ("`", 50),
     ("delete", 51),
     ("escape", 53),
+    ("keypadenter", 76),
     ("f17", 64),
     ("f18", 79),
     ("f19", 80),
@@ -107,6 +116,8 @@ const KEYS: &[(&str, u16)] = &[
 
 const ALIASES: &[(&str, &str)] = &[
     ("enter", "return"),
+    ("kpenter", "keypadenter"),
+    ("numpadenter", "keypadenter"),
     ("ret", "return"),
     ("esc", "escape"),
     ("backspace", "delete"),
@@ -157,7 +168,7 @@ pub fn parse(combo: &str) -> Result<KeyCombo, String> {
         let Some((_, code)) = KEYS.iter().find(|(k, _)| *k == name) else {
             return Err(format!(
                 "Unknown key {part:?} in {combo:?}. Use letters, digits, punctuation, \
-                 return, tab, space, escape, delete, arrows, home/end, pageup/pagedown or f1-f20."
+                 return, keypadenter, tab, space, escape, delete, arrows, home/end, pageup/pagedown or f1-f20."
             ));
         };
         if key.is_some() {
@@ -178,6 +189,7 @@ pub fn parse(combo: &str) -> Result<KeyCombo, String> {
         keycode,
         label: label.join("+"),
         modifiers: mods,
+        key: name,
     })
 }
 
@@ -195,6 +207,9 @@ mod tests {
         assert_eq!(g.label, "cmd+shift+g");
         assert_eq!(parse("Return").unwrap().keycode, 36);
         assert_eq!(parse("enter").unwrap().keycode, 36);
+        assert_eq!(parse("enter").unwrap().key, "return");
+        assert_eq!(parse("kpenter").unwrap().keycode, 76);
+        assert!(parse("cmd+shift+s").unwrap().has("shift"));
         assert_eq!(parse("esc").unwrap().keycode, 53);
         assert_eq!(parse("alt+left").unwrap().modifiers, vec!["opt"]);
         assert_eq!(parse("cmd+plus").unwrap().keycode, 24);
