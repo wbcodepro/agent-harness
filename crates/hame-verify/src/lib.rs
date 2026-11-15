@@ -27,7 +27,10 @@ pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, t
 
 pub use budget::{BUDGET_PREFIX, BudgetGuard, tokens_used};
 pub use facts::{ProjectFacts, facts_note};
-pub use outcome::{OUTCOME_PREFIX, OutcomeGate, StateProbe, current_task, describe, verify};
+pub use outcome::{
+    ConfinedCommand, Confinement, OUTCOME_PREFIX, OutcomeGate, StateProbe, current_task, describe,
+    verify,
+};
 pub use redcheck::{CHECK_PREFIX, Evidence, RedCheck, evidence};
 
 pub const VERIFY_PREFIX: &str = "[hame verify]";

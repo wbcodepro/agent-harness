@@ -56,6 +56,11 @@ pub fn parse(text: &str) -> Result<TaskContract, String> {
     {
         return Err(format!("invalid task id {:?}", task.id));
     }
+    for (index, predicate) in task.acceptance.iter().enumerate() {
+        predicate
+            .validate()
+            .map_err(|e| format!("acceptance condition {}: {e}", index + 1))?;
+    }
     Ok(task)
 }
 
@@ -217,5 +222,16 @@ capabilities = ["observe", "interact"]
         assert!(parse(&no_checks).unwrap_err().contains("acceptance"));
         assert!(parse(&TASK.replace("id = \"x01\"", "id = \"../x\"")).is_err());
         assert!(parse(&format!("version = 99\n{TASK}")).is_err());
+        // A misspelt condition, grant or budget field is an error, not a
+        // weaker condition or a wider grant.
+        assert!(parse(&TASK.replace("text_contains", "text_contians")).is_err());
+        assert!(parse(&TASK.replace("origin =", "orgin =")).is_err());
+        assert!(parse(&TASK.replace("max_steps", "max_step")).is_err());
+        assert!(
+            parse(&TASK.replace("deadline_ms = 600000", "deadline_ms = 600000\ncolour = 1"))
+                .is_err()
+        );
+        let empty = parse(&TASK.replace("text = \"Tổng: 42\"", "text = \"\"")).unwrap_err();
+        assert!(empty.contains("acceptance condition 1"), "{empty}");
     }
 }

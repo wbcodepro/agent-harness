@@ -56,6 +56,6 @@ In scope, for example:
 
 Known limits are listed in the [README](README.md) under "Safety", "Browser and desktop control" and "Limitations": for instance, Windows confines writes only, Linux's Landlock cannot hide files by name, the computer tools are not sandboxed, and a page's subresource requests are not filtered. A report that a documented limit exists is not a vulnerability, but a way around a limit we do enforce is.
 
-The `command` acceptance condition in task files and workflows runs on your machine without the sandbox, like any command you run yourself; only use task files and workflows you wrote or reviewed.
+The `command` acceptance condition in task files and workflows runs under the same sandbox as the agent's shell tools, with the network off and without credentials in its environment (unconfined only with `--sandbox danger-full-access`). Workflow parameters spliced into it are shell-quoted. hame's data directory (its credentials, settings, sessions, workflow trust list, desktop helper and browser profiles) is hidden from sandboxed tools, including when `HAME_HOME` points elsewhere. Only use task files and workflows you wrote or reviewed.
 
 hame has not had an independent security audit. For untrusted code or untrusted sites, run it in a virtual machine or container.

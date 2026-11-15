@@ -125,6 +125,7 @@ impl Target {
 /// configuration. Grants come only from the user or configuration, never
 /// from observed content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Grant {
     pub channel: Channel,
     /// Glob-ish patterns (`*` matches anything) over the target's app,
@@ -180,6 +181,7 @@ impl Grant {
 /// The set of grants in force. An action is authorized when some grant
 /// covers its target and capability.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Authorization {
     pub grants: Vec<Grant>,
 }
@@ -205,8 +207,11 @@ impl Authorization {
 
 /// A condition that decides whether the task is done, checked against the
 /// authoritative state rather than the acting model's claim.
+///
+/// Unknown fields are refused: a misspelt condition must not be read as a
+/// weaker one that passes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Predicate {
     FileExists {
         path: String,
@@ -262,6 +267,84 @@ pub enum Predicate {
     },
 }
 
+impl Predicate {
+    /// Refuses a condition that would pass without checking anything: an
+    /// empty path, text or command, or a live-state condition with nothing
+    /// to compare.
+    pub fn validate(&self) -> Result<(), String> {
+        let nonempty = |field: &str, value: &str| {
+            if value.trim().is_empty() {
+                Err(format!("`{field}` is empty"))
+            } else {
+                Ok(())
+            }
+        };
+        let optional = |field: &str, value: &Option<String>| match value {
+            Some(value) => nonempty(field, value),
+            None => Ok(()),
+        };
+        match self {
+            Predicate::FileExists { path } | Predicate::FileAbsent { path } => {
+                nonempty("path", path)
+            }
+            Predicate::FileContains { path, text } => {
+                nonempty("path", path)?;
+                // Whitespace can be what is asked for; only "" matches anything.
+                if text.is_empty() {
+                    return Err("`text` is empty".into());
+                }
+                Ok(())
+            }
+            Predicate::FileSha256 { path, sha256 } => {
+                nonempty("path", path)?;
+                if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err("`sha256` is not 64 hex digits".into());
+                }
+                Ok(())
+            }
+            Predicate::JsonValue { path, .. } => nonempty("path", path),
+            Predicate::CsvShape {
+                path,
+                rows,
+                columns,
+            } => {
+                nonempty("path", path)?;
+                if rows.is_none() && columns.is_empty() {
+                    return Err("give `rows`, `columns` or both".into());
+                }
+                Ok(())
+            }
+            Predicate::Command { command, .. } => nonempty("command", command),
+            Predicate::BrowserState {
+                url_contains,
+                text_contains,
+                profile,
+            } => {
+                optional("url_contains", url_contains)?;
+                optional("text_contains", text_contains)?;
+                optional("profile", profile)?;
+                if url_contains.is_none() && text_contains.is_none() {
+                    return Err("give `url_contains`, `text_contains` or both".into());
+                }
+                Ok(())
+            }
+            Predicate::DesktopState {
+                app,
+                window_title_contains,
+                value_contains,
+            } => {
+                nonempty("app", app)?;
+                optional("window_title_contains", window_title_contains)?;
+                optional("value_contains", value_contains)?;
+                if window_title_contains.is_none() && value_contains.is_none() {
+                    return Err("give `window_title_contains`, `value_contains` or both".into());
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// The result of checking one acceptance predicate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PredicateResult {
@@ -283,6 +366,7 @@ pub struct VerificationReport {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Budget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u64>,
@@ -297,6 +381,7 @@ pub struct Budget {
 
 /// What the user asked for, and how hame will know it is done.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskContract {
     #[serde(default = "contract_version")]
     pub version: u32,

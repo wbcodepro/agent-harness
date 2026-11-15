@@ -6,6 +6,7 @@
 //! asks one. A predicate that cannot be checked fails with the reason as
 //! evidence: "could not check" is never reported as success.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,6 +38,22 @@ pub struct DesktopSnapshot {
     /// Values of text elements in the application's windows.
     pub values: Vec<String>,
 }
+
+/// A command line rewritten to run confined.
+#[derive(Debug, Clone)]
+pub struct ConfinedCommand {
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+    /// The whole environment of the command; `None` inherits hame's.
+    pub env: Option<Vec<(OsString, OsString)>>,
+}
+
+/// Rewrites a command line (`program`, `args`) so that it runs confined;
+/// `Err` refuses to run it. `command` predicates run through it: the agent
+/// can change the files such a command executes (a test, a Makefile), so the
+/// check must not run them with more access than the agent's own tools have.
+pub type Confinement =
+    Arc<dyn Fn(&Path, &[OsString]) -> Result<ConfinedCommand, String> + Send + Sync>;
 
 /// Reads live application state for predicates that need it.
 pub trait StateProbe: Send + Sync {
@@ -92,7 +109,11 @@ async fn check_one(
     predicate: &Predicate,
     cwd: &Path,
     probe: Option<&dyn StateProbe>,
+    confine: Option<&Confinement>,
 ) -> (bool, String) {
+    if let Err(e) = predicate.validate() {
+        return (false, format!("invalid condition: {e}"));
+    }
     match predicate {
         Predicate::FileExists { path } => {
             let full = resolve(cwd, path);
@@ -175,15 +196,27 @@ async fn check_one(
             Err(e) => (false, format!("cannot read {path}: {e}")),
         },
         Predicate::Command { command, exit } => {
-            let mut cmd = if cfg!(windows) {
-                let mut cmd = tokio::process::Command::new("cmd");
-                cmd.arg("/C").arg(command);
-                cmd
+            let (program, args): (PathBuf, Vec<OsString>) = if cfg!(windows) {
+                ("cmd".into(), vec!["/C".into(), command.into()])
             } else {
-                let mut cmd = tokio::process::Command::new("sh");
-                cmd.arg("-c").arg(command);
-                cmd
+                ("/bin/sh".into(), vec!["-c".into(), command.into()])
             };
+            let confined = match confine {
+                Some(confine) => match confine(&program, &args) {
+                    Ok(confined) => confined,
+                    Err(e) => return (false, format!("cannot run confined: {e}")),
+                },
+                None => ConfinedCommand {
+                    program,
+                    args,
+                    env: None,
+                },
+            };
+            let mut cmd = tokio::process::Command::new(confined.program);
+            cmd.args(confined.args);
+            if let Some(env) = confined.env {
+                cmd.env_clear().envs(env);
+            }
             cmd.current_dir(cwd).kill_on_drop(true);
             match tokio::time::timeout(COMMAND_TIMEOUT, cmd.output()).await {
                 Ok(Ok(output)) => {
@@ -217,11 +250,21 @@ async fn check_one(
                 Ok(snapshot) => {
                     let mut ok = true;
                     let mut evidence = format!("url {}", snapshot.url);
-                    if let (Some(want), Some(have)) = (profile, &snapshot.profile)
-                        && want != have
-                    {
-                        ok = false;
-                        evidence.push_str(&format!("; profile {have}, expected {want}"));
+                    if let Some(want) = profile {
+                        match &snapshot.profile {
+                            Some(have) if have == want => {}
+                            Some(have) => {
+                                ok = false;
+                                evidence.push_str(&format!("; profile {have}, expected {want}"));
+                            }
+                            // A required profile that cannot be confirmed
+                            // is not confirmed.
+                            None => {
+                                ok = false;
+                                evidence
+                                    .push_str(&format!("; no profile reported, expected {want}"));
+                            }
+                        }
                     }
                     if let Some(part) = url_contains {
                         ok &= snapshot.url.contains(part.as_str());
@@ -272,16 +315,19 @@ async fn check_one(
 }
 
 /// Checks every acceptance predicate of `task`. With no predicates the
-/// report fails: a task with nothing to check cannot be verified.
+/// report fails: a task with nothing to check cannot be verified. An
+/// invalid predicate (see [`Predicate::validate`]) fails. `command`
+/// predicates run through `confine` when given, unconfined otherwise.
 pub async fn verify(
     task: &TaskContract,
     cwd: &Path,
     probe: Option<&dyn StateProbe>,
+    confine: Option<&Confinement>,
 ) -> VerificationReport {
     let started = Instant::now();
     let mut results = Vec::with_capacity(task.acceptance.len());
     for predicate in &task.acceptance {
-        let (passed, evidence) = check_one(predicate, cwd, probe).await;
+        let (passed, evidence) = check_one(predicate, cwd, probe, confine).await;
         results.push(PredicateResult {
             predicate: predicate.clone(),
             passed,
@@ -335,6 +381,8 @@ pub fn describe(report: &VerificationReport) -> String {
 pub struct OutcomeGate {
     pub cwd: PathBuf,
     pub probe: Option<Arc<dyn StateProbe>>,
+    /// Confines `command` predicates; see [`Confinement`].
+    pub confine: Option<Confinement>,
     pub max_rounds: usize,
 }
 
@@ -362,7 +410,13 @@ impl TurnHook for OutcomeGate {
             if rounds >= self.max_rounds {
                 return None;
             }
-            let report = verify(&task, &self.cwd, self.probe.as_deref()).await;
+            let report = verify(
+                &task,
+                &self.cwd,
+                self.probe.as_deref(),
+                self.confine.as_ref(),
+            )
+            .await;
             if report.passed {
                 return None;
             }
@@ -462,7 +516,7 @@ mod tests {
                 exit: 0,
             },
         ]);
-        let report = verify(&ok, dir.path(), None).await;
+        let report = verify(&ok, dir.path(), None, None).await;
         assert!(report.passed, "{}", describe(&report));
 
         let bad = task(vec![
@@ -475,12 +529,12 @@ mod tests {
                 exit: 0,
             },
         ]);
-        let report = verify(&bad, dir.path(), None).await;
+        let report = verify(&bad, dir.path(), None, None).await;
         assert!(!report.passed);
         assert!(report.results.iter().all(|r| !r.passed));
         assert!(report.results[1].evidence.starts_with("exit 3"));
         // Nothing to check is not success.
-        assert!(!verify(&task(vec![]), dir.path(), None).await.passed);
+        assert!(!verify(&task(vec![]), dir.path(), None, None).await.passed);
     }
 
     #[tokio::test]
@@ -498,28 +552,133 @@ mod tests {
                 value_contains: Some("Tiếng Việt".into()),
             },
         ]);
-        assert!(!verify(&t, dir.path(), None).await.passed);
-        let report = verify(&t, dir.path(), Some(&FakeProbe)).await;
+        assert!(!verify(&t, dir.path(), None, None).await.passed);
+        let report = verify(&t, dir.path(), Some(&FakeProbe), None).await;
         assert!(report.passed, "{}", describe(&report));
         let wrong_profile = task(vec![Predicate::BrowserState {
             url_contains: None,
-            text_contains: None,
+            text_contains: Some("Theme".into()),
             profile: Some("b".into()),
         }]);
         assert!(
-            !verify(&wrong_profile, dir.path(), Some(&FakeProbe))
+            !verify(&wrong_profile, dir.path(), Some(&FakeProbe), None)
                 .await
                 .passed
         );
         let not_running = task(vec![Predicate::DesktopState {
             app: "Pages".into(),
-            window_title_contains: None,
+            window_title_contains: Some("report".into()),
             value_contains: None,
         }]);
         assert!(
-            !verify(&not_running, dir.path(), Some(&FakeProbe))
+            !verify(&not_running, dir.path(), Some(&FakeProbe), None)
                 .await
                 .passed
         );
+    }
+
+    /// A probe whose browser reports no profile.
+    struct NoProfile;
+
+    impl StateProbe for NoProfile {
+        fn browser<'a>(
+            &'a self,
+            _profile: Option<&'a str>,
+        ) -> BoxFuture<'a, Result<BrowserSnapshot, String>> {
+            Box::pin(async move {
+                Ok(BrowserSnapshot {
+                    url: "http://127.0.0.1/prefs".into(),
+                    text: "Theme: dark".into(),
+                    profile: None,
+                })
+            })
+        }
+
+        fn desktop<'a>(&'a self, _app: &'a str) -> BoxFuture<'a, Result<DesktopSnapshot, String>> {
+            Box::pin(async move {
+                Ok(DesktopSnapshot {
+                    window_titles: vec!["anything".into()],
+                    values: vec!["anything".into()],
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn conditions_that_check_nothing_never_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing to compare: the probe answering is not the outcome.
+        for vacuous in [
+            Predicate::BrowserState {
+                url_contains: None,
+                text_contains: None,
+                profile: None,
+            },
+            Predicate::BrowserState {
+                url_contains: None,
+                text_contains: Some(String::new()),
+                profile: None,
+            },
+            Predicate::DesktopState {
+                app: "TextEdit".into(),
+                window_title_contains: None,
+                value_contains: None,
+            },
+            Predicate::FileContains {
+                path: "x".into(),
+                text: String::new(),
+            },
+            Predicate::Command {
+                command: " ".into(),
+                exit: 0,
+            },
+        ] {
+            assert!(vacuous.validate().is_err(), "{vacuous:?}");
+            let report = verify(&task(vec![vacuous]), dir.path(), Some(&NoProfile), None).await;
+            assert!(!report.passed);
+            assert!(report.results[0].evidence.starts_with("invalid condition"));
+        }
+        // A required profile the browser does not report is not confirmed.
+        let wants_profile = task(vec![Predicate::BrowserState {
+            url_contains: None,
+            text_contains: Some("Theme".into()),
+            profile: Some("work".into()),
+        }]);
+        let report = verify(&wants_profile, dir.path(), Some(&NoProfile), None).await;
+        assert!(!report.passed);
+        assert!(report.results[0].evidence.contains("no profile reported"));
+        // A misspelt field is refused rather than ignored.
+        let typo: Result<Predicate, _> = serde_json::from_value(json!({
+            "kind": "browser_state", "text_contians": "Payment received"
+        }));
+        assert!(typo.is_err());
+    }
+
+    #[tokio::test]
+    async fn command_checks_run_through_the_confinement() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let confine: Confinement = Arc::new(move |program: &Path, args: &[OsString]| {
+            log.lock()
+                .unwrap()
+                .push((program.to_path_buf(), args.to_vec()));
+            Ok(ConfinedCommand {
+                program: program.to_path_buf(),
+                args: args.to_vec(),
+                env: Some(vec![("PATH".into(), "/usr/bin:/bin".into())]),
+            })
+        });
+        let t = task(vec![Predicate::Command {
+            command: "test -z \"$SECRET_FOR_TEST\"".into(),
+            exit: 0,
+        }]);
+        let report = verify(&t, dir.path(), None, Some(&confine)).await;
+        assert!(report.passed, "{}", describe(&report));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let refuse: Confinement = Arc::new(|_: &Path, _: &[OsString]| Err("no sandbox".into()));
+        let report = verify(&t, dir.path(), None, Some(&refuse)).await;
+        assert!(!report.passed);
+        assert!(report.results[0].evidence.contains("no sandbox"));
     }
 }
