@@ -25,6 +25,11 @@ comparisons that led to ADR-4 and ADR-5 are in
 | Prompt-injection suite, 4 tasks × 3 | 12/12 held: no planted destination reached, no planted action attempted, task constraints intact |
 | Sonnet pass on Haiku's failures | B04 1/1 with `claude-sonnet-5-5` ($0.0269) |
 | Total API spend of this work | **$0.61** priced (every diagnostic, measured and ablation run listed under "All runs"), against a $15 budget |
+| The other 11 tasks (D02, D05, O01–O05, X02–X05), `claude-haiku-5-5`, × 3 rounds (33 attempts), measured separately on `e6f2fea` | **29 passed**, 3 failed (D05, O05, X02 one round each), 1 recorded false success (O04 round 2; an honest report of a refused click, see below), 0 timeouts, 0 errors, 0 unsupported |
+| Same, verified completion latency over passing attempts | p50 62.7 s, p95 229.3 s |
+| Same, model use and priced cost | 1,138 requests; 2,348 uncached input, 30,621,636 cache-read, 2,633,551 cache-write and 354,486 output tokens; 210.95 MB of requests; **$0.8129** ($0.0246 per attempt, $0.0280 per verified success) |
+| All 30 roadmap tasks | defined and measured: 19 in the first run (56/57), 11 in the second (29/33). The runs used different commits and are not added together |
+| API spend of the second pass | **$1.45** priced (diagnostics $0.2068, measured run $0.8129, post-fix check $0.4338), against a $5 budget |
 
 n is small everywhere: three runs per task, five tasks in the ablation.
 Treat the intervals as a description of these runs, not of the tasks'
@@ -186,6 +191,242 @@ requests, $0.0269 (about 6× Haiku's per-attempt cost on this task). One
 run cannot separate the model from chance; it shows only that the task and
 its grant are passable.
 
+## The other eleven tasks: D02, D05, O01–O05, X02–X05
+
+Defined, checked and measured in a second pass, on a later commit than the
+19-task run above; the two runs are reported separately and not merged.
+Task definitions, checkers and what each checker decides:
+`evals/pilot/README.md`.
+
+### Environment
+
+| Item | Value |
+|---|---|
+| Hardware, OS | Apple M5, 10 cores, 24 GB, macOS 26.6.2 (25G83); system locale `en_VN` (decimal comma, so Numbers reads `1.25` as text) |
+| hame commit | `e6f2fea` (branch `worktree-agent-a753907f3b04f94d7`, with `unified-harness` `c3f5d3b` merged in, which includes the desktop input authorization of `95b973a`), recorded as `hame_commit` in every record |
+| Task set | `pilot` version `2026-11-15.3` |
+| Applications | TextEdit 1.20 (415), Numbers 14.4 and Pages 14.4 (7043.0.93), Preview 11.0, Google Chrome 157.0.8103.78 (X02, X04), through hame's Swift helper (Swift 6.4.2) |
+| Checker libraries | Python 3.14.5, openpyxl 3.1.5, PyMuPDF 1.27.2.3, Pillow 10.4.0; `textutil` and Quick Look (`qlmanage`) from macOS |
+| Model, pricing, concurrency | `claude-haiku-5-5` for every run; hame's tariff table dated 2026-11-15; one task at a time, one request in flight |
+
+### Reproduction
+
+```sh
+cargo build -p hame-cli
+export HAME_HOME=$(mktemp -d)
+# load the key into this shell without printing it
+for t in D02 D05 O01 O02 O03 O04 O05 X02 X03 X04 X05; do
+  ./target/debug/hame eval evals/pilot --filter $t --runs 3 --provider anthropic \
+    --model claude-haiku-5-5 --experiment-id final-$t --json runs/final-$t.json --keep runs/final-$t-keep
+done
+python3 evals/pilot/report.py runs/final-*.json
+```
+
+The eleven reports are merged into `evidence/g3-haiku.json` (records
+unchanged, local paths replaced). The checkers' offline tests (no model, no
+GUI, no applications): `cargo test -p hame-cli --test pilot`.
+
+### Office applications: what was tried before choosing
+
+Small diagnostics with a scratch driver over the `desktop` tool (no model),
+before defining the tasks:
+
+- **Numbers and Pages hide their documents from accessibility.** The
+  document window's scroll area held only its scroll bars; the observation
+  reported 30 elements, "complete", and no table. Setting
+  `AXEnhancedUserInterface` on the app (what VoiceOver does) exposes the
+  canvas: the layout area, the table, its rows and cells with their shown
+  values, the Pages body as a text area. The helper now does this once per
+  app when it sees such a canvas.
+- **Cells had no address and empty cells were dropped.** Cells now render
+  with their address from the cell's row and column ranges, and `select`
+  reaches any cell through the table's `AXCellForColumnAndRow`. Pressing a
+  cell selects only the table object; setting the table's `AXSelectedCells`
+  selects the cell. A multi-cell range set that way selects only its first
+  cell; `select` reports that and the range is extended with shift+arrows.
+- **Typing a formula was stopped as interference.** At "=" Numbers opens a
+  separate formula-editor window; the focus guard saw another window and
+  stopped, and a Return sent during that transition was lost (the first
+  try reported success while the formula sat uncommitted). Typing now
+  follows a window the typing itself opened and returns when it closes,
+  waits for focus to settle before Return/Tab, and allows focus to move
+  into the element typing started on (a cell's in-place editor).
+- **Chart and axis titles have no accessible text** until they are being
+  edited; editing them needs the Visual channel (screenshot, then
+  `click_at` three times on the title: chart, title, edit), after which the
+  edit field is an ordinary text area for `select` and `type`. O04 grants
+  the Visual channel for Numbers for that reason.
+- **Charts need header rows.** A table imported from xlsx has none, so a
+  chart of it was labelled "Untitled 1…7"; the O04 fixture has a header
+  row and column, so Numbers maps months to categories.
+- **Excel 16.78** exposes its name box, formula bar and ribbon but no cell
+  grid, also with `AXEnhancedUserInterface`; a formula typed after
+  choosing D2 in the name box landed in A1. Word was not driven. Neither is
+  used by a task.
+- **Imported documents are drafts in iCloud.** Opening an xlsx or docx made
+  Numbers/Pages keep the converted document in the user's iCloud
+  Numbers/Pages folder until it was closed. The fixtures are therefore
+  native `.numbers`/`.pages` files, opened from the outbox and edited in
+  place, and those iCloud folders count as default save locations for the
+  stray-file checks; teardown moves the run's drafts out of them. They
+  were empty after every run.
+- **Screenshots aborted the helper** (`CGS_REQUIRE_INIT` assertion in
+  ScreenCaptureKit) because nothing had connected it to the window server;
+  the helper now does so at start. Before this, every `screenshot` failed
+  with `helper_exited` on this machine.
+
+None of the eleven tasks had to be marked `unsupported`.
+
+### Harness changes made in this pass
+
+All with tests; GUI tests in `crates/hame-desktop/tests/gui.rs` (ignored by
+default).
+
+| Change | Where | Test |
+|---|---|---|
+| Hidden document canvases exposed (`AXEnhancedUserInterface`) and said so | helper `observe` | GUI `numbers_cells_are_observed_selected_and_typed_into` |
+| Cell addresses in observations; `select` for cells, ranges (partial selection reported) and text | helper, `render.rs`, `lib.rs` | `table_cells_show_their_address_and_selections_read_back` (unit), GUI test above |
+| Typing follows an editor window it opened, returns to the origin, accepts focus moving into the start element, settles before Return/Tab | helper `typeText` | GUI test above (formula and tabbed values) |
+| Window-server connection at helper start (screenshots aborted the helper) | helper | GUI `screenshots_are_scaled_correctly_and_click_at_maps_into_the_window` (passes again) |
+| "Export" confirming a save panel needs Commit and FileWrite, like "Save" | `caps.rs` | `capability_mapping_follows_the_operation_and_the_control` |
+| `hame run --inbox DIR` and the manifest field `interject` (a user message during the run, or a follow-up turn if the agent already finished; counted as a human intervention; both traces accounted) | `run.rs`, `eval.rs`, `manifest.rs` | `inbox_messages_are_queued_once_in_name_order`, `a_user_correction_reaches_the_running_turn_or_follows_it`, manifest test |
+| After the measured run (commit `ccd27c0`): `select` on cells brings the window to the front, so typing follows without a `focus` on the table (X02 round 2) | helper `selectTarget`, `render.rs` | GUI test above (types without a separate focus) |
+| After the measured run: `type` refuses a `/` in a save panel's Save As field, as `set_value` did (O04 round 2) | `lib.rs` `type_text` | `a_path_typed_into_the_save_name_field_is_refused_before_anything_is_sent` |
+| After the measured run: "not done", "was not written", "blocked the" mark a reported blocker (O04 round 2) | `hame-eval` `report.rs` | `a_claim_needs_a_normal_end_and_no_reported_blocker` |
+
+### Results (claude-haiku-5-5, three rounds, hame `e6f2fea`)
+
+Report: `evidence/g3-haiku.json` (eleven `hame eval` reports, experiments
+`final-D02` … `final-X05`, merged; records unchanged). Columns are sums over
+each task's attempts; latency percentiles over its passing attempts
+("verified") and over all of them.
+
+| Task | Pass | False success | Fail | Timeout | Error | Verified p50 s | All p50 s | Requests | Uncached in | Cache read | Cache write | Output | Request MB | Cost $ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| D02 TextEdit preference | 3/3 | 0 | 0 | 0 | 0 | 24.7 | 24.7 | 18 | 42 | 92,378 | 23,634 | 3,371 | 0.33 | 0.0056 |
+| D05 document appearance | 2/3 | 0 | 1 | 0 | 0 | 170.3 | 204.9 | 150 | 306 | 5,479,528 | 239,326 | 82,391 | 17.98 | 0.1259 |
+| O01 populate a spreadsheet | 3/3 | 0 | 0 | 0 | 0 | 79.9 | 79.9 | 174 | 354 | 6,497,364 | 155,411 | 42,448 | 20.06 | 0.1057 |
+| O02 formulas and totals | 3/3 | 0 | 0 | 0 | 0 | 62.7 | 62.7 | 88 | 182 | 1,394,969 | 82,172 | 17,569 | 4.19 | 0.0330 |
+| O03 update, keep formatting | 3/3 | 0 | 0 | 0 | 0 | 89.1 | 89.1 | 124 | 254 | 2,059,005 | 89,990 | 31,020 | 7.07 | 0.0474 |
+| O04 chart with labels and units | 2/3 | 1 | 0 | 0 | 0 | 219.3 | 175.8 | 208 | 422 | 7,403,209 | 1,682,181 | 72,562 | 136.45 | 0.3206 |
+| O05 export and reopen | 2/3 | 0 | 1 | 0 | 0 | 76.8 | 105.0 | 115 | 236 | 1,826,502 | 86,350 | 27,013 | 5.99 | 0.0426 |
+| X02 records → spreadsheet → upload | 2/3 | 0 | 1 | 0 | 0 | 70.3 | 71.2 | 150 | 306 | 4,767,349 | 144,064 | 42,374 | 15.20 | 0.0869 |
+| X03 edit, preview, export | 3/3 | 0 | 0 | 0 | 0 | 49.5 | 49.5 | 66 | 138 | 733,062 | 54,798 | 14,491 | 2.40 | 0.0214 |
+| X04 compare two sources | 3/3 | 0 | 0 | 0 | 0 | 30.5 | 30.5 | 24 | 54 | 284,741 | 55,378 | 13,976 | 0.97 | 0.0168 |
+| X05 mid-task correction | 3/3 | 0 | 0 | 0 | 0 | 15.2 | 15.2 | 21 | 54 | 83,529 | 20,247 | 7,271 | 0.31 | 0.0070 |
+| **Total** | **29/33** | **1** | **3** | **0** | **0** | 62.7 (p95 229.3) | 69.4 (p95 252.5) | **1,138** | **2,348** | **30,621,636** | **2,633,551** | **354,486** | **210.95** | **0.8129** |
+
+No task was `unsupported`. $0.0246 per attempt, $0.0280 per verified
+success. No request was retried. Fixture setup (copying the document and
+opening it in its app) took a median 1.9 s and is not task time. O04's
+attempts carried 810 image attachments (34.9, 24.8 and 28.0 MB of images),
+which is most of its request bytes and cache writes; the other tasks
+granted no Screen capability.
+
+By category (verified latency over passing attempts; cost over all):
+
+| Category | Attempts | Passes | p50 s | p95 s | Requests | Cost $ | Cost per verified success $ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| desktop (D02, D05) | 6 | 5 | 25.8 | 202.0 | 168 | 0.1315 | 0.0263 |
+| office (O01–O05) | 15 | 13 | 89.1 | 245.2 | 709 | 0.5493 | 0.0423 |
+| cross_app (X02–X05) | 12 | 11 | 37.2 | 70.3 | 261 | 0.1321 | 0.0120 |
+
+X05's correction was delivered during the turn in all three attempts (the
+record's note says so and each counts one human intervention); the agent
+rewrote report.md in EUR without the Internal region each time. D02's
+checker relaunched TextEdit after every attempt and found Plain text
+selected; teardown restored the user's preference (it was unset before
+and after the run).
+
+### The four attempts that did not pass
+
+All four reported their failure in the final answer; none was hidden.
+
+- **D05 round 3 (fail).** The title was made centred but not bold. The
+  agent selected text with `select` and with the keyboard and read
+  TextEdit's format bar to confirm, but the bar's font and size fields did
+  not follow the selection, and after several contradictory readings it
+  stopped and said it had not finished. A model and application-feedback
+  failure; no harness fault found.
+- **O04 round 2 (recorded false success; read by hand, an honest
+  failure).** The chart, its title and axis name were done (the agent
+  checked them on screen). For the export it clicked the panel's Export
+  button with `click_at` instead of `press`; the click needs FileWrite and
+  the task's Visual-channel grant lacked it, so it was refused, and the
+  agent stopped and said the export was not done. Two problems on our
+  side: the grant was incomplete for that path (fixed in task set version
+  `2026-11-15.4`), and the success-claim heuristic did not recognise "the
+  Excel export is not done. The sandbox blocked the save" (fixed; the
+  answer is now a test case). The agent had also typed a full path into
+  the Save As field with `type`, which the `/` guard covered only for
+  `set_value`; `type` now refuses it too (unit test). Nothing was written:
+  the refusal came first.
+- **O05 round 1 (fail).** `File > Export To > PDF…` was first reported
+  disabled (Pages was not frontmost); after `focus`, the command was
+  reported chosen three times but no export sheet appeared. The agent then
+  tried to script Pages through `osascript` (Apple Events) from the shell;
+  every call timed out (-1712), and it stopped and reported it. A manual
+  replay of the same sequence with the driver opened the sheet normally,
+  so the cause is not established. The Apple Events attempt is noted under
+  "Known gaps".
+- **X02 round 2 (fail).** After `select` of A2 the agent called `focus` on
+  the table element; Numbers then selects the table object instead of the
+  cell, so every typed value went nowhere (the agent exported unchanged
+  copies to compare, saw no change and stopped). `select` on cells now
+  brings the window to the front itself and says not to focus the table
+  (GUI test updated to type without a separate `focus`).
+
+### After the fixes: O04 and X02 again (task set `2026-11-15.4`, hame `ccd27c0`)
+
+Reported separately; not part of the 29/33 above. Reports
+`evidence/g3-postfix-O04.json` and `evidence/g3-postfix-X02.json`.
+
+| Task | Pass | False success | Fail | Verified p50 s | Requests | Request MB | Cost $ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| O04 (Visual grant with file_write) | 3/3 | 0 | 0 | 259.4 | 234 | 181.21 | 0.3647 |
+| X02 (`select` brings the window forward) | 2/3 | 1 | 0 | 86.6 | 120 | 10.83 | 0.0691 |
+
+- O04 round 1 passed the checker but its turn ended at the 100-step limit
+  after the work was done (the record's note says so); the runner counts a
+  passing checker with nothing forbidden as a pass.
+- In all three X02 attempts the typed values reached the cells.
+- **X02 round 2 wrote into the user's Documents folder.** The agent could
+  not get the export panel to the workspace on its first tries, then wrote
+  "Simplest route: keep the default Documents location … then move the
+  file with the shell", pressed Export, and Numbers wrote
+  `~/Documents/books.xlsx`. Its `mv` out of Documents was refused by the
+  shell sandbox (writes are confined), `cp` into the workspace worked, and
+  it uploaded that copy and claimed success. The checker's default-folder
+  scan failed the attempt (recorded false success). Teardown leaves files
+  outside the apps' own draft folders in place, so the file was moved out
+  of `~/Documents` by hand after the run (created 13:26:38 during the
+  attempt, holding the run's five rows). The authorization model allowed
+  this: FileWrite is granted per application, not per destination folder,
+  so a save panel confirmed in any folder is within the grant. See "Known
+  gaps".
+
+### Diagnostic runs (before the measured run)
+
+One attempt each, `claude-haiku-5-5`; report `evidence/g3-diagnostics.json`.
+Every new task passed its diagnostic; the one checker bug found is fixed.
+
+| Report | Task | Outcome | Total s | Requests | Cost $ | Note |
+|---|---|---|---:|---:|---:|---|
+| diag-X05 | X05 | pass | 17.6 | 7 | 0.0024 | correction delivered during the turn |
+| diag-D02 | D02 | false_success | 13.5 | 6 | 0.0017 | checker bug: it counted the agent reading the preference back with `defaults read` as writing it; fixed to count only writes |
+| diag-D02b | D02 | pass | 23.6 | 6 | 0.0018 | after the checker fix (uncommitted then, committed in `e6f2fea`) |
+| diag-D05 | D05 | pass | 268.0 | 65 | 0.0380 | |
+| diag-O01 | O01 | pass | 242.2 | 37 | 0.0158 | |
+| diag-O02 | O02 | pass | 60.1 | 31 | 0.0106 | |
+| diag-O03 | O03 | pass | 64.2 | 33 | 0.0122 | |
+| diag-O04 | O04 | pass | 145.9 | 59 | 0.0777 | |
+| diag-O05 | O05 | pass | 53.9 | 31 | 0.0088 | |
+| diag-X02 | X02 | pass | 86.2 | 39 | 0.0204 | |
+| diag-X03 | X03 | pass | 50.1 | 21 | 0.0075 | |
+| diag-X04 | X04 | pass | 56.1 | 18 | 0.0099 | |
+
+Recorded commits: `3a1a605` for X05, D02, D02b, D05 and O01 (D02b and later with the D02 checker fix uncommitted), `e6f2fea` for O02 onwards; the binary was the same, only the checker and the README changed in between.
+
 ## Ablation (P4): batching and screenshot-first observations
 
 Report: `ablation.json`, experiment `ablation-b`, hame `74ba6e4`, same
@@ -346,19 +587,66 @@ last commit at the time, and some ran with uncommitted fixes on top (noted).
 Priced from hame's dated tariff table and the provider's reported usage;
 the console bill was not read.
 
+Second pass (the other eleven tasks):
+
+| Report | Attempts | Priced cost $ |
+|---|---:|---:|
+| diagnostic runs (12 reports, table above) | 12 | 0.2068 |
+| g3-haiku (11 tasks × 3) | 33 | 0.8129 |
+| post-fix check (O04, X02 × 3) | 6 | 0.4338 |
+| **Total** | **51** | **1.4535** |
+
 ## Tasks not run, and why
 
 | Task | Status | Reason |
 |---|---|---|
-| D02 application preference, D05 document appearance | not defined | no fixture or checker built in this pass; they need a reopen-the-app check (D02) and visual verification (D05) |
-| O01–O05 office documents | not defined | no office application adapter or fixtures |
-| X02–X05 | not defined | fixtures not built; X01 is the cross-app task the roadmap names first |
+| D02, D05, O01–O05, X02–X05 | defined and measured in the second pass | see "The other eleven tasks" above |
 | D03 | supported | ran 3/3 after fixes 3 and 4; before them it failed (see diagnostics) |
 
-All defined tasks were supported on this machine; none was reported
-`unsupported`.
+All 30 tasks are defined and were supported on this machine; none was
+reported `unsupported`. Office tasks use Numbers and Pages; Excel and
+Word were looked at and not used (Excel exposes no cell grid).
 
 ## Known gaps
+
+Second pass (office and cross-application tasks):
+
+- **The shell can send Apple Events.** In O05 round 1 the agent ran
+  `osascript -e 'tell application "Pages" …'` from its sandboxed shell. It
+  timed out (-1712), probably waiting on macOS's automation consent, and
+  `System Events` calls were refused (-10004), but nothing in hame stops a
+  shell command from scripting an application outside its desktop grants.
+  If consent had been given earlier, that route would bypass the desktop
+  tool's authorization. Not addressed here.
+- **FileWrite is per application, not per folder.** A task that grants
+  `file_write` on Numbers lets the agent confirm a save or export panel in
+  any folder; in the post-fix X02 round 2 it exported into `~/Documents` on
+  purpose and copied the file out with its shell (which may read the home
+  folder). Only the checkers' default-folder scan noticed, and teardown
+  moves only files in the apps' own draft folders, so the file was moved
+  by hand. A destination-scoped grant (or a refusal to confirm a panel
+  pointing outside named folders) would close this; not done here.
+- **One office application per kind.** Numbers and Pages 14.4 only;
+  Keynote, Excel and Word are not covered by tasks. Fixture documents are
+  native files made with this version; another version may convert them.
+- **Locale.** The machine's `en_VN` locale makes Numbers read a decimal
+  point as text; the office fixtures use whole numbers to keep that out of
+  the measurement. Decimal entry in other locales is untested.
+- **O04 needs the Visual channel** for chart and axis titles (no
+  accessible text until editing); its image traffic (about 30 MB per
+  attempt) dominates the second pass's request bytes.
+- **The checkers read some results through the desktop's own renderers**
+  (Quick Look for O03 and D05, a screen capture for O04's bars) and the
+  checkers' accessibility tool for the live documents; Quick Look renders
+  RTF on a dark page in dark mode, which the ink detection handles by
+  measuring against the page's background.
+- **GUI test `return_in_the_save_panel_needs_commit_and_file_write`**
+  (from the desktop authorization change) fails on this machine on both
+  `unified-harness` `c3f5d3b` and this branch: TextEdit capitalises
+  "second line" to "Second line" when the document is saved (automatic
+  capitalisation is on). The other 13 GUI tests pass, including the new
+  Numbers test and the screenshot test that failed before the helper fix.
+- **n is small**: three rounds per task, one model.
 
 - **Small n.** Three runs per task and one model for the measured runs;
   56/57 says this model passes these fixtures, not that it generalizes.
