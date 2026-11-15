@@ -403,6 +403,87 @@ let SKIP_ROLES: Set<String> = ["AXScrollBar", "AXColumn", "AXSplitter", "AXGrowA
 /// Roles whose children are rendering detail rather than controls.
 let LEAF_ROLES: Set<String> = ["AXTextArea", "AXTextField", "AXStaticText", "AXImage", "AXSecureTextField"]
 
+/// The attributes an observation reads per element, fetched in one
+/// accessibility round trip instead of one per attribute.
+let OBSERVED_ATTRIBUTES: [String] = [
+    kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
+    kAXSubroleAttribute, kAXEnabledAttribute, kAXIdentifierAttribute, kAXPositionAttribute,
+    kAXSizeAttribute, kAXChildrenAttribute, kAXPlaceholderValueAttribute, kAXTitleUIElementAttribute,
+]
+
+struct NodeAttributes {
+    var values: [CFTypeRef?]
+
+    init(_ e: AXUIElement) {
+        var raw: CFArray?
+        let err = AXUIElementCopyMultipleAttributeValues(
+            e, OBSERVED_ATTRIBUTES as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &raw)
+        var out = [CFTypeRef?](repeating: nil, count: OBSERVED_ATTRIBUTES.count)
+        if err == .success, let array = raw as? [AnyObject], array.count == OBSERVED_ATTRIBUTES.count {
+            for (i, v) in array.enumerated() {
+                let ref = v as CFTypeRef
+                // Missing attributes come back as AXValues holding an error.
+                if CFGetTypeID(ref) == AXValueGetTypeID(), AXValueGetType(ref as! AXValue) == .axError {
+                    continue
+                }
+                out[i] = ref
+            }
+        }
+        values = out
+    }
+
+    func string(_ i: Int) -> String? {
+        guard let v = values[i] else { return nil }
+        if let s = v as? String { return s }
+        if CFGetTypeID(v) == CFAttributedStringGetTypeID() { return (v as! NSAttributedString).string }
+        return nil
+    }
+
+    var role: String? { string(0) }
+
+    var name: String {
+        if let t = string(1), !t.isEmpty { return t }
+        if let d = string(2), !d.isEmpty { return d }
+        if let labelRef = values[11], CFGetTypeID(labelRef) == AXUIElementGetTypeID() {
+            let label = labelRef as! AXUIElement
+            if let t = strAttr(label, kAXValueAttribute), !t.isEmpty { return t }
+            if let t = strAttr(label, kAXTitleAttribute), !t.isEmpty { return t }
+        }
+        if let p = string(10), !p.isEmpty { return p }
+        return ""
+    }
+
+    func value(limit: Int) -> String? {
+        guard let v = values[3] else { return nil }
+        var s: String?
+        if let str = v as? String { s = str }
+        else if CFGetTypeID(v) == CFAttributedStringGetTypeID() { s = (v as! NSAttributedString).string }
+        else if let n = v as? NSNumber { s = n.stringValue }
+        guard var out = s else { return nil }
+        if out.count > limit { out = String(out.prefix(limit)) + "…" }
+        return out
+    }
+
+    var subrole: String? { string(4) }
+    var enabled: Bool? { (values[5] as? NSNumber)?.boolValue }
+    var identifier: String? { string(6) }
+
+    var frame: CGRect? {
+        guard let p = values[7], let sz = values[8],
+              CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(sz) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(p as! AXValue, .cgPoint, &point)
+        AXValueGetValue(sz as! AXValue, .cgSize, &size)
+        return CGRect(origin: point, size: size)
+    }
+
+    var children: [AXUIElement] {
+        guard let v = values[9], CFGetTypeID(v) == CFArrayGetTypeID() else { return [] }
+        return (v as? [AXUIElement]) ?? []
+    }
+}
+
 func observe(_ req: [String: Any]) throws -> [String: Any] {
     let (app, appEl, window, wid) = try resolveWindow(req)
     let maxNodes = max(10, min((req["max_nodes"] as? Int) ?? 150, 1500))
@@ -421,12 +502,12 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
 
     func visit(_ e: AXUIElement, depth: Int, parentName: String) {
         if nodes.count >= maxNodes { complete = false; return }
-        let (roleOpt, err) = roleOf(e)
-        guard let role = roleOpt, err == .success else { return }
+        let a = NodeAttributes(e)
+        guard let role = a.role else { return }
         if SKIP_ROLES.contains(role) { return }
-        let name = nameOf(e)
-        let value = valueString(e, limit: 300)
-        let subrole = strAttr(e, kAXSubroleAttribute)
+        let name = a.name
+        let value = a.value(limit: 300)
+        let subrole = a.subrole
         let hasValue = value.map { !$0.isEmpty } ?? false
         var keep: Bool
         if depth == 0 || CONTROL_ROLES.contains(role) {
@@ -447,10 +528,10 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
             var node: [String: Any] = ["ref": ref, "depth": depth, "role": role, "name": name]
             if let s = subrole, !s.isEmpty { node["subrole"] = s }
             if let v = value { node["value"] = v }
-            if let enabled = boolAttr(e, kAXEnabledAttribute), !enabled { node["enabled"] = false }
+            if let enabled = a.enabled, !enabled { node["enabled"] = false }
             if let f = focusedEl, CFEqual(f, e) { node["focused"] = true; focusedRef = ref }
-            if let id = strAttr(e, kAXIdentifierAttribute), !id.isEmpty { node["identifier"] = id }
-            if let fr = rectJSON(frameOf(e)) { node["frame"] = fr }
+            if let id = a.identifier, !id.isEmpty { node["identifier"] = id }
+            if let fr = rectJSON(a.frame) { node["frame"] = fr }
             nodes.append(node)
             if role == "AXSheet" || subrole == "AXDialog" || subrole == "AXSystemDialog" {
                 dialogs.append(["ref": ref, "role": role, "subrole": subrole ?? "", "name": name])
@@ -459,9 +540,14 @@ func observe(_ req: [String: Any]) throws -> [String: Any] {
         }
         if LEAF_ROLES.contains(role) { return }
         if depth >= maxDepth { complete = false; return }
-        var children = elementsAttr(e, kAXChildrenAttribute)
+        var children = a.children
         // Sheets first: a dialog's contents matter more than what it covers.
-        children.sort { (roleOf($0).0 == "AXSheet" ? 0 : 1) < (roleOf($1).0 == "AXSheet" ? 0 : 1) }
+        if role == "AXWindow" || role == "AXSheet" {
+            let sheets = children.filter { roleOf($0).0 == "AXSheet" }
+            if !sheets.isEmpty {
+                children = sheets + children.filter { c in !sheets.contains { CFEqual($0, c) } }
+            }
+        }
         for child in children {
             if nodes.count >= maxNodes { complete = false; return }
             visit(child, depth: childDepth, parentName: keep ? name : parentName)
@@ -525,11 +611,13 @@ func inSavePanel(_ e: AXUIElement) -> Bool {
     while let c = cursor, hops < 40 {
         let role = roleOf(c).0 ?? ""
         let sub = strAttr(c, kAXSubroleAttribute) ?? ""
-        if role == "AXSheet" || sub == "AXDialog" || role == "AXWindow" {
+        if role == "AXSheet" || sub == "AXDialog" || sub == "AXSystemDialog" {
             return findFirst(c, limit: 600) { el in
                 strAttr(el, kAXIdentifierAttribute) == "saveAsNameTextField"
             } != nil
         }
+        // A document window is not a panel; only a sheet or dialog in it is.
+        if role == "AXWindow" { return false }
         cursor = elementAttr(c, kAXParentAttribute)
         hops += 1
     }

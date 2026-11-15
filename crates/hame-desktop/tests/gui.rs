@@ -1064,3 +1064,61 @@ async fn a_missing_accessibility_permission_is_reported_explicitly() {
         );
     }
 }
+
+fn median_p95(mut ms: Vec<f64>) -> (f64, f64) {
+    ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let p95 = ms[((ms.len() - 1) as f64 * 0.95).round() as usize];
+    (ms[ms.len() / 2], p95)
+}
+
+/// Per-operation latency through the whole tool (authorization, journal
+/// fsyncs, helper round trip), for the backend evidence. Prints numbers.
+#[tokio::test]
+#[ignore = "drives TextEdit; run with --ignored --test-threads=1 --nocapture"]
+async fn tool_level_latency() {
+    let mut gui = Gui::start().await;
+    gui_test!(gui, async {
+        let doc = gui.new_document().await;
+        let area = gui.text_area(doc).await;
+        let mut observe = Vec::new();
+        let mut set = Vec::new();
+        let mut windows = Vec::new();
+        for i in 0..12 {
+            let t = Instant::now();
+            gui.windows().await;
+            windows.push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            gui.observe(doc).await;
+            observe.push(t.elapsed().as_secs_f64() * 1000.0);
+            let value = if i % 2 == 0 {
+                VIETNAMESE
+            } else {
+                "Đ ơ ư — lần hai"
+            };
+            let t = Instant::now();
+            gui.ok(json!({"action": "set_value", "ref": area, "value": value}))
+                .await;
+            set.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        // The same through a context without a journal: the difference is
+        // the cost of the fsynced receipts.
+        let bare = ToolContext::new(gui.ctx.cwd.clone()).with_session("gui-test");
+        let mut unjournalled = Vec::new();
+        for i in 0..12 {
+            let value = if i % 2 == 0 { VIETNAMESE } else { "Đ ơ ư" };
+            let input = json!({"action": "set_value", "ref": area, "value": value});
+            let t = Instant::now();
+            let out = gui.tool.call(&input, &bare).await;
+            unjournalled.push(t.elapsed().as_secs_f64() * 1000.0);
+            assert!(!out.is_error, "{}", out.text);
+        }
+        let (um, up) = median_p95(unjournalled);
+        println!("tool set_value (no journal): median {um:.1} ms, p95 {up:.1} ms, n=12");
+        let (om, op) = median_p95(observe);
+        let (sm, sp) = median_p95(set);
+        let (wm, wp) = median_p95(windows);
+        println!("tool windows: median {wm:.1} ms, p95 {wp:.1} ms, n=12");
+        println!("tool observe: median {om:.1} ms, p95 {op:.1} ms, n=12");
+        println!("tool set_value (journalled): median {sm:.1} ms, p95 {sp:.1} ms, n=12");
+    });
+}

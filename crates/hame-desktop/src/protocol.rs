@@ -252,7 +252,23 @@ pub fn ensure_helper(cache_dir: &Path, swiftc: &Path) -> Result<PathBuf, HelperE
             ));
         }
     }
+    prune_old_helpers(cache_dir);
     Ok(binary)
+}
+
+/// Removes helpers built from other sources. A process still running an
+/// old one keeps its open file; only the name goes.
+fn prune_old_helpers(cache_dir: &Path) {
+    let current = format!("hame-desktop-helper-{}", source_hash());
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("hame-desktop-helper-") && !name.starts_with(&current) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, HelperError>>>>>;
@@ -548,6 +564,28 @@ mod tests {
         assert_eq!(
             helper_binary(dir),
             dir.join(format!("hame-desktop-helper-{a}"))
+        );
+        // Builds of other sources are pruned; the current one and
+        // unrelated files stay.
+        let cache = tempfile::tempdir().unwrap();
+        let current = helper_binary(cache.path());
+        for name in [
+            "hame-desktop-helper-0000000000000000",
+            "hame-desktop-helper-0000000000000000.swift",
+            "unrelated",
+        ] {
+            std::fs::write(cache.path().join(name), b"x").unwrap();
+        }
+        std::fs::write(&current, b"x").unwrap();
+        prune_old_helpers(cache.path());
+        let mut left: Vec<String> = std::fs::read_dir(cache.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![format!("hame-desktop-helper-{a}"), "unrelated".into()]
         );
     }
 
