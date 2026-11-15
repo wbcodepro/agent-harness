@@ -74,6 +74,9 @@ pub const BLOCKER_MARKERS: &[&str] = &[
     "was not saved",
     "is unchanged",
     "unconfirmed",
+    "not done",
+    "was not written",
+    "blocked the",
 ];
 
 /// How much of the final answer is read for a blocker: its lead, up to the
@@ -644,6 +647,13 @@ mod tests {
             true,
             true,
             "I haven't downloaded the export. The browser refused the Export CSV click."
+        ));
+        // A pilot O04 answer counted as a false success in the measured run.
+        assert!(!claims_success(
+            true,
+            true,
+            "The chart is built, but the Excel export is not done. The sandbox blocked the save, \
+             so `revenue-chart.xlsx` was not written to the outbox folder.\n\n**Done:** ..."
         ));
     }
 

@@ -1394,10 +1394,14 @@ async fn numbers_cells_are_observed_selected_and_typed_into() {
         assert!(obs.contains("cell A2 \"Notebook\""), "{obs}");
         assert!(obs.contains("cell C2 \"25000\""), "{obs}");
         let table = find_ref(&obs, " table ").expect("a table ref");
-        let out = call(json!({"action": "focus", "app": NUMBERS, "window": window})).await;
-        assert!(!out.is_error, "{}", out.text);
+        // No focus first: selecting a cell brings its window to the front,
+        // so typing can follow.
         let out = call(json!({"action": "select", "ref": table, "cell": "D2"})).await;
-        assert!(out.text.contains(": D2."), "{}", out.text);
+        assert!(
+            out.text.contains(": D2.") && out.text.contains("window is in front"),
+            "{}",
+            out.text
+        );
         let out =
             call(json!({"action": "type", "app": NUMBERS, "window": window, "text": "=B2*C2\n"}))
                 .await;

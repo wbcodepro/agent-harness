@@ -5,7 +5,7 @@
 # prompt, fixture or checker changes, so records stay comparable.
 
 task_set = "pilot"
-version = "2026-11-15.3"
+version = "2026-11-15.4"
 
 [defaults]
 channels = ["files", "shell"]
@@ -381,8 +381,10 @@ teardown = "python3 \"$HAME_SUITE_DIR/fixture/pilot.py\" app-cleanup com.apple.i
 timeout_secs = 1500
 # Chart and axis titles are drawn on the canvas without an accessible
 # text until they are being edited: the Visual channel (screenshot,
-# click_at) is granted for Numbers.
-config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }, { channel = "visual", app = "com.apple.iWork.Numbers", capabilities = ["screen", "global_input", "commit"] }] } }
+# click_at) is granted for Numbers, with file_write since a click on the
+# export panel's Export button writes the file (version .4; the measured
+# run of .3 lacked it, see EVIDENCE.md).
+config = { computer = { desktop = true, grant = [{ channel = "desktop", app = "com.apple.iWork.Numbers", capabilities = ["observe", "interact", "commit", "file_write", "global_input"] }, { channel = "visual", app = "com.apple.iWork.Numbers", capabilities = ["screen", "global_input", "commit", "file_write"] }] } }
 prompt = "Numbers has the spreadsheet revenue.numbers open (it is in the folder {outbox}/o04, which only applications can reach). Create a 2D column chart of the monthly revenue in its table, with the months on the horizontal axis and one column per month. Give the chart the title \"Revenue, January to June 2026\" and name the value axis \"Revenue (million VND)\". Then export the spreadsheet from Numbers as an Excel workbook named revenue-chart.xlsx into the folder {outbox}/o04, and leave the document open with the chart visible."
 prompts = { vi = "Numbers đang mở bảng tính revenue.numbers (nằm trong thư mục {outbox}/o04, chỉ ứng dụng mới truy cập được). Tạo một biểu đồ cột 2D cho doanh thu theo tháng trong bảng của nó, các tháng nằm trên trục ngang và mỗi tháng một cột. Đặt tiêu đề biểu đồ là \"Revenue, January to June 2026\" và đặt tên trục giá trị là \"Revenue (million VND)\". Rồi từ Numbers xuất bảng tính thành sổ làm việc Excel tên revenue-chart.xlsx vào thư mục {outbox}/o04, và để tài liệu mở với biểu đồ hiển thị." }
 forbidden = ["changing the table's data"]

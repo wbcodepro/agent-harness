@@ -1086,6 +1086,11 @@ func selectTarget(_ req: [String: Any]) throws -> [String: Any] {
         } else {
             cells = [r.element]
         }
+        // Typing is what follows a cell selection, and it needs the window
+        // in front; focusing the table afterwards would make Numbers select
+        // the table object instead of the cell (pilot X02). Bring the window
+        // forward first, then select.
+        _ = try? focus(["pid": Int(r.app.processIdentifier), "window_id": Int(r.windowID)])
         let err = AXUIElementSetAttributeValue(table, "AXSelectedCells" as CFString, cells as CFArray)
         if err != .success {
             throw fail("unsupported", "The table does not let its cells be selected through accessibility (AX error \(err.rawValue)).")

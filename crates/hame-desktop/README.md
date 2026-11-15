@@ -25,8 +25,9 @@ A missing Accessibility grant is reported as `permission_denied` with that path.
 |---|---|---|
 | `apps` | Running GUI applications, filtered to the granted scope | Observe |
 | `windows` | An app's windows: CGWindowID, pid, title, frame, focused, minimized, sheets | Observe |
-| `observe` | Pruned accessibility tree of one window, refs `oN:eM`, dialogs and sheets, `complete=false` when pruned | Observe |
+| `observe` | Pruned accessibility tree of one window, refs `oN:eM`, dialogs and sheets, `complete=false` when pruned. Table cells show their address (`cell C2 "1,5"`). A window whose scroll area holds only scroll bars (Numbers, Pages) is a canvas the app hides until asked: the helper sets `AXEnhancedUserInterface` on that app once, as screen readers do, and says so | Observe |
 | `press`, `set_value`, `focus` | Accessibility actions on a ref or a unique live name/role match | Interact; Commit for controls named Save/Send/Delete/Submit/Purchase/Pay/Replace/…; plus FileWrite for the confirming button of a save panel |
+| `select` | Table cells (`cell` "C2" or "A1:C4" on a table or one of its cells, through the table's own cell lookup, so empty cells are reachable) or a stretch of text (`text`, its `occurrence`-th appearance, in a text element); reads the selection back and says when the app took less (Numbers takes only the first cell of a range) | Interact |
 | `menu` | Menu bar path such as `File > Save…` (brings a named window to the front first) | Interact; Commit as above, except titles ending in `…` (they only open a dialog) |
 | `type` | Unicode text as keyboard events, in chunks, to the focused element (`\n` and `\r\n` are sent as the Return key, `\t` as Tab) | GlobalInput, desktop lease; a newline or space adds what Return or Space would need (below) |
 | `key` | A combination such as `cmd+s` or `cmd+shift+g` | GlobalInput, desktop lease, plus the table below |
@@ -78,11 +79,16 @@ All on macOS 26.6.2 with `cargo test -p hame-desktop --test gui -- --ignored --t
 | Finder | `windows`, `menu` dry resolution (manual check only) |
 | (system) | `clipboard` get/set/restore, `apps`, simulated missing Accessibility permission |
 
-Not tested: Preview, Notes, Numbers, Pages, System Settings, Electron or Java apps, multiple displays, non-ANSI keyboard layouts.
+| Numbers 14.4 | `observe` (canvas exposed, cells with addresses, chart elements, export sheet, save panel), `select` (cell, partial range reported), `type` (values with `\t`/`\n`, formulas through the separate formula editor window), `key` (shift+arrows to extend a selection), `menu` (`Insert > Chart > 2D Column`, `Table > Header Rows > 1`, `File > Export To > Excel…`), `press` (Title / Axis Name checkboxes, Export), `screenshot` + `click_at` (chart and axis titles), and the pilot tasks O01, O02, O04, X02, X04 |
+| Pages 14.4 | `observe` (body text area), `select` (text), `type` (replacement), `key` (cmd+i), `menu` (`File > Export To > Word…` / `PDF…`), pilot O03, O05 |
+| Preview 11.0 | opening the exported PDF (pilot O05) |
+
+Not tested: Notes, Keynote, System Settings, Electron or Java apps, multiple displays, non-ANSI keyboard layouts. Microsoft Excel 16.78 was looked at and not used: it exposes no cell grid through accessibility.
 
 ## Known unsupported or limited
 
-- Scrolling, drag, hover, selecting text ranges, choosing items in pop-up menus by value, and context menus are not implemented.
+- Scrolling, drag, hover, choosing items in pop-up menus by value, and context menus are not implemented.
+- `type` follows an editor window the typing itself opened (a window of the same app that did not exist when typing started and is not a document, dialog or sheet: Numbers' formula editor) and returns when it closes; focus moving into the element typing started on (a cell's in-place editor) is allowed too. Any other focus change still stops input.
 - `key` maps keys by ANSI key codes; on other layouts letters may differ (use `type` for text).
 - `type` posts to the target process, but open and save panels run out of process and only receive events through the system event stream; inside a sheet the helper posts there, after verifying focus. Secure text fields generally ignore synthesized events.
 - `wait` polls with backoff (30 ms rising to 300 ms); it does not use AXObserver notifications.

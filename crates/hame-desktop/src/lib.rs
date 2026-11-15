@@ -1264,7 +1264,10 @@ impl DesktopTool {
         // A newline is sent as Return and a space as Space: what they do
         // depends on what will have focus, which is the named element (the
         // helper focuses it first) or whatever has focus in the window now.
-        let needs_focus = caps::type_needs_focus(text);
+        // A path typed into a save panel's name field is saved as one odd
+        // name in whatever folder the panel shows (pilot O04): what has
+        // focus decides that too.
+        let needs_focus = caps::type_needs_focus(text) || text.contains('/');
         let focus = match (needs_focus, Self::has_element(input)) {
             (false, _) => None,
             (true, true) => FocusContext::from_json(&info["context"]),
@@ -1273,6 +1276,12 @@ impl DesktopTool {
                     .await?
             }
         };
+        if let Some(problem) = focus
+            .as_ref()
+            .and_then(|f| save_name_problem(&f.facts(), text))
+        {
+            return Err(invalid(&problem));
+        }
         let need = caps::type_needs(text, focus.as_ref(), commit);
         self.authorize_need(&target, &need)?;
         let caps = need.caps.clone();
@@ -2645,6 +2654,48 @@ mod tests {
             });
             sha[..12].to_string()
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_path_typed_into_the_save_name_field_is_refused_before_anything_is_sent() {
+        use scripted::*;
+        let mut name_field = focused("AXTextField", true, true);
+        name_field["name"] = json!("Save As:");
+        let f = fixture(
+            &[
+                Capability::Observe,
+                Capability::Interact,
+                Capability::Commit,
+                Capability::FileWrite,
+                Capability::GlobalInput,
+            ],
+            &[],
+            &[
+                (
+                    "window_state",
+                    json!({"window": window(), "frontmost_pid": 42}),
+                ),
+                ("focus_context", name_field),
+                ("type", json!({"emitted": "report.xlsx", "chunks": 2})),
+            ],
+        );
+        let out = f
+            .call(json!({"action": "type", "app": APP, "window": 7,
+                         "text": "/private/tmp/outbox/o04/revenue-chart.xlsx"}))
+            .await;
+        assert!(
+            out.is_error && out.text.contains("takes a file name only"),
+            "{}",
+            out.text
+        );
+        assert!(f.requests("type").is_empty(), "nothing may be typed");
+        // A bare name goes through.
+        let out = f
+            .call(json!({"action": "type", "app": APP, "window": 7, "text": "revenue-chart.xlsx"}))
+            .await;
+        assert!(!out.is_error, "{}", out.text);
+        assert_eq!(f.requests("type").len(), 1);
     }
 
     #[cfg(target_os = "macos")]

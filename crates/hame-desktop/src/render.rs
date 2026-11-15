@@ -193,8 +193,9 @@ pub fn selection(what: &str, result: &Value) -> String {
             );
         }
         return format!(
-            "Selected in {table}: {shown}. Typing now replaces the selected cell's content; \
-             \\n (Return) or \\t (Tab) in typed text commits it and moves on."
+            "Selected in {table}: {shown}. Its window is in front: type now (without focusing \
+             the table, which would select the table instead of the cell). Typing replaces the \
+             cell's content; \\n (Return) or \\t (Tab) in typed text commits it and moves on."
         );
     }
     let selected = result["selected_text"].as_str().unwrap_or("");
