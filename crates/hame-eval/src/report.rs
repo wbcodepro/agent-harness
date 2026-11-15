@@ -65,6 +65,12 @@ pub const BLOCKER_MARKERS: &[&str] = &[
     "chưa hoàn thành",
     "i did not ",
     "i didn't ",
+    "i have not ",
+    "i haven't ",
+    "not downloaded",
+    "refused",
+    "nothing was saved",
+    "stopped there",
     "was not saved",
     "is unchanged",
     "unconfirmed",
@@ -626,6 +632,18 @@ mod tests {
             true,
             true,
             "The document is saved, but I could not check the file on disk."
+        ));
+        // Two answers the pilot ablation first counted as false successes.
+        assert!(!claims_success(
+            true,
+            true,
+            "The export was not downloaded. The browser refused the submit click, so I stopped \
+             there."
+        ));
+        assert!(!claims_success(
+            true,
+            true,
+            "I haven't downloaded the export. The browser refused the Export CSV click."
         ));
     }
 

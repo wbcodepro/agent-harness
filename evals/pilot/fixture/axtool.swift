@@ -128,7 +128,7 @@ case "close":
     for _ in 0..<8 {
         guard let (_, w) = windows(bundle).first(where: { $0.0 == target }) else { exit(0) }
         if let s = sheets(w).first {
-            for name in ["Delete", "Don’t Save", "Don't Save", "Revert Changes", "Cancel"]
+            for name in ["Delete", "Delete Copy", "Don’t Save", "Don't Save", "Revert Changes", "Cancel"]
             where pressButton(in: s, named: name) { break }
         } else if let close = attr(w, kAXCloseButtonAttribute),
                   AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString) == .success {
