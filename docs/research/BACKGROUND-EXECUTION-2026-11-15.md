@@ -125,16 +125,63 @@ untouched.
 | Linux container with Xvfb/headless Sway | Yes | No | Large: hame's desktop tool is macOS-only today | New backend (AT-SPI or pixels) |
 | Windows agent workspace / UFO² PiP | Yes | Partly | Large: no Windows desktop backend yet | Preview features |
 
+## Verified on this Mac
+
+Probes in `crates/hame-desktop/bench/background/` (Swift, run from the
+terminal that holds Accessibility and Screen Recording; compile with
+`swiftc -O -parse-as-library probeN.swift -o probeN` and pass an output
+folder). macOS 26.6.2, TextEdit 1.20, Numbers and Pages 14.4, 15 November
+2026. Every step records the frontmost application before and after. The
+user was working in Chrome, VS Code and Telegram during the runs; the
+probes post no mouse events, so the "cursor moved" flags in their output
+are the user's own pointer.
+
+**The target app never became frontmost** in any step of any run: AX
+reads and writes, AX menu presses, `postToPid` text and keys, unhide,
+minimize and window capture. The user's application kept the keyboard
+throughout.
+
+| What | Result | Notes |
+|---|---|---|
+| Launch with `open -g` (and `-j`) | works | document windows are visible to AX; `-j` did not keep a TextEdit document window hidden |
+| AX read of text, cells, menus | works | Numbers and Pages need `AXEnhancedUserInterface` and a few seconds before their canvases appear in the tree |
+| AX set value, TextEdit text area | works | the value changes but the document is not marked edited, so a later Save does not write it |
+| AX set value, Numbers cell / Pages body | does not work | Numbers refuses (-25200); Pages ignores it |
+| `postToPid` text, TextEdit (background, not hidden) | works | Vietnamese included; macOS autocapitalization applies ("typed" became "Typed"); the document becomes edited |
+| `postToPid` text, Numbers | works after selecting the cell by AX (`AXSelectedCells`) | B2 became 777 and Return moved the selection to B3, all in the background |
+| `postToPid` text, Pages | works after placing the caret by AX | lands in whichever text area has the caret: the probe picked the header's, so targeting must choose the body |
+| `postToPid` text into a minimized window | does not work | |
+| `postToPid` key equivalents (cmd+s, cmd+shift+g) | do not work in the background | nothing saved; no Go To Folder sheet |
+| AX press File > Save / Save As… with the app in the background | does nothing (AX reports success) | no save after 4 s, no sheet |
+| the same after `NSRunningApplication.activate()` | works (Save wrote the file; Save As… opened its sheet) | macOS did not bring TextEdit forward (Chrome stayed frontmost), so `activate()` changed the app's own active state only; macOS may honor the activation when the user is idle, which would raise the app, so this is a lead, not a safe default |
+| Save panel: Go To Folder by `postToPid` key, even after `activate()` | does not work | panel navigation needs either the foreground or another route |
+| Capture of a background, occluded or hidden-app window (`SCScreenshotManager`, `desktopIndependentWindow`) | works | full content for TextEdit, Numbers and Pages; set `showsCursor = false` or the pointer is drawn in |
+| Capture of a minimized window | does not work | ScreenCaptureKit error -3811 |
+
+What follows for hame: reading, capturing and editing content (TextEdit
+text; Numbers cells by selecting then typing; Pages text with the caret
+placed) can run without taking the screen. **Document commands do not**:
+Save, Save As, export and every save-panel step need the app active, and
+key equivalents are not delivered to a background app. Those are the
+steps the pilot's desktop tasks end with. A background mode therefore has
+to either (a) hand the user a short, announced foreground step for saving
+("hame needs TextEdit in front for about 5 seconds to save"), (b) use the
+app's scripting interface (`save document … in file …` through Apple
+Events, which needs the Automation consent and was not tested here, to
+avoid a consent prompt on the user's screen), or (c) run in a VM where
+taking the foreground costs the user nothing.
+
 ## Recommendation
 
 1. **Now, small:** add `[computer] desktop_background = true`. With it the
-   desktop tool never calls `focus`, refuses `type`, `key` and `click_at`
-   with a typed error that says the task needs the foreground, launches
-   apps hidden, and steers the model to `set_value`, `press`, `menu` and
-   `select`. Ask the user (or stop with `needs_foreground`) when a task
-   cannot continue. Measure on the pilot's desktop tasks how many still
-   finish; save panels can mostly be driven by `set_value` on the path and
-   name fields and `press` on Save.
+   desktop tool never calls `focus`, sends text through `postToPid` (after
+   placing the caret or selecting the cell by AX, and reading the value
+   back), captures windows without raising them, and launches apps with
+   `open -g`. Document commands (save, save panels, export) and key
+   equivalents need the app active (verified above), so those steps stop
+   with `needs_foreground` and ask the user for a short, announced
+   foreground step instead of taking it. Measure how much of each pilot
+   desktop task then runs without the foreground.
 2. **Next, medium:** route keys and text through `postToPid` in background
    mode for apps that pass a per-app check (TextEdit, Numbers, Pages
    first), keeping hame's checks (focused element inside the target
@@ -148,9 +195,9 @@ untouched.
    a machine of their own, within the macOS licence terms.
 4. Keep the browser headless by default (already the case).
 
-Unverified here and worth a spike before committing: whether
-`SCScreenshotManager` returns content for minimized windows or windows on
-another Space; which of TextEdit, Numbers and Pages accept `postToPid`
-text with a background window; whether a second logged-in macOS user
-session (fast user switching) keeps AX and screen capture working while it
-is not the console session.
+Still unverified (deliberately not run on the user's machine): windows on
+another Space; a second logged-in macOS user session (fast user
+switching), which needs a new user account; Apple Events `save` in the
+background, which needs an Automation consent prompt; a Tart or Lume VM
+(a 25 GB image); Cua Driver itself; pixel clicks into background windows
+(only the private `SLEventPostToPid` route is known to work).
