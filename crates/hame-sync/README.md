@@ -112,14 +112,17 @@ string variants are normalised; percent-encoded or otherwise odd forms) is
 refused.
 
 **Interim remote policy** (until hame-web enforces its own for requests
-carrying `RemoteCaller`): `hame connect` builds the router with `yes`
-off and refuses to start when `[approval] reviewer = true`,
-`[approval] default = "allow"` or a full-access sandbox is configured; the
-connector refuses any remote request whose body asks for full access
-(403), limits each device to 32 running requests, 8 subscriptions and 10
-new sessions a minute. When hame-web's policy lands, replace the
-`RemoteCaller` struct in `connector.rs` with its type (or convert in
-`mark_remote`) and relax `check_remote_policy` in `hame connect`.
+carrying `RemoteCaller`): `hame connect` builds every session of its
+router with `hame_app::Options::ask_before_changes`, so each call that is
+not read-only asks the user, whatever the configuration says when the
+session is built (`yes`, the reviewer model, `[approval] default` and
+allow rules are ignored; ask and deny rules apply); the sandbox mode is
+pinned at startup and full access is refused; the connector refuses any
+remote request whose body asks for full access (403) and limits each
+device to 32 running requests, 8 subscriptions and 10 new sessions a
+minute. When hame-web's policy lands, replace the `RemoteCaller` struct in
+`connector.rs` with its type (or convert in `mark_remote`) and move this
+policy to its `[remote]` settings, keeping the stricter default.
 
 ## What the host connector exposes
 

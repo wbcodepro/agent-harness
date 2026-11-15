@@ -100,6 +100,11 @@ pub struct Options {
     pub network: Option<NetworkMode>,
     /// Answer every approval question with yes.
     pub yes: bool,
+    /// Ask before every call that is not read-only, whatever the
+    /// configuration says: `yes`, the reviewer model, `[approval] default`
+    /// and rules that allow are all ignored (rules that ask or deny still
+    /// apply). For sessions driven from another device (`hame connect`).
+    pub ask_before_changes: bool,
     /// `deepseek`, `openai` or `anthropic`. Defaults to the configuration,
     /// then to whichever provider a key is available for.
     pub provider: Option<String>,
@@ -535,9 +540,10 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     } else {
         Arc::new(Always(None))
     };
-    let prompter: Arc<dyn Prompter> = if options.yes {
+    let strict = options.ask_before_changes;
+    let prompter: Arc<dyn Prompter> = if options.yes && !strict {
         Arc::new(Always(Some(true)))
-    } else if config.approval.reviewer {
+    } else if config.approval.reviewer && !strict {
         Arc::new(reviewer::Reviewer {
             llm: Arc::clone(&summarizer),
             human,
@@ -547,16 +553,35 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     } else {
         human
     };
-    pipeline.push(ApprovalLayer {
-        rules: config.rules.clone(),
-        default: options
-            .approval_default
-            .or(config.approval.default)
-            .unwrap_or(if policy.is_confined() {
-                RuleAction::Allow
+    let configured = options
+        .approval_default
+        .or(config.approval.default)
+        .unwrap_or(if policy.is_confined() {
+            RuleAction::Allow
+        } else {
+            RuleAction::Ask
+        });
+    let (rules, default) = if strict {
+        // Ask at least; a mode or configuration that denies still denies.
+        (
+            config
+                .rules
+                .iter()
+                .filter(|rule| rule.action != RuleAction::Allow)
+                .cloned()
+                .collect(),
+            if configured == RuleAction::Deny {
+                RuleAction::Deny
             } else {
                 RuleAction::Ask
-            }),
+            },
+        )
+    } else {
+        (config.rules.clone(), configured)
+    };
+    pipeline.push(ApprovalLayer {
+        rules,
+        default,
         prompter,
     });
 

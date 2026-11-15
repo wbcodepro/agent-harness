@@ -2,10 +2,12 @@
 //! through the relay, end-to-end encrypted (docs/design/APPS-AND-SYNC.md).
 //!
 //! Remote policy, until hame-web enforces its own for requests marked with
-//! `RemoteCaller`: the host refuses to start when its configuration would
-//! let approvals be answered without the user (`yes`, the reviewer model,
-//! `[approval] default = "allow"`) or would run tools with full access;
-//! remote requests asking for full access are refused by the connector.
+//! `RemoteCaller`: every session the connector's router builds asks before
+//! each call that is not read-only (`Options::ask_before_changes`: no `yes`,
+//! no reviewer model, no `[approval] default`, no allow rules), whatever the
+//! configuration says when the session is built; the sandbox mode is pinned
+//! at startup and the host refuses to start with full access; remote
+//! requests asking for full access are refused by the connector.
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -95,7 +97,7 @@ pub async fn connect(home: &Path, args: ConnectArgs) -> Result<ExitCode, String>
         None => {}
     }
 
-    check_remote_policy(home)?;
+    let sandbox = check_remote_policy(home)?;
     // The keys first: this refuses to go on with readable key files.
     let identity = store.identity().map_err(display)?;
     let name = args.name.clone().unwrap_or_else(host_name);
@@ -112,28 +114,14 @@ pub async fn connect(home: &Path, args: ConnectArgs) -> Result<ExitCode, String>
         }
     };
     drop(identity);
-    run(home, store, config, &args).await
+    run(home, store, config, &args, sandbox).await
 }
 
-/// Refuses configurations that would answer remote approvals without the
-/// user or run remote turns with full access (interim, see the module
-/// documentation).
-fn check_remote_policy(home: &Path) -> Result<(), String> {
+/// The sandbox mode remote sessions run in, pinned at startup (a later
+/// change to the configuration does not reach them). Full access is
+/// refused (interim, see the module documentation).
+fn check_remote_policy(home: &Path) -> Result<hame_app::SandboxMode, String> {
     let config = hame_app::load_config(home)?;
-    if config.approval.reviewer {
-        return Err(
-            "[approval] reviewer = true lets a model answer approval questions; hame connect \
-             does not run with it until the remote policy lands. Turn it off to connect."
-                .into(),
-        );
-    }
-    if config.approval.default == Some(hame_policy::RuleAction::Allow) {
-        return Err(
-            "[approval] default = \"allow\" would let remote turns run without asking; hame \
-             connect does not run with it."
-                .into(),
-        );
-    }
     if config.sandbox.mode == hame_app::SandboxMode::DangerFullAccess {
         return Err(
             "the sandbox is configured for full access; hame connect does not give remote \
@@ -141,7 +129,18 @@ fn check_remote_policy(home: &Path) -> Result<(), String> {
                 .into(),
         );
     }
-    Ok(())
+    Ok(config.sandbox.mode)
+}
+
+/// The options every remote session is built with.
+fn remote_options(sandbox: hame_app::SandboxMode) -> hame_app::Options {
+    hame_app::Options {
+        max_steps: 0,
+        yes: false,
+        ask_before_changes: true,
+        sandbox: Some(sandbox),
+        ..hame_app::Options::default()
+    }
 }
 
 fn same_url(a: &str, b: &str) -> bool {
@@ -312,17 +311,14 @@ async fn run(
     store: HostStore,
     config: RelayConfig,
     args: &ConnectArgs,
+    sandbox: hame_app::SandboxMode,
 ) -> Result<ExitCode, String> {
     let cwd = std::env::current_dir()
         .and_then(|cwd| hame_kernel::real_path(&cwd))
         .map_err(display)?;
     // Approvals are never answered automatically for a remote host.
-    let options = hame_app::Options {
-        max_steps: 0,
-        yes: false,
-        ..hame_app::Options::default()
-    };
-    let (router, web_token) = hame_web::router(home.to_path_buf(), cwd.clone(), options);
+    let (router, web_token) =
+        hame_web::router(home.to_path_buf(), cwd.clone(), remote_options(sandbox));
     let tokens = Tokens::new(store.clone(), config.clone());
     let (relay, events) = hame_sync::relay::connect(RelayOptions::new(
         &config.url,
@@ -489,16 +485,17 @@ mod tests {
     }
 
     #[test]
-    fn auto_approving_or_full_access_configurations_are_refused() {
+    fn full_access_is_refused_and_remote_sessions_always_ask() {
         let home = tempfile::tempdir().unwrap();
         assert!(check_remote_policy(home.path()).is_ok());
-        for config in [
-            "[approval]\nreviewer = true\n",
-            "[approval]\ndefault = \"allow\"\n",
+        std::fs::write(
+            home.path().join("config.toml"),
             "[sandbox]\nmode = \"danger-full-access\"\n",
-        ] {
-            std::fs::write(home.path().join("config.toml"), config).unwrap();
-            assert!(check_remote_policy(home.path()).is_err(), "{config}");
-        }
+        )
+        .unwrap();
+        assert!(check_remote_policy(home.path()).is_err());
+        let options = remote_options(hame_app::SandboxMode::WorkspaceWrite);
+        assert!(options.ask_before_changes && !options.yes);
+        assert_eq!(options.sandbox, Some(hame_app::SandboxMode::WorkspaceWrite));
     }
 }
