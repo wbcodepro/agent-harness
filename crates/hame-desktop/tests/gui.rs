@@ -556,16 +556,18 @@ async fn return_in_the_save_panel_needs_commit_and_file_write() {
             ]),
         ));
         gui.ok(json!({"action": "focus", "ref": area})).await;
+        // A digit starts the typed line: macOS text substitution capitalises
+        // a typed sentence start ("second" became "Second" on save).
         let typed = typist
             .call(
                 &json!({"action": "type", "app": TEXTEDIT, "window": doc, "role": "textarea",
-                        "text": "\nsecond line"}),
+                        "text": "\n2nd line"}),
                 &gui.ctx,
             )
             .await;
         assert!(!typed.is_error, "{}", typed.text);
         gui.ok(json!({"action": "wait", "ref": area, "until": "value",
-                      "value": "first line\nsecond line"}))
+                      "value": "first line\n2nd line"}))
             .await;
 
         // Open the save panel and point it at the folder, with full grants.
@@ -656,7 +658,7 @@ async fn return_in_the_save_panel_needs_commit_and_file_write() {
                       "until": "title", "contains": "hame-return"}))
             .await;
         assert!(saved.is_file());
-        assert_eq!(plain_text(&saved).trim_end(), "first line\nsecond line");
+        assert_eq!(plain_text(&saved).trim_end(), "first line\n2nd line");
         let key = gui
             .receipts()
             .into_iter()
