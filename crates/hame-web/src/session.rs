@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, broadcast, oneshot};
 
+use crate::activity::{Activity, Reporter};
 use crate::meta::Mode;
 
 /// One event for the pages watching a session. Records carry their `seq`,
@@ -77,11 +78,14 @@ pub struct Channel {
     /// computer, the device's label for a remote one. Kept in step with the
     /// steering queue (see [`Channel::settle_origins`]).
     pub origins: Mutex<Vec<Option<String>>>,
+    /// The session's activity, for an app embedding the server.
+    pub reporter: Reporter,
 }
 
 impl Channel {
-    pub fn new(mode: Mode, cwd: PathBuf) -> Self {
+    pub fn new(mode: Mode, cwd: PathBuf, reporter: Reporter) -> Self {
         Self {
+            reporter,
             events: broadcast::channel(4096).0,
             approvals: Mutex::new(BTreeMap::new()),
             next_approval: AtomicU64::new(1),
@@ -233,9 +237,18 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub fn new(id: String, cwd: PathBuf, mode: Mode) -> Self {
+    pub fn new(
+        id: String,
+        cwd: PathBuf,
+        mode: Mode,
+        activity: broadcast::Sender<Activity>,
+    ) -> Self {
         Self {
-            channel: Arc::new(Channel::new(mode, cwd.clone())),
+            channel: Arc::new(Channel::new(
+                mode,
+                cwd.clone(),
+                Reporter::new(id.clone(), activity),
+            )),
             id,
             cwd,
             live: Arc::new(tokio::sync::Mutex::new(None)),
@@ -405,6 +418,11 @@ impl Prompter for PagePrompter {
                 },
             );
             channel.send(event);
+            channel.reporter.report(|session| Activity::Approval {
+                session,
+                tool: request.name.clone(),
+                question: question.clone(),
+            });
             // A page that goes away without answering has not approved.
             answered.await.ok().flatten()
         })
@@ -420,6 +438,10 @@ pub async fn run_turns(
     mut content: Vec<Block>,
     cancel: Arc<TurnCancel>,
 ) {
+    entry
+        .channel
+        .reporter
+        .report(|session| Activity::TurnStarted { session });
     loop {
         let mut error = None;
         if !cancel.is_cancelled() {
@@ -470,6 +492,15 @@ pub async fn run_turns(
         entry
             .channel
             .send(json!({"kind": "turn", "state": "ended", "error": error}));
+        let cancelled = cancel.is_cancelled();
+        entry
+            .channel
+            .reporter
+            .report(|session| Activity::TurnEnded {
+                session,
+                error,
+                cancelled,
+            });
         return;
     }
 }
@@ -509,7 +540,11 @@ mod tests {
 
     #[test]
     fn origins_follow_the_queue_and_a_taken_remote_message_marks_the_run() {
-        let channel = Channel::new(Mode::Ask, PathBuf::from("."));
+        let channel = Channel::new(
+            Mode::Ask,
+            PathBuf::from("."),
+            Reporter::new("s".into(), broadcast::channel(4).0),
+        );
         let mut origins = vec![None, Some("phone".to_string())];
         // Nothing taken: unchanged.
         channel.settle_origins(&mut origins, 2);

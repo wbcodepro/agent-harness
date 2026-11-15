@@ -172,6 +172,17 @@ pub async fn start_with(
     delay_ms: u64,
     change: impl FnOnce(&mut Options),
 ) -> Page {
+    serve(dir, responses, delay_ms, change).await.1
+}
+
+/// Like `start_with`, also returning the server, for what an app embedding
+/// it reads.
+pub async fn serve(
+    dir: &std::path::Path,
+    responses: Vec<ScriptedResponse>,
+    delay_ms: u64,
+    change: impl FnOnce(&mut Options),
+) -> (hame_web::WebServer, Page) {
     let work = dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
     let mut options = Options {
@@ -187,13 +198,14 @@ pub async fn start_with(
     let server = hame_web::start(dir.join("home"), work, options, 0)
         .await
         .unwrap();
-    Page {
+    let page = Page {
         http: reqwest::Client::builder().no_proxy().build().unwrap(),
         base: format!("http://{}", server.addr),
         token: server.token.clone(),
         dir: dir.to_path_buf(),
         router: server.router(),
-    }
+    };
+    (server, page)
 }
 
 pub fn write_call(path: &str) -> ScriptedResponse {

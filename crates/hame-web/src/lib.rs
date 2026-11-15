@@ -52,6 +52,7 @@
 //! Choosing "Full access" takes two requests: the first is answered `428`
 //! with a one-time `confirm` nonce, and the second must echo it.
 
+mod activity;
 mod assets;
 mod caller;
 pub mod jcs;
@@ -78,6 +79,7 @@ use hame_app::{Options, RuleAction, SandboxMode};
 use hame_session::{Event, Record, SessionId};
 use serde_json::{Value, json};
 
+pub use activity::{Activity, RunningTurn};
 pub use caller::{Caller, RemoteCaller, mark_remote};
 pub use meta::Mode;
 use meta::{MetaStore, SessionMeta};
@@ -156,6 +158,7 @@ pub(crate) struct App {
     overviews: OverviewCache,
     /// One-time nonces for choosing "Full access": nonce → (scope, issued).
     confirmations: Mutex<HashMap<String, (String, Instant)>>,
+    activity: tokio::sync::broadcast::Sender<Activity>,
 }
 
 /// A running server.
@@ -163,6 +166,7 @@ pub struct WebServer {
     pub addr: SocketAddr,
     pub token: String,
     router: Router,
+    app: Arc<App>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -182,6 +186,81 @@ impl WebServer {
     pub async fn wait(self) {
         let _ = self.task.await;
     }
+
+    /// Turns starting and ending and approval questions, in every session,
+    /// from now on.
+    pub fn activity(&self) -> tokio::sync::broadcast::Receiver<Activity> {
+        self.app.activity.subscribe()
+    }
+
+    fn busy(&self) -> Vec<Arc<Entry>> {
+        self.app
+            .sessions
+            .lock()
+            .expect("sessions")
+            .values()
+            .filter(|entry| entry.busy.load(Ordering::SeqCst))
+            .cloned()
+            .collect()
+    }
+
+    /// How many sessions have a turn running. Reads no log.
+    pub fn running_count(&self) -> usize {
+        self.busy().len()
+    }
+
+    /// The sessions with a turn running, oldest session first, with their
+    /// titles (read from the logs, cached).
+    pub fn running(&self) -> Vec<RunningTurn> {
+        let mut running: Vec<RunningTurn> = self
+            .busy()
+            .into_iter()
+            .map(|entry| RunningTurn {
+                title: self.title(&entry.id),
+                needs_you: !entry
+                    .channel
+                    .approvals
+                    .lock()
+                    .expect("approvals")
+                    .is_empty(),
+                session: entry.id.clone(),
+            })
+            .collect();
+        // Session ids begin with their creation time.
+        running.sort_by(|a, b| a.session.cmp(&b.session));
+        running
+    }
+
+    /// A session's title: the one the user gave it, else the one from its
+    /// first message. `None` for an unknown session or one with no message.
+    pub fn title(&self, session: &str) -> Option<String> {
+        if let Some(title) = self.app.meta.get(session).title {
+            return Some(title);
+        }
+        let id = SessionId::parse(session).ok()?;
+        self.app.overview_of(&id).title
+    }
+
+    /// Stops every running turn, as the stop button does, and waits up to
+    /// `wait` for them to end. Returns how many are still running.
+    pub async fn stop_turns(&self, wait: Duration) -> usize {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let busy = self.busy();
+            // A run's stop handle is set together with `busy`, and a stop
+            // asked for before the run waits on it is kept; asking again
+            // each round also covers a run that started meanwhile.
+            for entry in &busy {
+                if let Some(cancel) = entry.cancel.lock().expect("cancel").clone() {
+                    cancel.cancel();
+                }
+            }
+            if busy.is_empty() || tokio::time::Instant::now() >= deadline {
+                return busy.len();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
 }
 
 /// Starts serving on 127.0.0.1. `port` 0 picks a free one. New sessions
@@ -192,11 +271,32 @@ pub async fn start(
     options: Options,
     port: u16,
 ) -> Result<WebServer, String> {
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    start_with_token(home, cwd, options, port, token).await
+}
+
+/// Like [`start`], with the token the API must be called with chosen by
+/// the caller (the desktop app makes a fresh one per launch). It must be at
+/// least 32 characters of letters, digits, `-` and `_`.
+pub async fn start_with_token(
+    home: PathBuf,
+    cwd: PathBuf,
+    options: Options,
+    port: u16,
+    token: String,
+) -> Result<WebServer, String> {
+    if token.len() < 32
+        || !token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err("the token must be at least 32 letters, digits, '-' or '_'".into());
+    }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|e| format!("cannot listen on port {port}: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
-    let (router, token) = router(home, cwd, options);
+    let (router, app) = build(home, cwd, options, token.clone());
     let serving = router.clone();
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, serving).await;
@@ -205,6 +305,7 @@ pub async fn start(
         addr,
         token,
         router,
+        app,
         task,
     })
 }
@@ -216,6 +317,11 @@ pub async fn start(
 /// inside a Tokio runtime (it starts the task that releases idle agents).
 pub fn router(home: PathBuf, cwd: PathBuf, options: Options) -> (Router, String) {
     let token = uuid::Uuid::new_v4().simple().to_string();
+    let (router, _) = build(home, cwd, options, token.clone());
+    (router, token)
+}
+
+fn build(home: PathBuf, cwd: PathBuf, options: Options, token: String) -> (Router, Arc<App>) {
     let idle = hame_app::load_config(&home)
         .map(|config| config.web.idle_seconds)
         .unwrap_or(600);
@@ -224,10 +330,11 @@ pub fn router(home: PathBuf, cwd: PathBuf, options: Options) -> (Router, String)
         home,
         cwd,
         options,
-        token: token.clone(),
+        token,
         sessions: Mutex::new(HashMap::new()),
         overviews: OverviewCache::default(),
         confirmations: Mutex::new(HashMap::new()),
+        activity: tokio::sync::broadcast::channel(256).0,
     });
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         let sweeper = Arc::downgrade(&app);
@@ -271,8 +378,8 @@ pub fn router(home: PathBuf, cwd: PathBuf, options: Options) -> (Router, String)
     let router = Router::new()
         .nest("/api", api)
         .fallback(assets::serve)
-        .with_state(app);
-    (router, token)
+        .with_state(Arc::clone(&app));
+    (router, app)
 }
 
 /// Lets through requests the relay connector marked as remote (they never
@@ -298,7 +405,8 @@ async fn guard(
         .get("x-hame-token")
         .and_then(|value| value.to_str().ok())
         .or(query.get("token").map(String::as_str));
-    if !local || presented != Some(app.token.as_str()) {
+    let matches = presented.is_some_and(|presented| same_secret(presented, &app.token));
+    if !local || !matches {
         return (StatusCode::FORBIDDEN, "missing or wrong token").into_response();
     }
     next.run(request).await
@@ -327,6 +435,16 @@ pub(crate) async fn retry_locked<T>(
             done => return done,
         }
     }
+}
+
+/// Compares a presented token with the real one in time that does not
+/// depend on where they first differ.
+fn same_secret(presented: &str, token: &str) -> bool {
+    let (a, b) = (presented.as_bytes(), token.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
 /// `~/x` with the home folder.
@@ -400,7 +518,14 @@ impl App {
         let meta = self.meta.get(id);
         let mut sessions = self.sessions.lock().expect("sessions");
         Ok(Arc::clone(sessions.entry(id.to_string()).or_insert_with(
-            || Arc::new(Entry::new(id.to_string(), cwd, meta.mode)),
+            || {
+                Arc::new(Entry::new(
+                    id.to_string(),
+                    cwd,
+                    meta.mode,
+                    self.activity.clone(),
+                ))
+            },
         )))
     }
 
@@ -788,5 +913,18 @@ impl App {
                 && entry.uploads.lock().expect("uploads").files.is_empty();
             !unused
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_secret;
+
+    #[test]
+    fn tokens_are_compared_whole() {
+        assert!(same_secret("abc123", "abc123"));
+        assert!(!same_secret("abc124", "abc123"));
+        assert!(!same_secret("abc12", "abc123"));
+        assert!(!same_secret("", "abc123"));
     }
 }
