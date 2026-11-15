@@ -43,7 +43,7 @@ const PATTERNS: [(Severity, &str, &str); 12] = [
     ),
     (
         Severity::Danger,
-        r"(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba|z|da)?sh\b",
+        r"\b(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba|z|da)?sh\b",
         "pipes a download into a shell",
     ),
     (
@@ -58,12 +58,12 @@ const PATTERNS: [(Severity, &str, &str); 12] = [
     ),
     (
         Severity::Danger,
-        r"(curl|wget|nc|ncat)\b[^\n]*(\$\(|`)\s*(cat|env|printenv|security\s+find)",
+        r"\b(curl|wget|nc|ncat)\b[^\n]*(\$\(|`)\s*(cat|env|printenv|security\s+find)",
         "sends the output of reading files or the environment over the network",
     ),
     (
         Severity::Notice,
-        r"(curl|wget)\b[^\n]*\s(-d|--data\S*|-F|--form|-T|--upload-file)\s",
+        r"\b(curl|wget)\b[^\n]*\s(-d|--data\S*|-F|--form|-T|--upload-file)\s",
         "uploads data with curl or wget",
     ),
     (
@@ -618,6 +618,18 @@ mod tests {
         assert!(
             findings.iter().all(|f| f.severity == Severity::Notice),
             "{findings:?}"
+        );
+        // "sync" is not nc, and a backtick before `environments` is not
+        // reading the environment.
+        let words = tempfile::tempdir().unwrap();
+        skill(
+            words.path(),
+            "**Configure sync** - two `EnvironmentWorker` options (`client.beta.environments`).\n",
+        );
+        assert!(
+            scan(words.path())
+                .iter()
+                .all(|f| f.severity == Severity::Notice)
         );
         let trap = tempfile::tempdir().unwrap();
         skill(
