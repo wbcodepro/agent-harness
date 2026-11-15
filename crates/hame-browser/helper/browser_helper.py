@@ -34,7 +34,7 @@ CONTRACT = 1
 VERSION = "0.1.0"
 OPERATIONS = [
     "open", "navigate", "back", "observe", "inspect", "act", "wait", "extract",
-    "screenshot", "tabs", "dialog", "close", "check",
+    "screenshot", "tabs", "dialog", "close", "check", "state",
 ]
 
 # The real stdout carries the protocol; anything printed by accident goes to
@@ -1286,6 +1286,15 @@ class Helper:
         info = await self.tab_info(tab)
         info["passed"] = not problems
         info["problems"] = problems
+        return info
+
+    async def op_state(self, req):
+        """Read-only page state for outcome verification: URL, title and
+        visible text, with no refs and no side effects."""
+        tab = self.tab(req)
+        body = await tab.page.evaluate("() => document.body ? document.body.innerText : ''")
+        info = await self.tab_info(tab)
+        info["text"] = body[:200000]
         return info
 
     async def op_extract(self, req):

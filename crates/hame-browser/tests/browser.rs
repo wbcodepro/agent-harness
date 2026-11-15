@@ -576,6 +576,32 @@ async fn b05_a_preference_changes_in_one_profile_only() {
         "{}",
         tabs.text
     );
+    // Outcome verification reads each profile's page without refs.
+    let state_a = env
+        .tool
+        .page_state(Some("session-1"), Some("a"))
+        .await
+        .unwrap();
+    assert_eq!(state_a.profile.as_deref(), Some("a"));
+    assert!(state_a.url.ends_with("/prefs"), "{}", state_a.url);
+    assert!(
+        state_a.text.contains("Current theme: dark"),
+        "{}",
+        state_a.text
+    );
+    let state_b = env
+        .tool
+        .page_state(Some("session-1"), Some("b"))
+        .await
+        .unwrap();
+    assert!(
+        state_b.text.contains("Current theme: light"),
+        "{}",
+        state_b.text
+    );
+    // Another session cannot read this session's tabs.
+    assert!(env.tool.page_state(Some("other"), Some("a")).await.is_err());
+
     env.ok(json!({"action": "close", "profile": "b"})).await;
     let tabs = env.ok(json!({"action": "tabs"})).await;
     assert!(!tabs.text.contains("profile=b"), "{}", tabs.text);

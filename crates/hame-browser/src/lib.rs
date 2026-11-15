@@ -341,6 +341,15 @@ struct State {
 }
 
 /// The `browser` tool.
+/// A page as [`BrowserTool::page_state`] reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageState {
+    pub url: String,
+    pub title: String,
+    pub profile: Option<String>,
+    pub text: String,
+}
+
 pub struct BrowserTool {
     config: BrowserConfig,
     authorization: RwLock<Authorization>,
@@ -600,6 +609,37 @@ impl BrowserTool {
             0 => None,
             pid => Some(pid),
         }
+    }
+
+    /// What a session's current tab shows: URL, profile and visible text.
+    /// Read-only and outside the action journal; used to verify a task's
+    /// outcome independently of what the acting model reported. With a
+    /// profile, the session's latest tab in that profile.
+    pub async fn page_state(
+        &self,
+        session: Option<&str>,
+        profile: Option<&str>,
+    ) -> Result<PageState, String> {
+        let mut st = self.state.lock().await;
+        let mut ctx = ToolContext::new(".");
+        ctx.session_id = session.map(String::from);
+        let args = Args {
+            profile: profile.map(String::from),
+            ..Args::default()
+        };
+        let tab = self
+            .pick_tab(&st, &ctx, &args)
+            .map_err(|f| f.message.clone())?;
+        let reply = self
+            .send(&mut st, json!({"op": "state", "tab": tab}), 10_000)
+            .await
+            .map_err(|f| f.message.clone())?;
+        Ok(PageState {
+            url: reply["url"].as_str().unwrap_or_default().to_string(),
+            title: reply["title"].as_str().unwrap_or_default().to_string(),
+            profile: reply["profile"].as_str().map(String::from),
+            text: reply["text"].as_str().unwrap_or_default().to_string(),
+        })
     }
 
     /// Closes the browsers cleanly, so profiles are flushed to disk, and
