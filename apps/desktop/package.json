@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "node scripts/build-release.mjs",
-    "build:app": "tauri build --bundles app --config src-tauri/tauri.local.conf.json",
+    "build:app": "HAME_ALLOW_ADHOC=1 tauri build --bundles app --config src-tauri/tauri.local.conf.json",
     "build:debug": "tauri build --debug --config src-tauri/tauri.local.conf.json",
-    "build:smoke": "CARGO_TARGET_DIR=target/smoke tauri build --bundles app --features smoke --config src-tauri/tauri.smoke.conf.json",
+    "build:smoke": "HAME_ALLOW_ADHOC=1 CARGO_TARGET_DIR=target/smoke tauri build --bundles app --features smoke --config src-tauri/tauri.smoke.conf.json",
     "icons": "tauri icon icons/hame.svg --output src-tauri/icons && tauri icon icons/tray.svg --output icons/.tray --png 44 && node -e \"const fs=require('fs');fs.copyFileSync('icons/.tray/44x44.png','src-tauri/icons/tray-template.png');for(const d of ['icons/.tray','src-tauri/icons/ios','src-tauri/icons/android'])fs.rmSync(d,{recursive:true,force:true});for(const f of fs.readdirSync('src-tauri/icons'))if(/^Square|^StoreLogo/.test(f))fs.rmSync('src-tauri/icons/'+f)\"",
     "tauri": "tauri"
   },

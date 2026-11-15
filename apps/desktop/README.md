@@ -138,7 +138,12 @@ links instead of opening them).
   behave like signed ones (such a bundle runs only on the machine that
   built it). `npm run build` (`scripts/build-release.mjs`) refuses to run
   on macOS without `APPLE_SIGNING_IDENTITY`, and fails if the bundle it
-  made is signed ad hoc anyway. `build:smoke` merges
+  made (found under the Cargo target folder, `CARGO_TARGET_DIR` and
+  `--target` included) is signed ad hoc anyway, or if it finds none.
+  `src-tauri/build.rs` refuses a macOS release build without
+  `APPLE_SIGNING_IDENTITY` too, so a direct `tauri build` is covered,
+  unless `HAME_ALLOW_ADHOC=1` marks a local build (`build:app` and
+  `build:smoke` set it). `build:smoke` merges
   `src-tauri/tauri.smoke.conf.json`: ad hoc, and the identifier
   `io.github.wbcodepro.hame.smoke`, so a smoke build has its own
   single-instance lock, data folder, permission grants and login item.
@@ -169,6 +174,7 @@ links instead of opening them).
 |---|---|
 | `HAME_HOME` | data directory, as for `hame` |
 | `HAME_SCRIPT`, `HAME_SCRIPT_DELAY_MS` | replay a recorded model (tests; no provider is called) |
+| `HAME_ALLOW_ADHOC` | `1` lets a macOS release build go without `APPLE_SIGNING_IDENTITY` (local ad-hoc builds; `npm run build` removes it) |
 | `HAME_DESKTOP_INFO_FILE` | `smoke` builds only: the app writes `{pid, addr, token}` to this new file (mode 0600; an existing file or link is refused) once it serves. Release builds ignore it. |
 
 ### Permissions (macOS)
@@ -181,8 +187,11 @@ permission is missing it is refused at once (`permission_denied`, naming
 hame) and nothing is sent. The app then asks macOS to prompt for it (which
 lists hame in System Settings) and shows where to switch it on, with an
 "Open Settings" button, once per permission and launch. Accessibility
-granted meanwhile is seen at the next call; for Screen Recording the tool
-starts a fresh helper, since macOS reads it once per process.
+granted meanwhile is seen at the next call. Screen Recording is read once
+per process, so a refused screenshot has a separate, short-lived helper
+look (at most every 10 s, and not while the working helper keeps the
+user's saved clipboard); it takes over only if it has access, and the
+working helper with its state stays otherwise.
 
 macOS ties these grants to the app's signature. For an ad-hoc build that is
 the exact build: after a rebuild, System Settings still shows hame switched
@@ -228,7 +237,8 @@ repository.
   keep the private key out of the repository (`TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the release environment). Build
   releases with the feature and a configuration merged in, for example
-  `npx tauri build --features updater --config updater.conf.json`:
+  `npm run build -- --features updater --config updater.conf.json` (with
+  `APPLE_SIGNING_IDENTITY` set on macOS):
 
   ```json
   {

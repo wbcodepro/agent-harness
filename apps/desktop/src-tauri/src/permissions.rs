@@ -5,8 +5,8 @@
 //! refused for lack of one, the app asks macOS to prompt for it (which also
 //! lists hame in System Settings) and explains where to switch it on, once
 //! per permission and launch. A grant of Accessibility is seen by the
-//! running helper; for Screen Recording the tool starts a fresh helper on
-//! the next screenshot, since macOS reads it once per process.
+//! running helper; for Screen Recording, which macOS reads once per
+//! process, the tool has a separate helper look on a later screenshot.
 
 use std::collections::HashSet;
 use std::sync::Mutex;

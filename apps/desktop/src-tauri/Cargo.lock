@@ -2383,6 +2383,7 @@ dependencies = [
  "hame-tools",
  "hame-verify",
  "include_dir",
+ "ryu",
  "serde",
  "serde_json",
  "sha2",
