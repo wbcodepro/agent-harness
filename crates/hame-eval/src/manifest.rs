@@ -220,7 +220,16 @@ pub const MANIFEST_FILE: &str = "manifest.toml";
 
 /// Loads a manifest file, a directory holding `manifest.toml`, or a
 /// directory of `task.toml` tasks. `filter` keeps tasks whose id contains
-/// it.
+/// it, or any of its comma-separated parts (`B0,D01,D02`).
+/// Whether a task id contains `filter` or one of its comma-separated parts.
+fn id_matches(id: &str, filter: &str) -> bool {
+    filter
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .any(|part| id.contains(part))
+}
+
 pub fn load(path: &Path, filter: Option<&str>) -> Result<TaskSet, String> {
     let manifest = if path.is_file() {
         Some(path.to_path_buf())
@@ -234,7 +243,7 @@ pub fn load(path: &Path, filter: Option<&str>) -> Result<TaskSet, String> {
         None => load_legacy(path)?,
     };
     set.tasks
-        .retain(|task| filter.is_none_or(|f| task.id.contains(f)));
+        .retain(|task| filter.is_none_or(|f| id_matches(&task.id, f)));
     if set.tasks.is_empty() {
         return Err(format!("no tasks found in {}", path.display()));
     }
@@ -433,6 +442,15 @@ pub fn tree_hash(root: &Path) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_filter_may_list_several_ids() {
+        assert!(id_matches("B03", "B0"));
+        assert!(id_matches("D02", "B0, D01,D02"));
+        assert!(!id_matches("D05", "B0,D01,D02"));
+        assert!(!id_matches("D05", ","));
+    }
+
     use super::*;
 
     const MANIFEST: &str = r#"

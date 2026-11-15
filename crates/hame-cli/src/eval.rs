@@ -48,7 +48,8 @@ pub struct EvalArgs {
     /// Root of the provider's API, for a local or compatible server.
     #[arg(long)]
     base_url: Option<String>,
-    /// Only run tasks whose name contains this.
+    /// Only run tasks whose id contains this, or any of its
+    /// comma-separated parts (e.g. `B0,D01,D02`).
     #[arg(long)]
     filter: Option<String>,
     /// Seconds allowed per task. Defaults to the task's own limit, then
@@ -1741,7 +1742,8 @@ pub struct ProbeArgs {
     /// Root of the provider's API, for a local or compatible server.
     #[arg(long)]
     base_url: Option<String>,
-    /// Only run tasks whose name contains this.
+    /// Only run tasks whose id contains this, or any of its
+    /// comma-separated parts (e.g. `B0,D01,D02`).
     #[arg(long)]
     filter: Option<String>,
     /// Seconds allowed per task.
