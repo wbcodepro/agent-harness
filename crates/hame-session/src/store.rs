@@ -78,7 +78,8 @@ impl SessionStore {
             .join(crate::contract::ACTION_JOURNAL_FILE)
     }
 
-    fn log_path(&self, id: &SessionId) -> PathBuf {
+    /// Where the log of session `id` is (whether or not it exists).
+    pub fn log_path(&self, id: &SessionId) -> PathBuf {
         self.root.join(id.as_str()).join(LOG_FILE)
     }
 
@@ -270,6 +271,51 @@ impl SessionStore {
             Err(e) => return Err(e.into()),
         };
         Ok(parse_log(&bytes)?.records)
+    }
+
+    /// Marks the log as written in this build's format, before an event
+    /// only this version knows (such as `mode/changed`) is appended to an
+    /// older log: an older build then refuses the log as newer instead of
+    /// reporting it as corrupt. Only the header record is rewritten, into a
+    /// temporary file that is synced and renamed over the log, under the
+    /// session's lock (`Locked` while the session is open elsewhere).
+    /// Returns whether anything changed.
+    pub fn upgrade_format(&self, id: &SessionId) -> Result<bool, SessionError> {
+        let dir = self.root.join(id.as_str());
+        let _held = lock(&dir, id)?;
+        let path = self.log_path(id);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(SessionError::NotFound(id.clone()));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let corrupt = |reason: String| SessionError::Corrupt { line: 1, reason };
+        let end = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .ok_or_else(|| corrupt("the header is incomplete".into()))?;
+        let mut record: Record =
+            serde_json::from_slice(&bytes[..end]).map_err(|e| corrupt(e.to_string()))?;
+        let Event::Session(header) = &mut record.event else {
+            return Err(corrupt("the first record is not the header".into()));
+        };
+        if header.version >= FORMAT_VERSION {
+            return Ok(false);
+        }
+        header.version = FORMAT_VERSION;
+        let mut upgraded = serde_json::to_vec(&record).map_err(io::Error::other)?;
+        upgraded.extend_from_slice(&bytes[end..]);
+        let temp = dir.join(format!("{LOG_FILE}.upgrade.tmp"));
+        {
+            let mut file = File::create(&temp)?;
+            file.write_all(&upgraded)?;
+            file.sync_all()?;
+        }
+        fs::rename(&temp, &path)?;
+        sync_dir(&dir);
+        Ok(true)
     }
 
     /// Opens a session for appending, taking its exclusive lock.

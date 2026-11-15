@@ -326,13 +326,13 @@ fn corruption_before_the_tail_is_reported_not_repaired() {
         Err(SessionError::Corrupt { line: 4, .. })
     ));
 
-    let newer = original.replacen("\"version\":2", "\"version\":3", 1);
+    let newer = original.replacen("\"version\":3", "\"version\":4", 1);
     fs::write(&path, newer).unwrap();
     assert!(matches!(
         store.read(&id("s1")),
         Err(SessionError::UnsupportedVersion {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
     ));
     assert!(store.list().unwrap().is_empty());
@@ -432,4 +432,32 @@ fn a_fork_copies_a_prefix_and_closes_a_turn_cut_in_the_middle() {
         store.fork(&id("s1"), 10_000, options("s3")),
         Err(SessionError::ForkOutOfRange { .. })
     ));
+}
+
+#[test]
+fn an_older_log_is_marked_with_the_current_format_before_new_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    write_scenario(&store, "s1");
+    let path = dir.path().join("s1/session.v1.jsonl");
+    let current = format!("\"version\":{}", hame_session::FORMAT_VERSION);
+    let original = fs::read_to_string(&path).unwrap();
+    // As an older build wrote it.
+    fs::write(&path, original.replacen(&current, "\"version\":2", 1)).unwrap();
+    let before = store.read(&id("s1")).unwrap();
+
+    assert!(store.upgrade_format(&id("s1")).unwrap());
+    let after = store.read(&id("s1")).unwrap();
+    assert_eq!(after.len(), before.len(), "only the header changes");
+    assert_eq!(after[1..], before[1..]);
+    assert!(fs::read_to_string(&path).unwrap().contains(&current));
+    assert!(!store.upgrade_format(&id("s1")).unwrap(), "already current");
+
+    // Not while another process has the session open.
+    let (_, writer) = store.open(&id("s1")).unwrap();
+    assert!(matches!(
+        store.upgrade_format(&id("s1")),
+        Err(SessionError::Locked(_))
+    ));
+    drop(writer);
 }

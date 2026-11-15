@@ -10,6 +10,11 @@ are not shipped), and writes:
   licenses flagged;
 - docs/release/sbom.cdx.json: a CycloneDX 1.5 JSON SBOM of the same graph.
 
+Both also list the npm packages of the web interface (`apps/ui`) that are
+built into the page `hame web` embeds: the non-dev packages of
+`package-lock.json`. Their license texts ship with the page as
+`licenses.txt` (written by the build, see apps/ui/vite.config.ts).
+
 Usage (from anywhere in the repository):
     python3 -I scripts/license-report.py [--check]
 
@@ -176,22 +181,43 @@ def main():
     for rec in records:
         rec["status"], rec["chosen"] = verdict(rec["license"])
 
-    write_markdown(root, records, workspace_version)
-    write_sbom(root, crates, graph, workspace_version)
+    packages = npm_packages(root)
+    write_markdown(root, records, workspace_version, packages)
+    write_sbom(root, crates, graph, workspace_version, packages)
 
-    flagged = [r for r in records if r["status"] == "flagged"]
+    flagged = [r for r in records + packages if r["status"] == "flagged"]
     reviewed = [r for r in records if r["status"] == "reviewed"]
     print(f"{len(records)} third-party crates "
           f"({sum(r['linked'] for r in records)} linked into the binary, "
           f"{sum(not r['linked'] for r in records)} build-time only); "
           f"{len(reviewed)} reviewed, {len(flagged)} flagged")
+    print(f"{len(packages)} npm packages in the web interface; "
+          f"{sum(p['status'] == 'flagged' for p in packages)} flagged")
     for r in reviewed + flagged:
-        print(f"  {r['status']}: {r['name']} {r['version']}: {r['license'] or r['license_file']}")
+        print(f"  {r['status']}: {r['name']} {r['version']}: {r['license'] or r.get('license_file')}")
     if args.check and flagged:
         sys.exit(1)
 
 
 PLATFORM_LABELS = [label for _, label in PLATFORMS]
+
+
+def npm_packages(root):
+    """The npm packages built into the embedded web interface."""
+    path = os.path.join(root, "package-lock.json")
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        lock = json.load(f)
+    found = []
+    for key, pkg in lock.get("packages", {}).items():
+        if not key.startswith("node_modules/") or pkg.get("dev") or pkg.get("link"):
+            continue
+        name = key.rsplit("node_modules/", 1)[1]
+        rec = {"name": name, "version": pkg.get("version", ""), "license": pkg.get("license") or ""}
+        rec["status"], rec["chosen"] = verdict(rec["license"])
+        found.append(rec)
+    return sorted(found, key=lambda r: (r["name"], r["version"]))
 
 
 def platforms_text(rec):
@@ -200,7 +226,7 @@ def platforms_text(rec):
     return ", ".join(p for p in PLATFORM_LABELS if p in rec["platforms"])
 
 
-def write_markdown(root, records, version):
+def write_markdown(root, records, version, packages):
     path = os.path.join(root, "docs", "release", "THIRD-PARTY-LICENSES.md")
     linked = [r for r in records if r["linked"]]
     build = [r for r in records if not r["linked"]]
@@ -291,6 +317,19 @@ def write_markdown(root, records, version):
     ]
     for r in build:
         lines.append(row(r))
+    lines += [
+        "",
+        "## npm packages in the web interface",
+        "",
+        "Built into the page `hame web` serves (embedded in the binary). Their license texts "
+        "ship with it as `licenses.txt`, linked from the interface's About dialog.",
+        "",
+        "| Package | Version | License | Used under |",
+        "|---|---|---|---|",
+    ]
+    for p in packages:
+        mark = {"permissive": "", "reviewed": " (reviewed)", "flagged": " **(flagged)**"}[p["status"]]
+        lines.append(f"| `{p['name']}` | {p['version']} | `{p['license']}` | `{p['chosen']}`{mark} |")
     lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -307,7 +346,7 @@ def purl(rec):
     return f"pkg:cargo/{rec['name']}@{rec['version']}"
 
 
-def write_sbom(root, crates, graph, version):
+def write_sbom(root, crates, graph, version, packages):
     path = os.path.join(root, "docs", "release", "sbom.cdx.json")
     root_ref = f"pkg:cargo/hame-cli@{version}"
     components = []
@@ -327,6 +366,14 @@ def write_sbom(root, crates, graph, version):
         if rec["repository"]:
             comp["externalReferences"] = [{"type": "vcs", "url": rec["repository"]}]
         comp["properties"] = [{"name": "hame:platforms", "value": platforms_text(rec)}]
+        components.append(comp)
+    for p in packages:
+        ref = f"pkg:npm/{p['name'].replace('@', '%40')}@{p['version']}"
+        comp = {"type": "library", "bom-ref": ref, "name": p["name"], "version": p["version"],
+                "purl": ref, "scope": "required"}
+        if p["license"]:
+            comp["licenses"] = [{"expression": p["license"]}]
+        comp["properties"] = [{"name": "hame:part", "value": "web interface"}]
         components.append(comp)
     direct = sorted({purl(crates[d]) for d in direct_deps(root, crates)})
     dependencies = [{"ref": root_ref, "dependsOn": direct}]

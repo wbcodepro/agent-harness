@@ -52,6 +52,39 @@ pub struct Config {
     /// Browser and desktop control: what is authorized, and where state
     /// lives.
     pub computer: ComputerConfig,
+    /// The local web interface (`hame web`).
+    pub web: WebConfig,
+    /// What devices reaching this computer through the relay may do.
+    pub remote: RemoteConfig,
+}
+
+/// `hame web`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WebConfig {
+    /// A session's agent is shut down, and the session's lock released,
+    /// after this many seconds without a turn.
+    pub idle_seconds: u64,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self { idle_seconds: 600 }
+    }
+}
+
+/// Limits for requests from other devices (through the relay), which are
+/// checked on top of everything that applies to this computer.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RemoteConfig {
+    /// Let a remote device choose the "Full access" mode (no sandbox, no
+    /// questions) or allow a tool for the rest of a session. Off by default.
+    pub allow_full_access: bool,
+    /// Folders (and everything below them) a remote device may start new
+    /// sessions in. Empty (the default): only folders that already have a
+    /// session, and the folder `hame web` started in.
+    pub roots: Vec<String>,
 }
 
 /// Browser and desktop control. Nothing is authorized unless granted

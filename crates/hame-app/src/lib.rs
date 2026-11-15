@@ -23,7 +23,7 @@ use hame_kernel::BoxFuture;
 use hame_llm::{ChatCompletions, Llm};
 use hame_policy::{
     ApprovalLayer, Config, EditFormat, GitGuard, HookSource, NetworkMode, ProjectConfig, ReadFirst,
-    RedactLayer, RuleAction, Secrets, ToolProfile,
+    RedactLayer, Secrets, ToolProfile,
 };
 use hame_sandbox::{Allowlist, EgressProxy, Mode, Network, SandboxPolicy, SandboxedRunner};
 use hame_session::{CreateOptions, Event, SessionId, SessionStore};
@@ -34,6 +34,7 @@ use hame_verify::Verifier;
 
 pub use hame_policy::NetworkMode as NetworkChoice;
 pub use hame_policy::Prompter;
+pub use hame_policy::RuleAction;
 pub use hame_sandbox::Mode as SandboxMode;
 pub use import::{import_dsh, import_image};
 
@@ -133,6 +134,11 @@ pub struct Options {
     /// More paths the agent's tools must neither read nor write, such as
     /// `hame run --inbox`, whose files arrive as the user's messages.
     pub private_paths: Vec<PathBuf>,
+    /// What to do with a call that is not read-only when no rule matches,
+    /// instead of `[approval] default` and its confined/unconfined default.
+    /// Rules still come first. For an interface that offers permission
+    /// modes, such as "ask before every change".
+    pub approval_default: Option<RuleAction>,
 }
 
 type NoticeSink = Box<dyn Fn(&str) + Send + Sync>;
@@ -543,11 +549,14 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     };
     pipeline.push(ApprovalLayer {
         rules: config.rules.clone(),
-        default: config.approval.default.unwrap_or(if policy.is_confined() {
-            RuleAction::Allow
-        } else {
-            RuleAction::Ask
-        }),
+        default: options
+            .approval_default
+            .or(config.approval.default)
+            .unwrap_or(if policy.is_confined() {
+                RuleAction::Allow
+            } else {
+                RuleAction::Ask
+            }),
         prompter,
     });
 

@@ -1,0 +1,118 @@
+.card {
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  background: var(--bg-1);
+  font: var(--text-small);
+  min-width: 0;
+}
+
+.icon {
+  color: var(--fg-3);
+  flex: none;
+}
+
+.path {
+  font: 12.5px/20px var(--font-mono);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  text-align: left;
+}
+
+button.path:hover {
+  text-decoration: underline;
+}
+
+.moved {
+  font: var(--text-code);
+  color: var(--fg-2);
+}
+
+.op {
+  color: var(--fg-2);
+  margin-left: auto;
+  flex: none;
+}
+
+.stat {
+  display: inline-flex;
+  gap: 6px;
+  font: 12px/20px var(--font-mono);
+  flex: none;
+}
+
+.plus {
+  color: var(--success);
+}
+
+.minus {
+  color: var(--error);
+}
+
+.body {
+  font: var(--text-code);
+  overflow-x: auto;
+  border-top: var(--hairline) solid var(--border);
+}
+
+.line {
+  display: flex;
+  min-width: max-content;
+}
+
+.sign {
+  width: 24px;
+  flex: none;
+  text-align: center;
+  color: var(--fg-2);
+  user-select: none;
+}
+
+.text {
+  white-space: pre;
+  padding-right: var(--space-3);
+}
+
+.add {
+  background: var(--diff-add);
+}
+
+.del {
+  background: var(--diff-del);
+}
+
+.context .text {
+  color: var(--fg-2);
+}
+
+.gap {
+  padding: 0 var(--space-3);
+  color: var(--fg-2);
+  background: var(--bg-1);
+  font: 12px/20px var(--font-mono);
+}
+
+.more {
+  display: block;
+  width: 100%;
+  padding: 4px;
+  font: var(--text-small);
+  color: var(--fg-2);
+  border-top: var(--hairline) solid var(--border);
+  background: var(--bg-1);
+}
+
+.more:hover {
+  color: var(--fg);
+}

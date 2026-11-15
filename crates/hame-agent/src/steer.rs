@@ -25,7 +25,26 @@ impl Steering {
             .push(text.into());
     }
 
-    fn take(&self) -> Vec<String> {
+    /// The messages waiting for the turn, oldest first.
+    pub fn pending(&self) -> Vec<String> {
+        self.0.lock().expect("steering lock poisoned").clone()
+    }
+
+    /// Withdraws the waiting message at `index` (as `pending` listed them),
+    /// if it is still waiting and is still `text`. Returns whether it was
+    /// withdrawn: a message the turn has already taken cannot be.
+    pub fn withdraw(&self, index: usize, text: &str) -> bool {
+        let mut waiting = self.0.lock().expect("steering lock poisoned");
+        if waiting.get(index).is_some_and(|queued| queued == text) {
+            waiting.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Takes every waiting message, leaving the queue empty.
+    pub fn take(&self) -> Vec<String> {
         std::mem::take(&mut *self.0.lock().expect("steering lock poisoned"))
     }
 }
@@ -54,5 +73,24 @@ impl TurnHook for Steering {
             let waiting = self.take();
             (!waiting.is_empty()).then(|| vec![Block::text(waiting.join("\n\n"))])
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_waiting_message_can_be_listed_and_withdrawn() {
+        let steering = Steering::default();
+        steering.push("first");
+        steering.push("second");
+        assert_eq!(steering.pending(), vec!["first", "second"]);
+        // The index must still name the same text.
+        assert!(!steering.withdraw(0, "second"));
+        assert!(steering.withdraw(1, "second"));
+        assert_eq!(steering.pending(), vec!["first"]);
+        assert_eq!(steering.take(), vec!["first"]);
+        assert!(!steering.withdraw(0, "first"));
     }
 }

@@ -1,0 +1,18 @@
+{
+  "name": "hame-workspace",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace apps/ui",
+    "test": "npm test --workspace apps/ui",
+    "typecheck": "npm run typecheck --workspace apps/ui",
+    "check-ui-dist": "sh scripts/check-ui-dist.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,74 +1,162 @@
 //! A local web interface.
 //!
-//! `hame web` serves one page and a small JSON API on 127.0.0.1. Session
-//! records reach the page as server-sent events, so it shows a turn as it
-//! streams; approval questions are answered from the page.
+//! `hame web` serves the built interface of `apps/ui` and a JSON API on
+//! 127.0.0.1. Session records reach the page as server-sent events, so it
+//! shows a turn as it streams; approval questions are answered from the
+//! page.
 //!
-//! The server is reachable only from this machine, and every API call must
-//! carry the token printed at startup, so another site open in the browser
-//! cannot drive the agent.
+//! Who may call: the page on this computer, which must carry the token
+//! printed at startup (and address the server as `127.0.0.1` or
+//! `localhost`, against DNS rebinding); and remote devices, whose requests
+//! the relay connector passes to [`router`] in process marked with a
+//! [`RemoteCaller`]. Remote callers get a stricter policy (`[remote]` in
+//! config.toml) on every route that acts on a session: its folder must be
+//! in `roots` (by default only folders that already have a session, and the
+//! folder `hame web` started in), and unless `allow_full_access = true`
+//! they cannot choose "Full access", give session-wide grants, or drive a
+//! session that runs without the sandbox and without asking; grants given
+//! on this computer do not answer for turns they drive.
 //!
-//! Images a session refers to are served from `/api/artifacts/<sha256>`,
-//! only to a page that names a session referring to them.
+//! A session that is only being looked at is read from its log without its
+//! lock, so a terminal can resume it; its agent is built, and the lock
+//! taken, when a turn starts, and released after `[web] idle_seconds`
+//! without one.
+//!
+//! The API, route by route (all under `/api`):
+//!
+//! | Route | What |
+//! |---|---|
+//! | `GET /info` | version, default folder, recent folders, permission modes, models, warnings |
+//! | `GET /sessions` | sessions, latest activity first, with title and status |
+//! | `POST /sessions` | a new session, optionally in `cwd`, with `mode`, `provider`, `model` |
+//! | `GET /sessions/{id}` | one session: title, folder, mode, model, usage, cost, context, grants |
+//! | `PATCH /sessions/{id}` | rename (`title`) or pin (`pinned`) |
+//! | `DELETE /sessions/{id}` | delete the session's log |
+//! | `PUT /sessions/{id}/settings` | change `mode`, `provider`, `model` between turns |
+//! | `DELETE /sessions/{id}/grants/{tool}` | revoke a session-wide "always allow" |
+//! | `GET /sessions/{id}/events` | the event stream; `after` or `Last-Event-ID` resumes |
+//! | `POST /sessions/{id}/prompt` | start a turn with `text`, uploaded `images` and `files` |
+//! | `POST /sessions/{id}/steer` | queue a message for the running turn |
+//! | `POST /sessions/{id}/steer/withdraw` | take a queued message back |
+//! | `POST /sessions/{id}/cancel` | stop the running turn |
+//! | `POST /sessions/{id}/approval` | answer an approval question (naming its tool call) |
+//! | `POST /sessions/{id}/attachments` | upload an image or a file (`?name=`) |
+//! | `GET /artifacts/{sha256}?session=` | an image or file the session refers to |
+//!
+//! Choosing "Full access" takes two requests: the first is answered `428`
+//! with a one-time `confirm` nonce, and the second must echo it.
 
-use std::collections::{HashMap, VecDeque};
-use std::convert::Infallible;
+mod assets;
+mod caller;
+mod jcs;
+mod meta;
+mod overview;
+mod routes;
+mod session;
+
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::extract::{DefaultBodyLimit, Query, Request, State};
+use axum::http::StatusCode;
 use axum::middleware::Next;
-use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
-use hame_agent::{Session, ToolRequest};
-use hame_app::{Options, Prompter, Runtime};
-use hame_kernel::BoxFuture;
-use hame_session::{Block, SessionId, TurnEndReason};
-use serde::Deserialize;
+use hame_agent::Session;
+use hame_app::{Options, RuleAction, SandboxMode};
+use hame_session::{Event, Record, SessionId};
 use serde_json::{Value, json};
-use tokio::sync::{Notify, broadcast, oneshot};
 
-const PAGE: &str = include_str!("index.html");
+pub use caller::{Caller, RemoteCaller, mark_remote};
+pub use meta::Mode;
+use meta::{MetaStore, SessionMeta};
+use overview::OverviewCache;
+use session::{Entry, Live, PagePrompter};
 
-/// What a page and its session share: the event stream and the approval
-/// questions waiting for an answer.
-struct Channel {
-    events: broadcast::Sender<String>,
-    approvals: Mutex<HashMap<u64, oneshot::Sender<Option<bool>>>>,
-    next_approval: AtomicU64,
+/// The largest upload accepted, in bytes.
+pub const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+
+/// How long a "Full access" confirmation nonce stays valid.
+const CONFIRM_FOR: Duration = Duration::from_secs(120);
+
+/// A failed request: a status and a text message, or a JSON body.
+#[derive(Debug)]
+pub(crate) struct Failure {
+    status: StatusCode,
+    message: String,
+    body: Option<Value>,
 }
 
-impl Channel {
-    fn send(&self, event: Value) {
-        // No page listening is fine: the log has everything.
-        let _ = self.events.send(event.to_string());
+impl IntoResponse for Failure {
+    fn into_response(self) -> Response {
+        match self.body {
+            Some(body) => (self.status, Json(body)).into_response(),
+            None => (self.status, self.message).into_response(),
+        }
     }
 }
 
-struct Entry {
-    state: tokio::sync::Mutex<(Session, Runtime)>,
-    channel: Arc<Channel>,
-    cancel: Notify,
-    busy: AtomicBool,
+fn failure(status: StatusCode, message: impl Into<String>) -> Failure {
+    Failure {
+        status,
+        message: message.into(),
+        body: None,
+    }
 }
 
-struct App {
+pub(crate) fn bad(message: impl Into<String>) -> Failure {
+    failure(StatusCode::BAD_REQUEST, message)
+}
+
+pub(crate) fn failed(message: impl Into<String>) -> Failure {
+    failure(StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
+pub(crate) fn conflict(message: impl Into<String>) -> Failure {
+    failure(StatusCode::CONFLICT, message)
+}
+
+pub(crate) fn not_found(message: impl Into<String>) -> Failure {
+    failure(StatusCode::NOT_FOUND, message)
+}
+
+pub(crate) fn forbidden(message: impl Into<String>) -> Failure {
+    failure(StatusCode::FORBIDDEN, message)
+}
+
+/// 423: another hame process (a terminal, an editor) has the session open.
+/// Distinct from 409 so a page does not mistake it for a turn that just
+/// started or ended.
+pub(crate) fn locked() -> Failure {
+    failure(
+        StatusCode::LOCKED,
+        "the session is open in another hame process (a terminal or an editor); close it \
+         there first",
+    )
+}
+
+pub(crate) struct App {
     home: PathBuf,
     cwd: PathBuf,
     options: Options,
     token: String,
+    meta: MetaStore,
     sessions: Mutex<HashMap<String, Arc<Entry>>>,
+    overviews: OverviewCache,
+    /// One-time nonces for choosing "Full access": nonce → (scope, issued).
+    confirmations: Mutex<HashMap<String, (String, Instant)>>,
 }
 
 /// A running server.
 pub struct WebServer {
     pub addr: SocketAddr,
     pub token: String,
+    router: Router,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -78,6 +166,12 @@ impl WebServer {
         format!("http://{}/?token={}", self.addr, self.token)
     }
 
+    /// The same routes, to call in process (the desktop app, the relay
+    /// connector).
+    pub fn router(&self) -> Router {
+        self.router.clone()
+    }
+
     /// Runs until the server stops.
     pub async fn wait(self) {
         let _ = self.task.await;
@@ -85,7 +179,7 @@ impl WebServer {
 }
 
 /// Starts serving on 127.0.0.1. `port` 0 picks a free one. New sessions
-/// work in `cwd`.
+/// work in `cwd` unless the page names another folder.
 pub async fn start(
     home: PathBuf,
     cwd: PathBuf,
@@ -96,44 +190,98 @@ pub async fn start(
         .await
         .map_err(|e| format!("cannot listen on port {port}: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    let (router, token) = router(home, cwd, options);
+    let serving = router.clone();
+    let task = tokio::spawn(async move {
+        let _ = axum::serve(listener, serving).await;
+    });
+    Ok(WebServer {
+        addr,
+        token,
+        router,
+        task,
+    })
+}
+
+/// The server's routes without a listener, with the token every local API
+/// call must carry. The relay connector (`hame connect`) calls this router
+/// in process and marks each request with a [`RemoteCaller`], so a remote
+/// session is exactly a local one under the remote policy. Must be called
+/// inside a Tokio runtime (it starts the task that releases idle agents).
+pub fn router(home: PathBuf, cwd: PathBuf, options: Options) -> (Router, String) {
     let token = uuid::Uuid::new_v4().simple().to_string();
+    let idle = hame_app::load_config(&home)
+        .map(|config| config.web.idle_seconds)
+        .unwrap_or(600);
     let app = Arc::new(App {
+        meta: MetaStore::new(&home),
         home,
         cwd,
         options,
         token: token.clone(),
         sessions: Mutex::new(HashMap::new()),
+        overviews: OverviewCache::default(),
+        confirmations: Mutex::new(HashMap::new()),
     });
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let sweeper = Arc::downgrade(&app);
+        let idle = Duration::from_secs(idle.max(1));
+        let every = idle
+            .min(Duration::from_secs(30))
+            .max(Duration::from_millis(250));
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                let Some(app) = sweeper.upgrade() else { return };
+                app.sweep(idle).await;
+            }
+        });
+    }
+    use routes::*;
     let api = Router::new()
+        .route("/info", get(info))
         .route("/sessions", get(list).post(create))
+        .route(
+            "/sessions/{id}",
+            get(detail).patch(rename).delete(delete_session),
+        )
+        .route("/sessions/{id}/settings", put(settings))
+        .route("/sessions/{id}/grants/{tool}", delete(revoke_grant))
         .route("/sessions/{id}/events", get(events))
         .route("/sessions/{id}/prompt", post(prompt))
+        .route("/sessions/{id}/steer", post(steer))
+        .route("/sessions/{id}/steer/withdraw", post(withdraw))
         .route("/sessions/{id}/cancel", post(cancel))
         .route("/sessions/{id}/approval", post(approval))
+        .route(
+            "/sessions/{id}/attachments",
+            post(attach).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
         .route("/artifacts/{sha256}", get(artifact))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&app),
             guard,
         ));
     let router = Router::new()
-        .route("/", get(|| async { Html(PAGE) }))
         .nest("/api", api)
+        .fallback(assets::serve)
         .with_state(app);
-    let task = tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
-    Ok(WebServer { addr, token, task })
+    (router, token)
 }
 
-/// Rejects API calls without the token, and calls addressed to any host
-/// name but this machine's (which is how a hostile page would reach a
-/// local server through DNS rebinding).
+/// Lets through requests the relay connector marked as remote (they never
+/// come from HTTP), and local requests with the token addressed to this
+/// machine's name (a hostile page could otherwise reach a local server
+/// through DNS rebinding).
 async fn guard(
     State(app): State<Arc<App>>,
     Query(query): Query<HashMap<String, String>>,
     request: Request,
     next: Next,
 ) -> Response {
+    if request.extensions().get::<RemoteCaller>().is_some() {
+        return next.run(request).await;
+    }
     let headers = request.headers();
     let host = headers
         .get("host")
@@ -150,323 +298,438 @@ async fn guard(
     next.run(request).await
 }
 
-type Failure = (StatusCode, String);
-
-fn bad(message: impl Into<String>) -> Failure {
-    (StatusCode::BAD_REQUEST, message.into())
+/// Runs `attempt` again for a moment while it fails with 423.
+///
+/// Why: a session's lock is an `flock` on its lock file, and an `flock`
+/// belongs to the open file description, not to the descriptor. When
+/// another thread of this process starts a child process, the child holds
+/// a copy of every open description between `fork` and `exec` (close-on-
+/// exec only closes them at `exec`), so a lock this process has just let
+/// go can still be held by that child for an instant: under a millisecond
+/// as measured on macOS. A lock another hame process holds is still
+/// reported after the retries (about 200 ms).
+pub(crate) async fn retry_locked<T>(
+    mut attempt: impl FnMut() -> Result<T, Failure>,
+) -> Result<T, Failure> {
+    let mut tries = 0;
+    loop {
+        match attempt() {
+            Err(failure) if failure.status == StatusCode::LOCKED && tries < 10 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            done => return done,
+        }
+    }
 }
 
-fn failed(message: impl Into<String>) -> Failure {
-    (StatusCode::INTERNAL_SERVER_ERROR, message.into())
-}
-
-struct PagePrompter(Arc<Channel>);
-
-impl Prompter for PagePrompter {
-    fn ask<'a>(
-        &'a self,
-        _request: &'a ToolRequest,
-        question: String,
-    ) -> BoxFuture<'a, Option<bool>> {
-        Box::pin(async move {
-            let id = self.0.next_approval.fetch_add(1, Ordering::Relaxed);
-            let (answer, answered) = oneshot::channel();
-            self.0
-                .approvals
-                .lock()
-                .expect("approvals")
-                .insert(id, answer);
-            self.0
-                .send(json!({"kind": "approval", "id": id, "question": question}));
-            // A page that goes away without answering has not approved.
-            answered.await.ok().flatten()
-        })
+/// `~/x` with the home folder.
+fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|home| PathBuf::from(home).join(rest))
+            .unwrap_or_else(|| PathBuf::from(path)),
+        None => PathBuf::from(path),
     }
 }
 
 impl App {
-    /// The loaded session with this id, loading or creating it as needed.
-    async fn entry(&self, id: Option<&str>) -> Result<Arc<Entry>, Failure> {
-        if let Some(id) = id
-            && let Some(entry) = self.sessions.lock().expect("sessions").get(id)
-        {
-            return Ok(Arc::clone(entry));
-        }
-        let store = hame_app::session_store(&self.home);
-        let existing = id
-            .map(SessionId::parse)
-            .transpose()
-            .map_err(|e| bad(e.to_string()))?;
-        let cwd = match &existing {
-            Some(id) => hame_app::session_cwd(&store, id).map_err(bad)?,
-            None => self.cwd.clone(),
-        };
-        let channel = Arc::new(Channel {
-            events: broadcast::channel(4096).0,
-            approvals: Mutex::new(HashMap::new()),
-            next_approval: AtomicU64::new(1),
-        });
+    pub(crate) fn store(&self) -> hame_session::SessionStore {
+        hame_app::session_store(&self.home)
+    }
+
+    fn config(&self) -> Option<hame_policy::Config> {
+        hame_app::load_config(&self.home).ok()
+    }
+
+    /// The options a session's agent is built with: the server's, with the
+    /// page as the one asked, the session's queue, mode and model.
+    fn options_for(&self, meta: &SessionMeta, entry: &Entry) -> Options {
         let mut options = self.options.clone();
-        options.prompter = Some(Arc::new(PagePrompter(Arc::clone(&channel))));
-        let runtime = hame_app::build(&self.home, &cwd, &options)
+        options.prompter = Some(Arc::new(PagePrompter(Arc::clone(&entry.channel))));
+        options.steering = Some(entry.steering.clone());
+        if meta.provider.is_some() {
+            options.provider = meta.provider.clone();
+        }
+        if meta.model.is_some() {
+            options.model = meta.model.clone();
+        }
+        match meta.mode {
+            Mode::Default => {}
+            Mode::ReadOnly => {
+                options.sandbox = Some(SandboxMode::ReadOnly);
+                options.approval_default = Some(RuleAction::Deny);
+            }
+            Mode::Ask | Mode::AcceptEdits => options.approval_default = Some(RuleAction::Ask),
+            Mode::FullAccess => {
+                options.sandbox = Some(SandboxMode::DangerFullAccess);
+                options.yes = true;
+            }
+        }
+        options
+    }
+
+    pub(crate) fn loaded(&self, id: &str) -> Option<Arc<Entry>> {
+        self.sessions.lock().expect("sessions").get(id).cloned()
+    }
+
+    /// The session with this id, for viewing: no agent, no lock.
+    pub(crate) fn view(&self, id: &str) -> Result<Arc<Entry>, Failure> {
+        if let Some(entry) = self.loaded(id) {
+            return Ok(entry);
+        }
+        let session = SessionId::parse(id).map_err(|e| bad(e.to_string()))?;
+        let cwd = hame_app::session_cwd(&self.store(), &session).map_err(|e| {
+            if e.contains("not found") {
+                not_found(e)
+            } else {
+                bad(e)
+            }
+        })?;
+        let meta = self.meta.get(id);
+        let mut sessions = self.sessions.lock().expect("sessions");
+        Ok(Arc::clone(sessions.entry(id.to_string()).or_insert_with(
+            || Arc::new(Entry::new(id.to_string(), cwd, meta.mode)),
+        )))
+    }
+
+    /// Builds the agent and takes the session's lock.
+    pub(crate) async fn make_live(
+        &self,
+        entry: &Entry,
+        slot: &mut Option<Live>,
+    ) -> Result<(), Failure> {
+        if slot.is_some() {
+            return Ok(());
+        }
+        // The session's lock first: no agent is built for a session another
+        // process has open.
+        let session = self.open(entry).await?;
+        let meta = self.meta.get(&entry.id);
+        let options = self.options_for(&meta, entry);
+        let runtime = hame_app::build(&self.home, &entry.cwd, &options)
             .await
             .map_err(failed)?;
-        let mut session =
-            hame_app::open_session(&store, existing.as_ref(), &cwd).map_err(failed)?;
-        let observer = Arc::clone(&channel);
-        session.observe(move |record| observer.send(json!({"kind": "record", "record": record})));
-
-        let id = session.id().to_string();
-        let entry = Arc::new(Entry {
-            state: tokio::sync::Mutex::new((session, runtime)),
-            channel,
-            cancel: Notify::new(),
-            busy: AtomicBool::new(false),
+        *slot = Some(Live {
+            session,
+            runtime,
+            idle_since: Instant::now(),
         });
-        self.sessions
-            .lock()
-            .expect("sessions")
-            .insert(id, Arc::clone(&entry));
-        Ok(entry)
+        Ok(())
     }
-}
 
-async fn list(State(app): State<Arc<App>>) -> Result<Json<Value>, Failure> {
-    let headers = hame_app::session_store(&app.home)
-        .list()
-        .map_err(|e| failed(e.to_string()))?;
-    Ok(Json(
-        headers
-            .into_iter()
-            .map(|header| json!({"id": header.id, "cwd": header.cwd}))
-            .collect(),
-    ))
-}
-
-async fn create(State(app): State<Arc<App>>) -> Result<Json<Value>, Failure> {
-    let entry = app.entry(None).await?;
-    let id = entry.state.lock().await.0.id().to_string();
-    Ok(Json(json!({ "id": id })))
-}
-
-async fn events(
-    State(app): State<Arc<App>>,
-    Path(id): Path<String>,
-    _headers: HeaderMap,
-) -> Result<impl IntoResponse, Failure> {
-    let entry = app.entry(Some(&id)).await?;
-    // Subscribe before reading the log, so nothing falls in between; the
-    // page drops records it has already seen.
-    let live = entry.channel.events.subscribe();
-    let session = SessionId::parse(&id).map_err(|e| bad(e.to_string()))?;
-    let stored = hame_app::session_store(&app.home)
-        .read(&session)
-        .map_err(|e| failed(e.to_string()))?;
-    let mut replay: VecDeque<String> = stored
-        .iter()
-        .map(|record| json!({"kind": "record", "record": record}).to_string())
-        .collect();
-    let missing: Vec<Value> = hame_app::session_store(&app.home)
-        .check_artifacts(&session)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(artifact, error)| {
-            json!({"sha256": artifact.sha256, "mime": artifact.mime, "error": error.to_string()})
-        })
-        .collect();
-    if !missing.is_empty() {
-        replay.push_back(
-            json!({
-                "kind": "warning",
-                "text": format!(
-                    "{} image(s) or file(s) of this session are missing from the store; the \
-                     model sees a note in their place.",
-                    missing.len()
-                ),
-                "missing_artifacts": missing,
-            })
-            .to_string(),
-        );
-    }
-    if entry.busy.load(Ordering::Relaxed) {
-        replay.push_back(json!({"kind": "turn", "state": "started"}).to_string());
-    }
-    let stream =
-        futures_util::stream::unfold((replay, live), |(mut replay, mut live)| async move {
-            if let Some(next) = replay.pop_front() {
-                return Some((
-                    Ok::<_, Infallible>(SseEvent::default().data(next)),
-                    (replay, live),
-                ));
-            }
-            loop {
-                match live.recv().await {
-                    Ok(next) => return Some((Ok(SseEvent::default().data(next)), (replay, live))),
-                    // A page that fell far behind skips ahead; reloading
-                    // replays the log.
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return None,
+    /// Opens the session for writing, its records going to the pages.
+    async fn open(&self, entry: &Entry) -> Result<Session, Failure> {
+        let id = SessionId::parse(&entry.id).map_err(|e| bad(e.to_string()))?;
+        let store = self.store();
+        let mut session = retry_locked(|| {
+            hame_app::open_session(&store, Some(&id), &entry.cwd).map_err(|e| {
+                if e.contains("open in another process") {
+                    locked()
+                } else {
+                    failed(e)
                 }
+            })
+        })
+        .await?;
+        let channel = Arc::clone(&entry.channel);
+        let steering = entry.steering.clone();
+        session.observe(move |record: &Record| {
+            channel.send_record(record);
+            // A queued message the turn just took is no longer waiting.
+            if matches!(record.event, Event::UserMessage { .. }) {
+                channel.send_steering(&steering);
             }
         });
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
-}
-
-#[derive(Deserialize)]
-struct PromptBody {
-    text: String,
-}
-
-async fn prompt(
-    State(app): State<Arc<App>>,
-    Path(id): Path<String>,
-    Json(body): Json<PromptBody>,
-) -> Result<Json<Value>, Failure> {
-    if body.text.trim().is_empty() {
-        return Err(bad("the message is empty"));
+        Ok(session)
     }
-    let entry = app.entry(Some(&id)).await?;
-    if entry.busy.swap(true, Ordering::SeqCst) {
-        return Err((StatusCode::CONFLICT, "a turn is already running".into()));
-    }
-    tokio::spawn(async move {
-        entry
-            .channel
-            .send(json!({"kind": "turn", "state": "started"}));
-        let mut state = entry.state.lock().await;
-        let (session, runtime) = &mut *state;
-        let outcome = tokio::select! {
-            result = runtime.agent.run_turn(session, vec![Block::text(body.text)]) => Some(result),
-            _ = entry.cancel.notified() => None,
+
+    /// Appends `events` to the session's log: through the agent's session
+    /// when it is live, otherwise under the lock taken just for this.
+    pub(crate) async fn append(
+        &self,
+        entry: &Entry,
+        slot: &mut Option<Live>,
+        events: Vec<Event>,
+    ) -> Result<(), Failure> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let mut brief;
+        let session = match slot {
+            Some(live) => &mut live.session,
+            None => {
+                // A `mode/changed` record needs a log marked with the
+                // current format; an older build then calls the log newer
+                // rather than corrupt.
+                if events
+                    .iter()
+                    .any(|event| matches!(event, Event::ModeChanged { .. }))
+                {
+                    let id = SessionId::parse(&entry.id).map_err(|e| bad(e.to_string()))?;
+                    let store = self.store();
+                    retry_locked(|| {
+                        store.upgrade_format(&id).map_err(|e| match e {
+                            hame_session::SessionError::Locked(_) => locked(),
+                            e => failed(e.to_string()),
+                        })
+                    })
+                    .await?;
+                }
+                brief = self.open(entry).await?;
+                &mut brief
+            }
         };
-        let error = match outcome {
-            Some(Ok(())) => None,
-            Some(Err(e)) => Some(e.to_string()),
-            None => session
-                .close_open_turn(TurnEndReason::Cancelled)
-                .err()
-                .map(|e| e.to_string()),
-        };
-        // Nobody is left to answer questions from a turn that is over.
-        entry.channel.approvals.lock().expect("approvals").clear();
-        entry.busy.store(false, Ordering::SeqCst);
-        entry
-            .channel
-            .send(json!({"kind": "turn", "state": "ended", "error": error}));
-    });
-    Ok(Json(json!({"started": true})))
-}
-
-async fn cancel(
-    State(app): State<Arc<App>>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, Failure> {
-    let entry = app.entry(Some(&id)).await?;
-    entry.cancel.notify_waiters();
-    Ok(Json(json!({})))
-}
-
-/// Serves the bytes of an artifact, for an `<img>` on the page.
-///
-/// The id must be a well-formed hash, and the session named by the
-/// `session` query parameter must refer to it: the page can only fetch what
-/// it is showing. The type sent is the one the log recorded, which the
-/// store checked against the bytes for images; anything that is not an
-/// image is sent as a download, never rendered on this origin.
-async fn artifact(
-    State(app): State<Arc<App>>,
-    Path(sha256): Path<String>,
-    Query(query): Query<HashMap<String, String>>,
-) -> Result<Response, Failure> {
-    let well_formed = sha256.len() == 64
-        && sha256
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if !well_formed {
-        return Err(bad("not an artifact id"));
+        for event in events {
+            session.append(event).map_err(|e| failed(e.to_string()))?;
+        }
+        Ok(())
     }
-    let session = query
-        .get("session")
-        .ok_or_else(|| bad("name the session the artifact belongs to"))?;
-    let session = SessionId::parse(session).map_err(|e| bad(e.to_string()))?;
-    let store = hame_app::session_store(&app.home);
-    let not_found = || {
-        (
-            StatusCode::NOT_FOUND,
-            "no such artifact in this session".to_string(),
-        )
-    };
-    let records = store.read(&session).map_err(|_| not_found())?;
-    let artifact = hame_session::session_artifacts(&records)
-        .into_iter()
-        .find(|artifact| artifact.sha256 == sha256)
-        .ok_or_else(not_found)?;
-    let bytes = match store.artifacts().get(&artifact) {
-        Ok(bytes) => bytes,
-        Err(hame_session::artifact::ArtifactError::Missing(_)) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                "the artifact is missing from the store".into(),
+
+    /// The model the session uses or would use, without building anything.
+    pub(crate) fn model_name(&self, meta: &SessionMeta, entry: &Entry) -> Option<String> {
+        if let Ok(slot) = entry.live.try_lock()
+            && let Some(live) = slot.as_ref()
+        {
+            return live.runtime.model.clone();
+        }
+        if self.options.llm.is_some() {
+            return None;
+        }
+        let config = self.config()?;
+        let secrets = hame_app::load_secrets(&self.home, &entry.cwd).ok()?;
+        hame_app::choose_model(&config, &secrets, &self.options_for(meta, entry))
+            .ok()
+            .map(|chosen| chosen.model)
+    }
+
+    /// Remote callers may not choose "Full access" unless allowed.
+    pub(crate) fn check_mode(&self, caller: &Caller, mode: Mode) -> Result<(), Failure> {
+        if caller.is_remote() && mode == Mode::FullAccess && !self.remote_full_access() {
+            return Err(forbidden(
+                "a remote device cannot choose Full access; set [remote] allow_full_access = \
+                 true in config.toml on this computer to allow it",
             ));
         }
-        Err(e) => return Err(failed(e.to_string())),
-    };
-    let mime = if hame_session::artifact::KNOWN_MIME.contains(&artifact.mime.as_str()) {
-        artifact.mime.as_str()
-    } else {
-        "application/octet-stream"
-    };
-    let mut response = bytes.into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
-    );
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; sandbox"),
-    );
-    // Content-addressed: the bytes behind this id never change.
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=31536000, immutable"),
-    );
-    if !artifact.is_image() {
-        headers.insert(
-            header::CONTENT_DISPOSITION,
-            HeaderValue::from_static("attachment"),
-        );
+        Ok(())
     }
-    Ok(response)
-}
 
-#[derive(Deserialize)]
-struct ApprovalBody {
-    id: u64,
-    allow: bool,
-}
-
-async fn approval(
-    State(app): State<Arc<App>>,
-    Path(id): Path<String>,
-    Json(body): Json<ApprovalBody>,
-) -> Result<Json<Value>, Failure> {
-    let entry = app.entry(Some(&id)).await?;
-    let waiting = entry
-        .channel
-        .approvals
-        .lock()
-        .expect("approvals")
-        .remove(&body.id);
-    match waiting {
-        Some(answer) => {
-            let _ = answer.send(Some(body.allow));
-            Ok(Json(json!({})))
+    /// Whether turns in this session would run with no sandbox and no
+    /// questions: the Full access mode, or the default mode where the
+    /// sandbox is off (`[sandbox] mode = "danger-full-access"` or the
+    /// server's own options) or every question is answered yes.
+    pub(crate) fn effective_full_access(&self, meta: &SessionMeta) -> bool {
+        match meta.mode {
+            Mode::FullAccess => true,
+            Mode::Default => {
+                let configured = self.config().map(|config| config.sandbox.mode);
+                self.options.yes
+                    || self.options.sandbox.or(configured) == Some(SandboxMode::DangerFullAccess)
+            }
+            _ => false,
         }
-        None => Err(bad("that question is no longer waiting")),
+    }
+
+    /// What a remote caller must pass to act on a session (prompt, queue,
+    /// answer, upload, change, delete): the session's folder within the
+    /// remote roots and, when `with_mode`, no effective Full access unless
+    /// remote Full access is allowed. Local callers always pass.
+    pub(crate) fn remote_may_act(
+        &self,
+        caller: &Caller,
+        entry: &Entry,
+        with_mode: bool,
+    ) -> Result<(), Failure> {
+        if !caller.is_remote() {
+            return Ok(());
+        }
+        self.check_folder(caller, &entry.cwd)?;
+        if with_mode
+            && self.effective_full_access(&self.meta.get(&entry.id))
+            && !self.remote_full_access()
+        {
+            return Err(forbidden(
+                "this session runs without the sandbox and without asking (Full access); a \
+                 remote device cannot drive it unless [remote] allow_full_access = true in \
+                 config.toml on this computer",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn remote_full_access(&self) -> bool {
+        self.config()
+            .is_some_and(|config| config.remote.allow_full_access)
+    }
+
+    /// Remote callers start sessions only in `[remote] roots`, or, without
+    /// roots, only in folders that already have a session and the folder
+    /// `hame web` started in.
+    pub(crate) fn check_folder(&self, caller: &Caller, folder: &FsPath) -> Result<(), Failure> {
+        if !caller.is_remote() {
+            return Ok(());
+        }
+        let config = self
+            .config()
+            .ok_or_else(|| forbidden("config.toml cannot be read; remote sessions are refused"))?;
+        let allowed = if config.remote.roots.is_empty() {
+            folder == self.cwd
+                || self
+                    .store()
+                    .list()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|header| FsPath::new(&header.cwd) == folder)
+        } else {
+            config.remote.roots.iter().any(|root| {
+                hame_kernel::real_path(&expand_home(root))
+                    .is_ok_and(|root| folder.starts_with(root))
+            })
+        };
+        if allowed {
+            Ok(())
+        } else {
+            Err(forbidden(format!(
+                "a remote device cannot start a session in {}; add a folder above it to [remote] \
+                 roots in config.toml on this computer",
+                folder.display()
+            )))
+        }
+    }
+
+    /// Checks the one-time nonce for choosing "Full access" in `scope`, or
+    /// answers 428 with a new one to echo. The nonce stays valid until
+    /// [`App::consume`] is called once the change has been made.
+    pub(crate) fn confirm(&self, scope: &str, given: Option<&str>) -> Result<String, Failure> {
+        let mut nonces = self.confirmations.lock().expect("confirmations");
+        nonces.retain(|_, (_, issued)| issued.elapsed() < CONFIRM_FOR);
+        if let Some(given) = given
+            && nonces
+                .get(given)
+                .is_some_and(|(issued_for, _)| issued_for == scope)
+        {
+            return Ok(given.to_string());
+        }
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        nonces.insert(nonce.clone(), (scope.to_string(), Instant::now()));
+        let message = "Full access runs every command without the sandbox and without asking. \
+                       Send the request again with this confirm value to choose it.";
+        Err(Failure {
+            status: StatusCode::PRECONDITION_REQUIRED,
+            message: message.into(),
+            body: Some(json!({"confirm": nonce, "message": message})),
+        })
+    }
+
+    /// Uses up a confirmation nonce.
+    pub(crate) fn consume(&self, nonce: &str) {
+        self.confirmations
+            .lock()
+            .expect("confirmations")
+            .remove(nonce);
+    }
+
+    pub(crate) fn status(&self, id: &str, outcome: overview::Outcome) -> &'static str {
+        if let Some(entry) = self.loaded(id) {
+            if !entry
+                .channel
+                .approvals
+                .lock()
+                .expect("approvals")
+                .is_empty()
+            {
+                return "needs_you";
+            }
+            if entry.busy.load(Ordering::Relaxed) {
+                return "running";
+            }
+        }
+        match outcome {
+            overview::Outcome::Idle => "idle",
+            overview::Outcome::Failed => "failed",
+            overview::Outcome::Verified => "verified",
+            overview::Outcome::NotVerified => "not_verified",
+        }
+    }
+
+    /// What the list and the header show about a session.
+    pub(crate) fn describe(
+        &self,
+        id: &str,
+        cwd: &str,
+        seen: &overview::Overview,
+        meta: &SessionMeta,
+    ) -> Value {
+        json!({
+            "id": id,
+            "cwd": cwd,
+            "title": meta.title.clone().or(seen.title.clone()),
+            "named": meta.title.is_some(),
+            "pinned": meta.pinned,
+            "status": self.status(id, seen.outcome),
+            "outcome": seen.outcome,
+            "created": seen.created,
+            "last_activity": seen.last_activity,
+            "turns": seen.turns,
+            "usage": seen.usage,
+            "mode": meta.mode,
+        })
+    }
+
+    pub(crate) fn overview_of(&self, id: &SessionId) -> overview::Overview {
+        let store = self.store();
+        self.overviews.get(id.as_str(), &store.log_path(id), || {
+            store.read(id).unwrap_or_default()
+        })
+    }
+
+    /// Releases agents idle for `idle` (and with them the sessions' locks),
+    /// and forgets sessions nobody is watching.
+    async fn sweep(&self, idle: Duration) {
+        let entries: Vec<Arc<Entry>> = self
+            .sessions
+            .lock()
+            .expect("sessions")
+            .values()
+            .cloned()
+            .collect();
+        for entry in entries {
+            if entry.busy.load(Ordering::SeqCst) {
+                continue;
+            }
+            let Ok(mut slot) = entry.live.try_lock() else {
+                continue;
+            };
+            if slot
+                .as_ref()
+                .is_some_and(|live| live.idle_since.elapsed() >= idle)
+                && let Some(live) = slot.take()
+            {
+                live.runtime.computer.shutdown().await;
+                drop(live);
+            }
+            drop(slot);
+        }
+        // Forget sessions nobody watches or uses. Under the sessions lock
+        // and only when the map holds the last reference, so a request that
+        // has just picked a session up keeps using the one that stays.
+        let mut sessions = self.sessions.lock().expect("sessions");
+        sessions.retain(|_, entry| {
+            let unused = Arc::strong_count(entry) == 1
+                && !entry.busy.load(Ordering::SeqCst)
+                && entry.live.try_lock().is_ok_and(|slot| slot.is_none())
+                && entry.channel.events.receiver_count() == 0
+                && entry
+                    .channel
+                    .approvals
+                    .lock()
+                    .expect("approvals")
+                    .is_empty()
+                && entry.steering.pending().is_empty()
+                && entry.uploads.lock().expect("uploads").images.is_empty()
+                && entry.uploads.lock().expect("uploads").files.is_empty();
+            !unused
+        });
     }
 }

@@ -115,6 +115,7 @@ fn kinds(session: &Session) -> Vec<&'static str> {
             Event::TaskStart { .. } => "task/start",
             Event::ActionReceipt { .. } => "action/receipt",
             Event::TaskVerified { .. } => "task/verified",
+            Event::ModeChanged { .. } => "mode/changed",
         })
         .collect()
 }
