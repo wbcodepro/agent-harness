@@ -1,0 +1,45 @@
+[package]
+name = "hame-sync"
+description = "End-to-end encrypted sync for hame: envelopes, pairing and the relay host connector."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# A faithful in-process relay (§3 of docs/design/APPS-AND-SYNC.md) for
+# tests and local development. Never part of a release build.
+mock-relay = ["axum/ws"]
+
+[dependencies]
+axum = "0.8.9"
+base64.workspace = true
+chacha20poly1305 = "0.10.1"
+ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
+futures-util = { version = "0.3.34", features = ["sink"] }
+hame-web.workspace = true
+hkdf = "0.12.4"
+hmac = "0.12.1"
+rand = "0.8.8"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+tower = { version = "0.5.3", features = ["util"] }
+url.workspace = true
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
+zeroize = "1.8"
+
+[dev-dependencies]
+hame-app.workspace = true
+hame-eval.workspace = true
+hame-session.workspace = true
+hame-sync = { path = ".", features = ["mock-relay"] }
+hame-tools.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
