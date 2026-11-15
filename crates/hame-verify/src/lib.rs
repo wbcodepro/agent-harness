@@ -5,6 +5,7 @@
 //! user message and the turn continues, so "done" means the checks pass, or
 //! the model has seen the failure and said why it stands.
 
+pub mod budget;
 mod escalate;
 mod facts;
 pub mod outcome;
@@ -23,6 +24,7 @@ use serde_json::json;
 /// the user typed.
 pub use escalate::{Escalating, Escalation, REPEAT_PREFIX, RepeatGuard, Switch, trouble_this_turn};
 
+pub use budget::{BUDGET_PREFIX, BudgetGuard, tokens_used};
 pub use facts::{ProjectFacts, facts_note};
 pub use outcome::{OUTCOME_PREFIX, OutcomeGate, StateProbe, current_task, describe, verify};
 pub use redcheck::{CHECK_PREFIX, Evidence, RedCheck, evidence};
