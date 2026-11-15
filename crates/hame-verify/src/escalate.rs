@@ -309,6 +309,7 @@ mod tests {
                     ToolOutput {
                         text: result,
                         is_error: failed,
+                        parts: Vec::new(),
                     }
                 }
             })
@@ -354,6 +355,7 @@ mod tests {
             messages: Vec::new(),
             max_tokens: None,
             cache_key: None,
+            artifacts: None,
         };
         let mut text = String::new();
         let mut sink = |delta: hame_session::Delta| -> Result<(), hame_llm::SinkError> {

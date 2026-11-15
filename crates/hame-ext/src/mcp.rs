@@ -793,6 +793,7 @@ impl Tool for McpTool {
                     text
                 },
                 is_error: result["isError"].as_bool().unwrap_or(false),
+                parts: Vec::new(),
             }
         })
     }

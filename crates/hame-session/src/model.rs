@@ -4,9 +4,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::SessionError;
+use crate::artifact::ArtifactRef;
+use crate::contract::{ActionReceipt, TaskContract, VerificationReport};
 
-/// Version of the on-disk log format this build reads and writes.
-pub const FORMAT_VERSION: u32 = 1;
+/// Version of the on-disk log format this build writes. Version 2 added
+/// image, artifact, data and unsupported content blocks and the task,
+/// receipt and verification events. Logs of version 1 are read unchanged;
+/// a build that only knows version 1 refuses a version 2 log with
+/// `UnsupportedVersion` instead of misreading it.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Identifies a session. Restricted to `[A-Za-z0-9_-]{1,64}` because it is
 /// used as a directory name.
@@ -149,6 +155,17 @@ pub enum Event {
     /// session's checkpoint store.
     #[serde(rename = "checkpoint")]
     Checkpoint { commit: String },
+    /// The task this session is working on, with its acceptance conditions
+    /// and the authorization the user granted. A later one replaces it.
+    #[serde(rename = "task/start")]
+    TaskStart { contract: Box<TaskContract> },
+    /// A settled action receipt, copied from the action journal so the log
+    /// alone shows what was done to the world. Never replayed.
+    #[serde(rename = "action/receipt")]
+    ActionReceipt { receipt: Box<ActionReceipt> },
+    /// The outcome of checking the task's acceptance conditions.
+    #[serde(rename = "task/verified")]
+    TaskVerified { report: Box<VerificationReport> },
 }
 
 impl Event {
@@ -261,12 +278,86 @@ pub enum Block {
         from: Value,
         to: Value,
     },
+    /// An image whose bytes are in the artifact store.
+    Image {
+        artifact: ArtifactRef,
+    },
+    /// A stored file that is not an image: a download, a PDF.
+    Artifact {
+        artifact: ArtifactRef,
+    },
+    /// Structured data, such as an MCP result's `structuredContent`.
+    Data {
+        value: Value,
+    },
+    /// Content that arrived but cannot be carried, kept so its loss is
+    /// visible instead of silent.
+    Unsupported {
+        kind: String,
+        note: String,
+    },
 }
 
 impl Block {
     pub fn text(text: impl Into<String>) -> Self {
         Block::Text { text: text.into() }
     }
+
+    /// A text rendering for places that can only show text: a text-only
+    /// model, a log line, a terminal. Says what a non-text block is rather
+    /// than dropping it.
+    pub fn as_text(&self) -> Option<String> {
+        match self {
+            Block::Text { text } => Some(text.clone()),
+            Block::Image { artifact } => Some(format!(
+                "[image {} {}x{} {} bytes, artifact {}]",
+                artifact.mime,
+                artifact.width.unwrap_or(0),
+                artifact.height.unwrap_or(0),
+                artifact.bytes,
+                artifact.short()
+            )),
+            Block::Artifact { artifact } => Some(format!(
+                "[file {}{} {} bytes, artifact {}]",
+                artifact
+                    .name
+                    .as_deref()
+                    .map(|n| format!("{n} "))
+                    .unwrap_or_default(),
+                artifact.mime,
+                artifact.bytes,
+                artifact.short()
+            )),
+            Block::Data { value } => Some(value.to_string()),
+            Block::Unsupported { kind, note } => {
+                Some(format!("[{kind} content not carried: {note}]"))
+            }
+            Block::Thinking { .. }
+            | Block::ToolUse { .. }
+            | Block::ToolResult { .. }
+            | Block::Fallback { .. } => None,
+        }
+    }
+
+    /// The artifacts this block refers to, including inside a tool result.
+    pub fn artifacts(&self) -> Vec<&ArtifactRef> {
+        match self {
+            Block::Image { artifact } | Block::Artifact { artifact } => vec![artifact],
+            Block::ToolResult { content, .. } => {
+                content.iter().flat_map(Block::artifacts).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Joins the text renderings of `blocks`, one per line.
+pub fn blocks_text(blocks: &[Block]) -> String {
+    blocks
+        .iter()
+        .filter_map(Block::as_text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A streamed fragment of an assistant response.

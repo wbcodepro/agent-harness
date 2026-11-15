@@ -5,14 +5,17 @@
 //! separate mutable transcript, so resume, fork, compaction and replay all
 //! work from the same durable facts.
 
+pub mod artifact;
+pub mod contract;
 mod model;
 mod projection;
 mod recover;
 mod store;
 
+pub use artifact::{ArtifactRef, ArtifactSource, ArtifactStore};
 pub use model::{
     AttemptReason, Block, Delta, Event, FORMAT_VERSION, Header, ParentRef, Record, SessionId,
-    StopReason, ToolSpec, TurnEndReason, Usage, assemble,
+    StopReason, ToolSpec, TurnEndReason, Usage, assemble, blocks_text,
 };
 pub use projection::{History, MASK_MIN_BYTES, MASK_NOTE_BYTES, Message, Role, derive_history};
 pub use recover::{INTERRUPTED_NOT_STARTED, INTERRUPTED_RUNNING, plan_close, plan_recovery};

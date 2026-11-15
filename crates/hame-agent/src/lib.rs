@@ -381,9 +381,15 @@ impl Agent {
                 hook.before_step(session).await?;
             }
 
+            let artifacts = self
+                .tool_context
+                .artifacts
+                .clone()
+                .map(|store| hame_session::ArtifactSource(Arc::new(store)));
             let mut request = Request::from(session.history());
             request.max_tokens = self.max_tokens;
             request.cache_key = Some(session.id().to_string());
+            request.artifacts = artifacts.clone();
 
             let mut deltas: Vec<Delta> = Vec::new();
             let mut dropped = 0;
@@ -447,6 +453,7 @@ impl Agent {
                         request = Request::from(session.history());
                         request.max_tokens = self.max_tokens;
                         request.cache_key = cache_key;
+                        request.artifacts = artifacts.clone();
                     }
                     Err(e) => return Err(e.into()),
                 }
@@ -537,15 +544,16 @@ impl Agent {
                             .map(|(id, name, input)| self.execute(id, name, input)),
                     )
                     .await;
-                    for (id, output) in ids.into_iter().zip(outputs) {
-                        let text = if self.dedupe_results {
-                            same_as_shown(session.records(), &output.text).unwrap_or(output.text)
-                        } else {
-                            output.text
-                        };
+                    for (id, mut output) in ids.into_iter().zip(outputs) {
+                        if self.dedupe_results
+                            && output.parts.is_empty()
+                            && let Some(note) = same_as_shown(session.records(), &output.text)
+                        {
+                            output.text = note;
+                        }
                         session.append(Event::ToolResult {
                             call_id: id,
-                            content: vec![Block::text(text)],
+                            content: output.content(),
                             is_error: output.is_error,
                         })?;
                     }

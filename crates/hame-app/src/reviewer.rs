@@ -62,6 +62,7 @@ impl Reviewer {
             }],
             max_tokens: Some(200),
             cache_key: None,
+            artifacts: None,
         };
         let mut answer = String::new();
         let mut sink = |delta: Delta| -> Result<(), SinkError> {

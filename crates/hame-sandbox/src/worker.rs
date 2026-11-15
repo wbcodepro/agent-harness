@@ -22,6 +22,11 @@ struct WorkerRequest {
 struct WorkerResponse {
     text: String,
     is_error: bool,
+    /// Non-text content. A worker has no artifact store, so in practice
+    /// this carries structured data; kept so nothing is dropped crossing
+    /// the process boundary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parts: Vec<hame_session::Block>,
     /// The tool gave up on something it started (a timeout); the parent
     /// should kill the worker's process group.
     kill_group: bool,
@@ -120,6 +125,7 @@ pub async fn worker_main(tools: &ToolSet) -> u8 {
     let response = WorkerResponse {
         text: output.text,
         is_error: output.is_error,
+        parts: output.parts,
         kill_group: ctx.group_kill_requested(),
         background: hame_tools::jobs_running(),
     };
@@ -301,6 +307,7 @@ impl ToolRunner for SandboxedRunner {
                     ToolOutput {
                         text: response.text,
                         is_error: response.is_error,
+                        parts: response.parts,
                     }
                 }
                 Some(response) => {
@@ -315,6 +322,7 @@ impl ToolRunner for SandboxedRunner {
                     ToolOutput {
                         text: response.text,
                         is_error: response.is_error,
+                        parts: response.parts,
                     }
                 }
                 None => {

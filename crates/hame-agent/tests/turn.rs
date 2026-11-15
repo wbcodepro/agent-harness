@@ -112,6 +112,9 @@ fn kinds(session: &Session) -> Vec<&'static str> {
             Event::Checkpoint { .. } => "checkpoint",
             Event::Masked { .. } => "masked",
             Event::ModelSwitched { .. } => "model",
+            Event::TaskStart { .. } => "task/start",
+            Event::ActionReceipt { .. } => "action/receipt",
+            Event::TaskVerified { .. } => "task/verified",
         })
         .collect()
 }

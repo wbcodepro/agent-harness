@@ -1069,6 +1069,7 @@ pub async fn ping_model(
         }],
         max_tokens: Some(64),
         cache_key: None,
+        artifacts: None,
     };
     let mut text = String::new();
     let mut collect = |delta: hame_session::Delta| -> Result<(), hame_llm::SinkError> {

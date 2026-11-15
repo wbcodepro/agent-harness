@@ -471,6 +471,7 @@ mod tests {
             ],
             max_tokens: Some(256),
             cache_key: None,
+            artifacts: None,
         }
     }
 

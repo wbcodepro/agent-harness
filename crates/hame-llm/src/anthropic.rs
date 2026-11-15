@@ -221,8 +221,16 @@ impl Llm for Anthropic {
 fn text_of(blocks: &[Block]) -> String {
     let mut text = String::new();
     for block in blocks {
-        if let Block::Text { text: part } = block {
-            text.push_str(part);
+        match block {
+            Block::Text { text: part } => text.push_str(part),
+            other => {
+                if let Some(part) = other.as_text() {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(&part);
+                }
+            }
         }
     }
     text
@@ -261,6 +269,16 @@ fn wire_blocks(message: &Message, with_thinking: bool) -> Vec<Value> {
                 out.push(json!({"type": "fallback", "from": from, "to": to}));
             }
             Block::Fallback { .. } => {}
+            // Not yet sent natively: described in text so the loss is
+            // visible to the model.
+            Block::Image { .. }
+            | Block::Artifact { .. }
+            | Block::Data { .. }
+            | Block::Unsupported { .. } => {
+                if let Some(text) = block.as_text() {
+                    out.push(json!({"type": "text", "text": text}));
+                }
+            }
             Block::ToolResult {
                 call_id,
                 content,
@@ -596,6 +614,7 @@ mod tests {
             ],
             max_tokens: None,
             cache_key: None,
+            artifacts: None,
         }
     }
 

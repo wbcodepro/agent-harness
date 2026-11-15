@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 hame-kernel.workspace = true
 hame-tools.workspace = true
+hame-session.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

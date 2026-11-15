@@ -16,7 +16,7 @@ use std::time::Duration;
 pub use anthropic::Anthropic;
 pub use chat_completions::ChatCompletions;
 pub use hame_kernel::BoxFuture;
-use hame_session::{Delta, History, Message, StopReason, ToolSpec, Usage};
+use hame_session::{ArtifactSource, Delta, History, Message, StopReason, ToolSpec, Usage};
 pub use responses::Responses;
 
 /// Everything one model call is built from.
@@ -29,6 +29,9 @@ pub struct Request {
     /// Names the conversation this request continues, for providers that
     /// route requests with the same key to the same prompt cache.
     pub cache_key: Option<String>,
+    /// Where image and artifact blocks' bytes are read from when the
+    /// request is encoded. Without one, such blocks are sent as text notes.
+    pub artifacts: Option<ArtifactSource>,
 }
 
 impl From<History> for Request {
@@ -39,6 +42,7 @@ impl From<History> for Request {
             messages: history.messages,
             max_tokens: None,
             cache_key: None,
+            artifacts: None,
         }
     }
 }

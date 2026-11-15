@@ -55,6 +55,26 @@ impl SessionStore {
         }
     }
 
+    /// The directory session directories live in.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    /// The artifact store shared by every session in this store, so a fork
+    /// or an import keeps its images: `<root>/../artifacts`, or
+    /// `<root>/artifacts` when the root has no parent.
+    pub fn artifacts(&self) -> crate::ArtifactStore {
+        let base = self.root.parent().unwrap_or(&self.root);
+        crate::ArtifactStore::new(base.join("artifacts"))
+    }
+
+    /// Where a session's action journal lives, beside its log.
+    pub fn journal_path(&self, id: &SessionId) -> PathBuf {
+        self.root
+            .join(id.as_str())
+            .join(crate::contract::ACTION_JOURNAL_FILE)
+    }
+
     fn log_path(&self, id: &SessionId) -> PathBuf {
         self.root.join(id.as_str()).join(LOG_FILE)
     }

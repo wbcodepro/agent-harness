@@ -56,6 +56,14 @@ fn block_chars(blocks: &[Block]) -> usize {
             Block::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
             Block::ToolResult { content, .. } => block_chars(content),
             Block::Fallback { .. } => 0,
+            // Counted as about what the provider charges: an image costs
+            // roughly one token per 750 pixels, four bytes a token.
+            Block::Image { artifact } => {
+                let pixels = u64::from(artifact.width.unwrap_or(1024))
+                    * u64::from(artifact.height.unwrap_or(768));
+                (pixels / 750 * 4) as usize
+            }
+            other => other.as_text().map_or(0, |text| text.len()),
         })
         .sum()
 }
@@ -83,6 +91,10 @@ pub fn context_sources(records: &[Record]) -> Vec<(String, u64)> {
             match block {
                 Block::Text { text } => said += text.len(),
                 Block::Thinking { .. } | Block::Fallback { .. } => {}
+                other @ (Block::Image { .. }
+                | Block::Artifact { .. }
+                | Block::Data { .. }
+                | Block::Unsupported { .. }) => said += block_chars(std::slice::from_ref(other)),
                 Block::ToolUse { id, name, input } => {
                     names.insert(id.clone(), name.clone());
                     calls += name.len() + input.to_string().len();
@@ -197,6 +209,17 @@ fn transcript(messages: &[Message]) -> String {
                     out.push('\n');
                 }
                 Block::Thinking { .. } | Block::Fallback { .. } => {}
+                // A summarizer gets the description, never the pixels: the
+                // artifact stays in the store and its reference in the log.
+                Block::Image { .. }
+                | Block::Artifact { .. }
+                | Block::Data { .. }
+                | Block::Unsupported { .. } => {
+                    if let Some(text) = block.as_text() {
+                        out.push_str(&text);
+                        out.push('\n');
+                    }
+                }
                 Block::ToolUse { name, input, .. } => {
                     out.push_str(&format!("[called {name} with {input}]\n"));
                 }
@@ -381,6 +404,7 @@ impl Compactor {
             }],
             max_tokens: None,
             cache_key: None,
+            artifacts: None,
         };
         // A side request: its stream is not part of the session's own
         // assistant output, so it is collected here rather than journalled.

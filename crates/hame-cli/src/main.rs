@@ -369,5 +369,10 @@ fn print_block(block: &Block, depth: usize) {
                 print_block(inner, depth + 1);
             }
         }
+        other => {
+            if let Some(text) = other.as_text() {
+                println!("{pad}{text}");
+            }
+        }
     }
 }

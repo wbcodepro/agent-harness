@@ -324,6 +324,7 @@ impl Tool for JobOutput {
                     return ToolOutput {
                         text,
                         is_error: finished.is_error,
+                        parts: Vec::new(),
                     };
                 }
                 if Instant::now() >= deadline {

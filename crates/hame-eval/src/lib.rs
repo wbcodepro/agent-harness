@@ -161,8 +161,12 @@ fn deltas_for(content: &[Block]) -> Vec<Delta> {
                 from: from.clone(),
                 to: to.clone(),
             }),
-            // Assistant messages do not carry tool results.
-            Block::ToolResult { .. } => {}
+            // Assistant messages do not carry tool results or media.
+            Block::ToolResult { .. }
+            | Block::Image { .. }
+            | Block::Artifact { .. }
+            | Block::Data { .. }
+            | Block::Unsupported { .. } => {}
         }
     }
     deltas

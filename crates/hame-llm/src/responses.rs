@@ -418,6 +418,7 @@ mod tests {
             messages,
             max_tokens: None,
             cache_key: None,
+            artifacts: None,
         }
     }
 

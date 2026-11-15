@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub use bash::Bash;
 pub use files::{Edit, Read, Write, write_atomic};
 pub use hame_kernel::BoxFuture;
-use hame_session::ToolSpec;
+use hame_session::contract::ActionJournal;
+use hame_session::{ArtifactStore, Block, ToolSpec};
 pub use hashline::{EditLines, ReadAnchored};
 pub use jobs::{JOB_TOOL, JobOutput, job_ended, jobs_running, moved_to_background, wait_for_jobs};
 pub use patch::ApplyPatch;
@@ -40,10 +41,16 @@ pub enum Effect {
 
 /// The model-facing outcome of a tool call. A tool reports its own failures
 /// here rather than as a Rust error, so the model can read and react.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Most tools return only `text`. A tool that produces an image, a stored
+/// file or structured data adds it to `parts`; those blocks follow the text
+/// in the tool result, in order. Image and artifact parts refer to bytes
+/// already written to the artifact store.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ToolOutput {
     pub text: String,
     pub is_error: bool,
+    pub parts: Vec<Block>,
 }
 
 impl ToolOutput {
@@ -51,6 +58,7 @@ impl ToolOutput {
         Self {
             text: text.into(),
             is_error: false,
+            parts: Vec::new(),
         }
     }
 
@@ -58,7 +66,24 @@ impl ToolOutput {
         Self {
             text: text.into(),
             is_error: true,
+            parts: Vec::new(),
         }
+    }
+
+    pub fn with_part(mut self, part: Block) -> Self {
+        self.parts.push(part);
+        self
+    }
+
+    /// The tool result's content blocks: the text, when there is any or
+    /// when nothing else is, then the parts.
+    pub fn content(&self) -> Vec<Block> {
+        let mut content = Vec::with_capacity(1 + self.parts.len());
+        if !self.text.is_empty() || self.parts.is_empty() {
+            content.push(Block::text(self.text.clone()));
+        }
+        content.extend(self.parts.iter().cloned());
+        content
     }
 }
 
@@ -71,6 +96,15 @@ pub struct ToolContext {
     /// getting their own.
     pub shared_group: bool,
     kill_group: Arc<AtomicBool>,
+    /// Where a tool stores images and files it returns. Absent in a
+    /// confined worker, which cannot write outside its sandbox; host-side
+    /// tools get the session's store.
+    pub artifacts: Option<ArtifactStore>,
+    /// The session's action journal, for host-side tools that act on the
+    /// world outside the sandbox (browser, desktop).
+    pub journal: Option<Arc<ActionJournal>>,
+    /// The session the call belongs to, for target ownership.
+    pub session_id: Option<String>,
 }
 
 impl ToolContext {
@@ -79,7 +113,25 @@ impl ToolContext {
             cwd: hame_kernel::simplify_path(&cwd.into()),
             shared_group: false,
             kill_group: Arc::new(AtomicBool::new(false)),
+            artifacts: None,
+            journal: None,
+            session_id: None,
         }
+    }
+
+    pub fn with_artifacts(mut self, store: ArtifactStore) -> Self {
+        self.artifacts = Some(store);
+        self
+    }
+
+    pub fn with_journal(mut self, journal: Arc<ActionJournal>) -> Self {
+        self.journal = Some(journal);
+        self
+    }
+
+    pub fn with_session(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self
     }
 
     pub fn resolve(&self, path: &str) -> PathBuf {

@@ -68,7 +68,10 @@ pub fn plan_close(records: &[Record], reason: TurnEndReason) -> Vec<Event> {
             | Event::Compaction { .. }
             | Event::Masked { .. }
             | Event::ModelSwitched { .. }
-            | Event::Checkpoint { .. } => {}
+            | Event::Checkpoint { .. }
+            | Event::TaskStart { .. }
+            | Event::ActionReceipt { .. }
+            | Event::TaskVerified { .. } => {}
         }
     }
 

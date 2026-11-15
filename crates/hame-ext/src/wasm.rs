@@ -290,6 +290,7 @@ impl Tool for PluginTool {
                 Ok(reply) => ToolOutput {
                     text: reply["text"].as_str().unwrap_or("").to_string(),
                     is_error: reply["is_error"].as_bool().unwrap_or(false),
+                    parts: Vec::new(),
                 },
                 Err(e) => ToolOutput::error(format!("the plugin returned an invalid result: {e}")),
             }
