@@ -26,6 +26,9 @@ pub struct ChildSpec {
 pub struct Child {
     pub agent: Agent,
     pub keep_alive: Box<dyn Any + Send + Sync>,
+    /// The child's queue of messages for its running turn: where messages
+    /// from the other agents of the tree are delivered.
+    pub steering: hame_agent::Steering,
 }
 
 /// Builds child agents. Supplied by the application so children get the
@@ -45,6 +48,8 @@ pub struct SubagentTool {
     pub depth: u32,
     /// Kinds of subagent the model can ask for by name.
     pub kinds: Vec<SubagentKind>,
+    /// The running agents of the tree, by name, for `send_message`.
+    pub mail: crate::Mailboxes,
 }
 
 /// A named kind of subagent: extra instructions, and optionally the only
@@ -66,6 +71,8 @@ struct Input {
     #[serde(default)]
     isolate: bool,
     agent: Option<String>,
+    /// What the other agents call this one while it runs.
+    name: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone, Copy, PartialEq)]
@@ -163,12 +170,25 @@ impl Worktree {
     }
 }
 
+/// Removes a subagent's name from the mailboxes when its run ends.
+struct Registered {
+    mail: crate::Mailboxes,
+    name: String,
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        self.mail.unregister(&self.name);
+    }
+}
+
 impl Tool for SubagentTool {
     fn spec(&self) -> ToolSpec {
         let mut properties = json!({
             "task": {"type": "string", "description": "Complete instructions, including what to report back."},
             "mode": {"type": "string", "enum": ["explore", "work"], "description": "Default work."},
-            "isolate": {"type": "boolean", "description": "Work in a separate git worktree and branch. Default false."}
+            "isolate": {"type": "boolean", "description": "Work in a separate git worktree and branch. Default false."},
+            "name": {"type": "string", "description": "A short name the other agents can write to with send_message while it runs (default sub-<id>)."}
         });
         let mut kinds = String::new();
         if !self.kinds.is_empty() {
@@ -192,7 +212,8 @@ impl Tool for SubagentTool {
                           run in parallel. mode \"explore\" is read-only; mode \"work\" may change \
                           files. Set isolate to give a worker its own git worktree and branch, so \
                           parallel workers cannot overwrite each other; you then merge the branch \
-                          it reports."
+                          it reports. Subagents running at the same time can write to each other \
+                          and to you (lead) with send_message, by name."
             ),
             input_schema: json!({
                 "type": "object",
@@ -257,6 +278,25 @@ impl SubagentTool {
             depth: self.depth + 1,
         })
         .await?;
+        let name = input
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("sub-{}", &id.to_string()[..6.min(id.to_string().len())]));
+        self.mail.register(&name, child.steering.clone())?;
+        // Unregistered however the run ends.
+        let _registered = Registered {
+            mail: self.mail.clone(),
+            name: name.clone(),
+        };
+        // Before a kind narrows the tools, so a kind that lists its tools
+        // keeps send_message only if it names it.
+        child.agent.tools.insert(Arc::new(crate::MessageTool {
+            from: name.clone(),
+            mail: self.mail.clone(),
+        }));
         if let Some(kind) = kind {
             child.agent.system.push_str("\n\n");
             child.agent.system.push_str(&kind.instructions);
@@ -307,7 +347,7 @@ impl SubagentTool {
             .unwrap_or_else(|| "(the subagent gave no answer)".to_string());
 
         let mut report = answer;
-        report.push_str(&format!("\n\n[subagent session {id}"));
+        report.push_str(&format!("\n\n[subagent {name}, session {id}"));
         if let Some(worktree) = &worktree {
             match worktree.commit(&input.task).await? {
                 Some(stat) => report.push_str(&format!(

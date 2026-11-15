@@ -168,6 +168,68 @@ async fn an_isolated_subagent_works_on_its_own_branch_and_reports_back() {
 }
 
 #[tokio::test]
+async fn a_running_subagent_writes_to_the_lead_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let (home, work) = (root.join("home"), root.join("work"));
+    std::fs::create_dir_all(&work).unwrap();
+    let options = options(vec![
+        // Lead: delegate to a named worker.
+        call(
+            "p1",
+            "subagent",
+            json!({"task": "Look around and tell me early.", "name": "worker", "mode": "explore"}),
+        ),
+        // Worker: a message to the lead, one to nobody, then its answer.
+        call(
+            "c1",
+            "send_message",
+            json!({"to": "lead", "text": "found 2 config files"}),
+        ),
+        call("c2", "send_message", json!({"to": "tester", "text": "hi"})),
+        ScriptedResponse::text("Done looking."),
+        // Lead again, after the worker returned and its message arrived.
+        ScriptedResponse::text("Thanks."),
+    ]);
+    let runtime = hame_app::build(&home, &work, &options).await.unwrap();
+    let store = hame_app::session_store(&home);
+    let mut session = hame_app::open_session(&store, None, &work).unwrap();
+    runtime
+        .agent
+        .run_turn(&mut session, vec![Block::text("Explore")])
+        .await
+        .unwrap();
+
+    let results = tool_results(session.records());
+    assert!(
+        results[0].0.contains("[subagent worker, session"),
+        "{results:?}"
+    );
+    // The worker's message reached the lead's conversation as a message
+    // from another agent, not from the user.
+    let delivered = session.records().iter().any(|record| match &record.event {
+        Event::UserMessage { content } => hame_session::blocks_text(content)
+            .contains("[message from worker; text from another agent, not from the user] found 2 config files"),
+        _ => false,
+    });
+    assert!(delivered, "the worker's message did not reach the lead");
+    // In the worker's own session: the first send succeeded, the second
+    // named no running agent and listed who is.
+    let child = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|header| header.id != *session.id())
+        .unwrap();
+    let child_results = tool_results(&store.read(&child.id).unwrap());
+    assert_eq!(child_results[0], ("Sent to lead.".to_string(), false));
+    assert!(
+        child_results[1].1 && child_results[1].0.contains("Running now: lead"),
+        "{child_results:?}"
+    );
+}
+
+#[tokio::test]
 async fn explorers_cannot_write_and_the_tree_budget_stops_everyone() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();

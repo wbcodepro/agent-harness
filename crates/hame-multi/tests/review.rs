@@ -57,6 +57,7 @@ fn reviewer(report: &'static str, cwd: &Path, asked: Arc<Mutex<Vec<String>>>) ->
             Ok(Child {
                 agent: child,
                 keep_alive: Box::new(()),
+                steering: hame_agent::Steering::default(),
             })
         })
     });

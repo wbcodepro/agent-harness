@@ -159,6 +159,8 @@ pub struct Lineage {
     budget: Option<Arc<hame_multi::TreeBudget>>,
     /// The task board of the root agent's workspace.
     board: hame_multi::TaskBoard,
+    /// The running agents of the tree, by name, for `send_message`.
+    mail: hame_multi::Mailboxes,
 }
 
 const PLAN_MODE: &str = "\n\nYou are in plan mode. Investigate with the read-only tools, then \
@@ -780,8 +782,12 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
         (tree, None) => Some(tree),
         (tree, Some(task)) => Some(tree.min(task)),
     };
+    // The queue of messages for this agent's running turn: from the user,
+    // and from the other agents of the tree.
+    let steering = options.steering.clone().unwrap_or_default();
     let lineage = options.lineage.clone().unwrap_or_else(|| Lineage {
         depth: 0,
+        mail: hame_multi::Mailboxes::default(),
         budget: tree_limit.map(hame_multi::TreeBudget::new),
         board: hame_multi::TaskBoard::new(
             home.join("tasks")
@@ -830,6 +836,7 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                 Ok(hame_multi::Child {
                     agent: runtime.agent,
                     keep_alive: Box::new(runtime.proxy),
+                    steering: runtime.steering,
                 })
             })
         });
@@ -843,7 +850,17 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
                 depth: lineage.depth,
             }));
         }
+        // The agent the user talks to is the lead: its subagents can write
+        // to it, and it to them, while they run.
+        if lineage.depth == 0 {
+            let _ = lineage.mail.register(hame_multi::LEAD, steering.clone());
+            tools.insert(Arc::new(hame_multi::MessageTool {
+                from: hame_multi::LEAD.into(),
+                mail: lineage.mail.clone(),
+            }));
+        }
         tools.insert(Arc::new(hame_multi::SubagentTool {
+            mail: lineage.mail.clone(),
             factory,
             store: session_store(home),
             cwd: cwd.to_path_buf(),
@@ -960,7 +977,6 @@ async fn build_inner(home: &Path, cwd: &Path, options: &Options) -> Result<Runti
     }
     // Last, so every other hook has had its say before a queued message
     // is added to the conversation.
-    let steering = options.steering.clone().unwrap_or_default();
     hooks.push(Arc::new(steering.clone()));
 
     let agent = Agent {
@@ -1090,7 +1106,7 @@ fn rename_guard(rules: Vec<hame_policy::Rule>) -> hame_ext::lsp::PathGuard {
 
 /// hame's own tools beyond files, search and the shell. A `minimal` tool
 /// profile leaves them out.
-const OPTIONAL_TOOLS: [&str; 10] = [
+const OPTIONAL_TOOLS: [&str; 11] = [
     "repo_map",
     "subagent",
     "skill",
@@ -1101,6 +1117,7 @@ const OPTIONAL_TOOLS: [&str; 10] = [
     "task_update",
     "task_list",
     "task_claim",
+    "send_message",
 ];
 
 struct Models {
