@@ -927,7 +927,9 @@ pub(crate) struct ApprovalBody {
     allow: bool,
     /// The tool call the question was about; must match it.
     tool_call_id: String,
-    /// The sha256 of the call's arguments; checked when given.
+    /// The sha256 of the arguments' canonical JSON, as the question gave
+    /// it; required (only a local answer to a question whose arguments
+    /// have no canonical form may leave it out).
     #[serde(default)]
     args_sha256: Option<String>,
     /// Also allow this tool for the rest of the session.
@@ -953,13 +955,21 @@ pub(crate) async fn approval(
         let Some(question) = approvals.get(&body.id) else {
             return Err(bad("that question is no longer waiting"));
         };
-        if question.tool_call_id != body.tool_call_id
-            || body
-                .args_sha256
-                .as_ref()
-                .is_some_and(|hash| *hash != question.args_sha256)
-        {
+        if question.tool_call_id != body.tool_call_id {
             return Err(bad("the answer names another tool call than the question"));
+        }
+        match (&question.args_sha256, &body.args_sha256) {
+            (Some(expected), Some(given)) if expected == given => {}
+            (Some(_), Some(_)) => {
+                return Err(bad("the answer names other arguments than the question"));
+            }
+            (Some(_), None) => return Err(bad("the answer must name args_sha256")),
+            (None, _) if caller.is_remote() => {
+                return Err(forbidden(
+                    "this call's arguments have no canonical form, so a remote answer cannot                      be bound to them; answer on this computer",
+                ));
+            }
+            (None, _) => {}
         }
         approvals.remove(&body.id).expect("checked above")
     };

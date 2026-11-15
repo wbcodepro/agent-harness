@@ -245,7 +245,7 @@ async fn a_question_reaches_a_page_that_connects_later_and_always_allows_the_too
     let question = asked.last().unwrap().clone();
     assert_eq!(question["tool"], "write");
     assert_eq!(question["tool_call_id"], "c1");
-    assert_eq!(question["input"]["path"], "a.txt");
+    assert_eq!(question["arguments"]["path"], "a.txt");
     assert_eq!(question["effect"], "write");
     assert!(question["scope"].as_str().unwrap().starts_with("write"));
 
@@ -267,7 +267,8 @@ async fn a_question_reaches_a_page_that_connects_later_and_always_allows_the_too
         .post(
             &format!("/sessions/{session}/approval"),
             json!({"id": question["id"], "allow": true, "always": true,
-                   "tool_call_id": question["tool_call_id"]}),
+                   "tool_call_id": question["tool_call_id"],
+                   "args_sha256": question["args_sha256"]}),
         )
         .await;
     assert_eq!(status, 200);

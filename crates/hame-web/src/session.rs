@@ -54,7 +54,8 @@ pub struct Waiting {
     pub event: Value,
     pub tool: String,
     pub tool_call_id: String,
-    pub args_sha256: String,
+    /// `None` when the arguments have no canonical JSON form.
+    pub args_sha256: Option<String>,
 }
 
 /// What the pages watching a session and its agent share.
@@ -217,13 +218,18 @@ pub fn effect_name(effect: Effect) -> &'static str {
     }
 }
 
-/// `sha256` (lowercase hex) of the arguments as serialised, which a remote
-/// answer must name (APPS-AND-SYNC.md §4).
-pub fn args_sha256(arguments: &Value) -> String {
-    Sha256::digest(serde_json::to_vec(arguments).unwrap_or_default())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+/// `sha256` (lowercase hex) of the arguments' canonical JSON (RFC 8785),
+/// which an answer must name (APPS-AND-SYNC.md §4); the relay connector and
+/// devices compute the same. `None` for arguments with no canonical form
+/// (integers beyond 2^53).
+pub fn args_sha256(arguments: &Value) -> Option<String> {
+    let canonical = crate::jcs::canonical(arguments).ok()?;
+    Some(
+        Sha256::digest(canonical.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
 }
 
 /// `path` with `.` and `..` worked out without touching the disk.
@@ -324,6 +330,8 @@ impl Prompter for PagePrompter {
             }
             let id = channel.next_approval.fetch_add(1, Ordering::Relaxed);
             let (answer, answered) = oneshot::channel();
+            // The tool call and its exact arguments, so a remote device can
+            // show what it approves, and the hash an answer must name.
             let hash = args_sha256(&request.input);
             let event = json!({
                 "kind": "approval",
@@ -331,8 +339,8 @@ impl Prompter for PagePrompter {
                 "question": question,
                 "tool": request.name,
                 "tool_call_id": request.call_id,
+                "arguments": request.input,
                 "args_sha256": hash,
-                "input": request.input,
                 "effect": effect_name(request.effect),
                 "scope": format!("{} for the rest of this session", request.name),
             });

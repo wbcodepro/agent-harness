@@ -99,9 +99,10 @@ export interface ApprovalEvent {
   tool?: string;
   /** The tool call asked about; an answer must name it. */
   tool_call_id?: string;
-  /** sha256 of the call's arguments as serialised; an answer may name it. */
-  args_sha256?: string;
-  input?: unknown;
+  /** sha256 of the arguments' canonical JSON (RFC 8785); an answer must name it. */
+  args_sha256?: string | null;
+  /** The exact arguments of the call. */
+  arguments?: unknown;
   effect?: "read-only" | "write" | "execute" | "control";
   scope?: string;
 }

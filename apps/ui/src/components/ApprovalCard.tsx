@@ -54,9 +54,9 @@ export function ApprovalCard({
   }, [onAnswer]);
 
   const tool = approval.tool ?? "";
-  const input = (approval.input ?? {}) as Record<string, unknown>;
-  const diffs = tool ? diffsFromToolInput(tool, approval.input) : [];
-  const described = tool ? describe(tool, approval.input) : null;
+  const input = (approval.arguments ?? {}) as Record<string, unknown>;
+  const diffs = tool ? diffsFromToolInput(tool, approval.arguments) : [];
+  const described = tool ? describe(tool, approval.arguments) : null;
   const command = tool === "bash" && typeof input.command === "string" ? input.command : null;
   return (
     <div
@@ -86,8 +86,8 @@ export function ApprovalCard({
         {diffs.map((diff) => (
           <DiffCard key={diff.path} diff={diff} />
         ))}
-        {!command && diffs.length === 0 && approval.input !== undefined && described && (
-          <pre className={styles.command}>{JSON.stringify(approval.input, null, 2)}</pre>
+        {!command && diffs.length === 0 && approval.arguments !== undefined && described && (
+          <pre className={styles.command}>{JSON.stringify(approval.arguments, null, 2)}</pre>
         )}
       </div>
       <div className={styles.approvalActions}>

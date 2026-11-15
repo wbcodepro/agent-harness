@@ -98,7 +98,7 @@ export class Api {
       allow,
       always,
       tool_call_id: approval.tool_call_id ?? "",
-      args_sha256: approval.args_sha256,
+      args_sha256: approval.args_sha256 ?? undefined,
     });
   }
 

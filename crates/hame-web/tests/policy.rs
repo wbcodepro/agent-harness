@@ -276,8 +276,16 @@ async fn approvals_name_their_call_and_grants_end_with_a_mode_change() {
         .await
         .pop()
         .unwrap();
-    let input = json!({"path": "a.txt", "content": "from the web"});
-    let hash: String = Sha256::digest(serde_json::to_vec(&input).unwrap())
+    // The exact arguments, and the sha256 of their canonical JSON
+    // (RFC 8785: members sorted, no spaces), as the relay connector and
+    // devices compute it.
+    assert_eq!(
+        question["arguments"],
+        json!({"path": "a.txt", "content": "from the web"})
+    );
+    assert_eq!(question["tool"], "write");
+    let canonical = r#"{"content":"from the web","path":"a.txt"}"#;
+    let hash: String = Sha256::digest(canonical.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
@@ -294,6 +302,10 @@ async fn approvals_name_their_call_and_grants_end_with_a_mode_change() {
         (
             json!({"id": question["id"], "allow": true, "tool_call_id": "c1", "args_sha256": "00"}),
             "other arguments",
+        ),
+        (
+            json!({"id": question["id"], "allow": true, "tool_call_id": "c1"}),
+            "no argument hash",
         ),
     ] {
         let status = page.post(&approval, answer).await.0;
@@ -350,7 +362,8 @@ async fn approvals_name_their_call_and_grants_end_with_a_mode_change() {
     let (status, _) = page
         .post(
             &approval,
-            json!({"id": asked["id"], "allow": true, "always": true, "tool_call_id": "c3"}),
+            json!({"id": asked["id"], "allow": true, "always": true, "tool_call_id": "c3",
+                   "args_sha256": asked["args_sha256"]}),
         )
         .await;
     assert_eq!(status, 200);
@@ -636,7 +649,8 @@ async fn accept_edits_asks_about_a_write_outside_the_folder() {
     assert_eq!(question["tool_call_id"], "c1");
     page.post(
         &format!("/sessions/{session}/approval"),
-        json!({"id": question["id"], "allow": false, "tool_call_id": "c1"}),
+        json!({"id": question["id"], "allow": false, "tool_call_id": "c1",
+               "args_sha256": question["args_sha256"]}),
     )
     .await;
     events.until("the end", turn_ended).await;

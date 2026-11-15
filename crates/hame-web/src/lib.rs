@@ -46,6 +46,7 @@
 
 mod assets;
 mod caller;
+mod jcs;
 mod meta;
 mod overview;
 mod routes;

@@ -107,13 +107,16 @@ blob into an object URL and caches it per page.
 ## Approvals
 
 An approval event names the call it is about:
-`{"kind":"approval","id":N,"question":…,"tool":…,"tool_call_id":…,"args_sha256":…,"input":…,"effect":…,"scope":…}`,
-where `args_sha256` is the lowercase hex SHA-256 of the arguments as the
-host serialised them. The answer
+`{"kind":"approval","id":N,"question":…,"tool":…,"tool_call_id":…,"arguments":…,"args_sha256":…,"effect":…,"scope":…}`,
+where `arguments` are the call's exact arguments and `args_sha256` the
+lowercase hex SHA-256 of their canonical JSON (RFC 8785), or `null` when
+they have no canonical form (integers beyond 2^53). The answer
 `POST /api/sessions/{id}/approval {"id":N,"allow":bool,"always":bool,"tool_call_id":…,"args_sha256":…}`
-must carry the same `tool_call_id` (and, when given, the same
-`args_sha256`), or the host answers 400. A remote implementation checks the
-pair itself too before passing an answer on (APPS-AND-SYNC.md §4).
+must carry the same `tool_call_id` and `args_sha256`, or the host answers
+400 (a question without a hash can only be answered on the host itself).
+The relay connector checks the pair too before passing an answer on, and a
+device recomputes the hash from the arguments it shows (APPS-AND-SYNC.md
+§4).
 
 ## Remote callers
 
