@@ -111,6 +111,7 @@ fn grant(capabilities: &[Capability]) -> Authorization {
             origin: Some("http://127.0.0.1:*".into()),
             profile: None,
             capabilities: capabilities.to_vec(),
+            folders: vec![],
         }],
     }
 }

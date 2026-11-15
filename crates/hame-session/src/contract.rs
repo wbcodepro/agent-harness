@@ -137,6 +137,22 @@ pub struct Grant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     pub capabilities: Vec<Capability>,
+    /// Folders that a save or export panel confirmed under this grant may
+    /// write into (desktop `file_write`); each also allows its direct
+    /// subfolders, and `"*"` allows any folder. Empty: the workspace only.
+    /// Absolute, `~/`-relative or relative to the workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<String>,
+}
+
+/// Where a save panel confirmed with `file_write` may write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveFolders {
+    /// Any folder (a grant lists `"*"`).
+    Any,
+    /// These folders and their direct subfolders, as written in the grants;
+    /// an empty entry stands for the workspace.
+    Only(Vec<String>),
 }
 
 /// Matches `*` as any run of characters; everything else literally,
@@ -191,6 +207,28 @@ impl Authorization {
         self.grants
             .iter()
             .any(|grant| grant.covers(target, capability))
+    }
+
+    /// The folders a save panel may write into under the grants that give
+    /// `file_write` on `target`: the union of their `folders`, the
+    /// workspace for a grant that lists none.
+    pub fn save_folders(&self, target: &Target) -> SaveFolders {
+        let mut folders = Vec::new();
+        for grant in self
+            .grants
+            .iter()
+            .filter(|g| g.covers(target, Capability::FileWrite))
+        {
+            if grant.folders.iter().any(|f| f.trim() == "*") {
+                return SaveFolders::Any;
+            }
+            if grant.folders.is_empty() {
+                folders.push(String::new());
+            }
+            folders.extend(grant.folders.iter().cloned());
+        }
+        folders.dedup();
+        SaveFolders::Only(folders)
     }
 
     /// Why an action is refused, or `None` when it is permitted.
@@ -699,6 +737,7 @@ mod tests {
                 origin: Some("http://127.0.0.1:*".into()),
                 profile: Some("test-a".into()),
                 capabilities: vec![Capability::Observe, Capability::Interact],
+                folders: vec![],
             }],
         };
         assert!(auth.permits(&target(), Capability::Interact));

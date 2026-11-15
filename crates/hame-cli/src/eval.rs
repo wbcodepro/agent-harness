@@ -934,6 +934,14 @@ async fn run_task(
     // an agent run by `--command` is outside the sandbox altogether.)
     let config = hame_eval::arms::merge_task_config(&arm.config, &task.config)
         .map_err(|e| format!("{name}: {e}"))?;
+    // A grant may name the run's folders (`folders = ["{outbox}"]`).
+    let config = manifest::substitute(
+        &config,
+        &[
+            ("outbox", &outbox.to_string_lossy()),
+            ("workspace", &work.to_string_lossy()),
+        ],
+    );
     let config = [task.hidden_root.as_path(), &run_dir, &outbox]
         .into_iter()
         .fold(config, |config, path| with_unreadable(&config, path));

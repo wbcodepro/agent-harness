@@ -57,6 +57,7 @@ async fn main() {
                 Capability::Commit,
                 Capability::FileWrite,
             ],
+            folders: vec![],
         }],
     };
     let config = BrowserConfig::new(dir.path().join("profiles"), auth);

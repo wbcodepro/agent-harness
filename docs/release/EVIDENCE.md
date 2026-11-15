@@ -634,6 +634,11 @@ Second pass (office and cross-application tasks):
   moves only files in the apps' own draft folders, so the file was moved
   by hand. A destination-scoped grant (or a refusal to confirm a panel
   pointing outside named folders) would close this; not done here.
+  **Addressed after this pass:** grants take `folders` (default the
+  workspace); hame reads the save panel's "Where:" pop-up when a save or
+  export is confirmed and refuses other folders (GUI test
+  `return_in_the_save_panel_needs_commit_and_file_write`). The pilot
+  manifest now grants `{outbox}` and `{workspace}` to desktop tasks.
 - **One office application per kind.** Numbers and Pages 14.4 only;
   Keynote, Excel and Word are not covered by tasks. Fixture documents are
   native files made with this version; another version may convert them.

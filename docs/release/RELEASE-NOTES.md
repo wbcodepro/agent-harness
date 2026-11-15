@@ -36,6 +36,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 - File acceptance conditions read files through the sandbox in a confined session, so a link to a hidden file is not followed and its content never comes back as evidence; `file_absent` fails when the path cannot be looked at; `csv_shape` counts records, not lines, and fails on malformed quoting or records whose width differs from the header.
 - `hame run --inbox` directories are hidden from the agent's tools and message files that are links are not delivered; `~/.hame/mcp-auth` is hidden; a browser tab whose redirect guard could not be attached is not used.
 - A password typed into a secure field is not written into receipts.
+- Desktop `file_write` is limited to folders: a grant's `folders` (default the workspace) bounds where a confirmed save or export panel may write; the panel's "Where:" pop-up is read at dispatch time and checked again by the helper right before the input is sent.
 
 **Mid-run messages.** `hame run --inbox DIR` delivers a user message to a running agent (or as the next turn once it has finished); `hame eval` tasks can schedule one with `interject`.
 
@@ -60,7 +61,7 @@ Release candidate. hame was a coding agent; this version lets it carry out tasks
 ## Known limitations
 
 - Desktop control is macOS only and was tested with TextEdit, Numbers 14.4 and Pages 14.4 on macOS 26.6.2 (Excel exposes no cell grid; Word and Keynote not tried); no scroll, drag or hover; US key layout for `key`.
-- A desktop `file_write` grant is per application, not per folder: a granted app can save or export into any folder the user can write.
+- A desktop `file_write` grant is limited to its `folders` by the names a save panel shows (folder and parent), so a different folder with the same two names would pass; saving an already saved document in place writes where it is.
 - The browser tool was verified on macOS arm64 with Chrome 157 only; only top-level navigation is limited to granted origins; commit detection is heuristic.
 - Browser and desktop tools act outside the shell sandbox with the user's permissions; grant narrowly.
 - Prices exist only for Anthropic models; a `max_cost_usd` budget stops a task on other providers because its spending cannot be measured.

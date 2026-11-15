@@ -21,7 +21,7 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-let HELPER_PROTOCOL = 2
+let HELPER_PROTOCOL = 3
 let HELPER_VERSION = "0.1.0"
 
 @_silgen_name("_AXUIElementGetWindow")
@@ -683,24 +683,55 @@ struct Resolved {
 }
 
 func inSavePanel(_ e: AXUIElement) -> Bool {
-    // Walk up to the enclosing sheet or dialog and look for the name field
-    // every NSSavePanel has.
+    enclosingSavePanel(e) != nil
+}
+
+/// The save panel `e` is in: the enclosing sheet or dialog, when it has the
+/// name field every NSSavePanel has.
+func enclosingSavePanel(_ e: AXUIElement) -> AXUIElement? {
     var cursor: AXUIElement? = e
     var hops = 0
     while let c = cursor, hops < 40 {
         let role = roleOf(c).0 ?? ""
         let sub = strAttr(c, kAXSubroleAttribute) ?? ""
         if role == "AXSheet" || sub == "AXDialog" || sub == "AXSystemDialog" {
-            return findFirst(c, limit: 600) { el in
+            let named = findFirst(c, limit: 600) { el in
                 strAttr(el, kAXIdentifierAttribute) == "saveAsNameTextField"
             } != nil
+            return named ? c : nil
         }
         // A document window is not a panel; only a sheet or dialog in it is.
-        if role == "AXWindow" { return false }
+        if role == "AXWindow" { return nil }
         cursor = elementAttr(c, kAXParentAttribute)
         hops += 1
     }
-    return false
+    return nil
+}
+
+/// Where a save panel will write, as its "Where:" pop-up shows it
+/// ("folder — parent"), without Unicode direction isolates. The pop-up is
+/// found by its label, or (in another language) as the pop-up right before
+/// the panel's disclosure button. nil when there is none, as in an expanded
+/// panel: the folder is then unknown.
+func saveDestination(_ panel: AXUIElement) -> String? {
+    var queue = [panel]
+    var seen = 0
+    var found: AXUIElement? = nil
+    while !queue.isEmpty && seen < 800 && found == nil {
+        let e = queue.removeFirst()
+        seen += 1
+        let kids = elementsAttr(e, kAXChildrenAttribute)
+        for (i, k) in kids.enumerated() where roleOf(k).0 == "AXPopUpButton" {
+            let label = strAttr(k, kAXTitleAttribute) ?? nameOf(k)
+            let beforeDisclosure = i + 1 < kids.count && roleOf(kids[i + 1]).0 == "AXDisclosureTriangle"
+            if label == "Where:" || beforeDisclosure { found = k; break }
+        }
+        queue.append(contentsOf: kids)
+    }
+    guard let popup = found, let v = valueString(popup, limit: 500) else { return nil }
+    let isolates: Set<Character> = ["\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}"]
+    let clean = String(v.filter { !isolates.contains($0) })
+    return clean.isEmpty ? nil : clean
 }
 
 func inDialog(_ e: AXUIElement) -> Bool {
@@ -740,16 +771,20 @@ func isSavePanel(_ e: AXUIElement) -> Bool {
 /// is inside both), and whether any of them is a save panel. `windows` are
 /// checked too, with the sheets attached to them: keys go to a sheet while
 /// one is open. Used to decide what Return, Space or a click may do there.
-func surroundings(_ e: AXUIElement?, windows: [AXUIElement]) -> (inDialog: Bool, savePanel: Bool) {
+func surroundings(_ e: AXUIElement?, windows: [AXUIElement]) -> (inDialog: Bool, savePanel: Bool, saveWhere: String?) {
     var inDialog = false
     var savePanel = false
+    var panel: AXUIElement? = nil
     var visited: [AXUIElement] = []
     func consider(_ c: AXUIElement) {
         if visited.contains(where: { CFEqual($0, c) }) { return }
         visited.append(c)
         if isDialogLike(c) {
             inDialog = true
-            if !savePanel && isSavePanel(c) { savePanel = true }
+            if !savePanel && isSavePanel(c) {
+                savePanel = true
+                panel = c
+            }
         }
     }
     var cursor = e
@@ -768,7 +803,7 @@ func surroundings(_ e: AXUIElement?, windows: [AXUIElement]) -> (inDialog: Bool,
             consider(sheet)
         }
     }
-    return (inDialog, savePanel)
+    return (inDialog, savePanel, panel.flatMap(saveDestination))
 }
 
 /// Where keyboard input would go: the focused element's role, name and a
@@ -778,6 +813,7 @@ func surroundings(_ e: AXUIElement?, windows: [AXUIElement]) -> (inDialog: Bool,
 func focusContext(_ e: AXUIElement?, windows: [AXUIElement]) -> [String: Any] {
     let s = surroundings(e, windows: windows)
     var out: [String: Any] = ["known": false, "in_dialog": s.inDialog, "save_panel": s.savePanel]
+    if let w = s.saveWhere { out["save_where"] = w }
     guard let e = e, let role = roleOf(e).0, !role.isEmpty else { return out }
     out["known"] = true
     out["role"] = role
@@ -807,6 +843,9 @@ func checkContext(_ req: [String: Any], _ now: [String: Any]) throws {
     for key in ["in_dialog", "save_panel"] where (expect[key] as? Bool) != (now[key] as? Bool) {
         same = false
     }
+    if let wanted = expect["save_where"] as? String, (now["save_where"] as? String) != wanted {
+        same = false
+    }
     if !same {
         throw fail("interference",
                    "Keyboard focus is not where it was when this input was authorized (was \(describeContext(expect)), now \(describeContext(now))); nothing was sent. Observe and try again.",
@@ -834,7 +873,9 @@ func hitTest(appEl: AXUIElement, window: AXUIElement, point: CGPoint) -> [String
         }
     }
     let s = surroundings(inner, windows: [window])
-    return ["chain": chain, "in_dialog": s.inDialog, "save_panel": s.savePanel]
+    var out: [String: Any] = ["chain": chain, "in_dialog": s.inDialog, "save_panel": s.savePanel]
+    if let w = s.saveWhere { out["save_where"] = w }
+    return out
 }
 
 /// Whether `e` is (still) inside `window`, following parents.
@@ -951,6 +992,7 @@ func elementJSON(_ r: Resolved) -> [String: Any] {
         "enabled": boolAttr(r.element, kAXEnabledAttribute) ?? true,
         "in_dialog": inDialog(r.element),
         "save_panel": inSavePanel(r.element),
+        "save_where": enclosingSavePanel(r.element).flatMap(saveDestination) ?? NSNull(),
         "window": windowJSON(r.window, app: r.app, appEl: r.appEl) ?? [:],
         // What typing into this element would meet once it has focus.
         "context": focusContext(r.element, windows: [r.window]),
@@ -971,6 +1013,11 @@ func checkExpected(_ r: Resolved, _ req: [String: Any]) throws {
     }
     if let name = req["expect_name"] as? String, name != r.name {
         throw fail("stale_ref", "The element is now named \"\(r.name)\", not \"\(name)\". Observe again.")
+    }
+    if let wanted = req["expect_save_where"] as? String,
+       enclosingSavePanel(r.element).flatMap(saveDestination) != wanted {
+        throw fail("interference", "The save panel no longer points at the folder this action was authorized for; nothing was done. Observe again.",
+                   ["dispatched": false])
     }
 }
 
@@ -1613,6 +1660,12 @@ func clickAt(_ req: [String: Any]) throws -> [String: Any] {
         let name = first?["name"] as? String ?? ""
         let wantRole = expect["role"] as? String ?? ""
         let wantName = expect["name"] as? String ?? ""
+        let movedPanel = (expect["save_where"] as? String).map { $0 != (now["save_where"] as? String) } ?? false
+        if movedPanel {
+            throw fail("interference",
+                       "The save panel no longer points at the folder this click was authorized for; nothing was clicked. Observe again.",
+                       ["dispatched": false])
+        }
         if role != wantRole || name != wantName {
             throw fail("stale_capture",
                        "The element under (\(x), \(y)) changed since the click was authorized (was \(wantRole) \"\(wantName)\", now \(role) \"\(name)\"); nothing was clicked. Take a new screenshot.",
@@ -1964,6 +2017,21 @@ func handle(_ req: [String: Any]) {
             }
             let (_, appEl, window, _) = try resolveWindow(req)
             result = hitTest(appEl: appEl, window: window, point: CGPoint(x: x, y: y))
+        case "display_names":
+            // How Finder (and the save panel's "Where:" pop-up) names each
+            // folder, its parent and its direct subfolders.
+            let paths = req["paths"] as? [String] ?? []
+            let fm = FileManager.default
+            result = ["folders": paths.map { p -> [String: Any] in
+                let url = URL(fileURLWithPath: p)
+                let kids = ((try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+                    .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+                    .prefix(2000)
+                    .map { fm.displayName(atPath: $0.path) }
+                return ["path": p, "name": fm.displayName(atPath: p),
+                        "parent": fm.displayName(atPath: url.deletingLastPathComponent().path),
+                        "children": Array(kids)]
+            }]
         case "observe": result = try observe(req)
         case "resolve": result = elementJSON(try resolveElement(req))
         case "press": result = try press(req)

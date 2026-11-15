@@ -57,6 +57,7 @@ fn textedit_grants(caps: Vec<Capability>) -> Authorization {
                 origin: None,
                 profile: None,
                 capabilities: caps.clone(),
+                folders: vec!["*".into()],
             },
             Grant {
                 channel: Channel::Visual,
@@ -64,6 +65,7 @@ fn textedit_grants(caps: Vec<Capability>) -> Authorization {
                 origin: None,
                 profile: None,
                 capabilities: caps,
+                folders: vec!["*".into()],
             },
             Grant {
                 channel: Channel::Desktop,
@@ -71,6 +73,7 @@ fn textedit_grants(caps: Vec<Capability>) -> Authorization {
                 origin: None,
                 profile: None,
                 capabilities: vec![Capability::Clipboard],
+                folders: vec!["*".into()],
             },
         ],
     }
@@ -78,6 +81,18 @@ fn textedit_grants(caps: Vec<Capability>) -> Authorization {
 
 fn helper_cache() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hame-desktop-helpers")
+}
+
+/// `textedit_grants`, with `file_write` limited to `folders`.
+fn textedit_grants_in(caps: Vec<Capability>, folders: &[&Path]) -> Authorization {
+    let mut auth = textedit_grants(caps);
+    for grant in &mut auth.grants {
+        grant.folders = folders
+            .iter()
+            .map(|f| f.to_string_lossy().into_owned())
+            .collect();
+    }
+    auth
 }
 
 fn config(home: &Path, auth: Authorization) -> DesktopConfig {
@@ -663,9 +678,43 @@ async fn return_in_the_save_panel_needs_commit_and_file_write() {
         }
         assert!(!saved.exists(), "a refused Return saved the file");
 
-        // With both, Return saves, journalled as a commit with a key.
-        gui.ok(json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}))
+        let all = vec![
+            Capability::Observe,
+            Capability::Interact,
+            Capability::Commit,
+            Capability::FileWrite,
+            Capability::GlobalInput,
+        ];
+        // file_write for another folder: the panel points outside it.
+        let other = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = DesktopTool::new(config(
+            home.path(),
+            textedit_grants_in(all.clone(), &[other.path()]),
+        ));
+        let refused = elsewhere
+            .call(
+                &json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}),
+                &gui.ctx,
+            )
             .await;
+        assert!(
+            refused.is_error && refused.text.contains("outside the folders file_write"),
+            "{}",
+            refused.text
+        );
+        assert!(!saved.exists(), "a refused Return saved the file");
+
+        // With both, and file_write for this folder, Return saves,
+        // journalled as a commit with a key.
+        let scoped = DesktopTool::new(config(home.path(), textedit_grants_in(all, &[dir.path()])));
+        let out = scoped
+            .call(
+                &json!({"action": "key", "app": TEXTEDIT, "window": doc, "keys": "return"}),
+                &gui.ctx,
+            )
+            .await;
+        assert!(!out.is_error, "{}", out.text);
         gui.ok(json!({"action": "wait", "app": TEXTEDIT, "window": doc,
                       "until": "title", "contains": "hame-return"}))
             .await;
@@ -1343,6 +1392,7 @@ fn numbers_grants() -> Authorization {
                 origin: None,
                 profile: None,
                 capabilities: caps.clone(),
+                folders: vec!["*".into()],
             })
             .collect(),
     }

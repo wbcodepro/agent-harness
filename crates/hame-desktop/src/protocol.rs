@@ -36,7 +36,7 @@ pub const HELPER_SOURCE: &str = include_str!("../helper/DesktopHelper.swift");
 
 /// The request/response protocol between this crate and the helper.
 /// Bumped whenever a request or result changes shape.
-pub const HELPER_PROTOCOL: u32 = 2;
+pub const HELPER_PROTOCOL: u32 = 3;
 
 /// Flags the helper is compiled with; part of the cache key.
 const SWIFTC_FLAGS: &[&str] = &["-O", "-swift-version", "5"];
@@ -594,7 +594,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_wrong_handshake_or_a_dead_helper_is_reported() {
-        let wrong = r#"read line; echo '{"id":1,"ok":true,"result":{"manifest":{"name":"x","version":"0","protocol":99,"channel":"desktop","operations":[],"platforms":[],"cancellable":true,"nested_usage":"none"},"helper_protocol":2,"ax_trusted":true,"screen_access":true,"pid":1}}'; cat >/dev/null"#;
+        let wrong = r#"read line; echo '{"id":1,"ok":true,"result":{"manifest":{"name":"x","version":"0","protocol":99,"channel":"desktop","operations":[],"platforms":[],"cancellable":true,"nested_usage":"none"},"helper_protocol":3,"ax_trusted":true,"screen_access":true,"pid":1}}'; cat >/dev/null"#;
         let err = Helper::start(
             Path::new("/bin/sh"),
             &["-c".into(), wrong.into()],
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(err.code, "protocol");
         assert!(err.message.contains("99"), "{}", err.message);
 
-        let dies = r#"read line; echo '{"id":1,"ok":true,"result":{"manifest":{"name":"x","version":"0","protocol":1,"channel":"desktop","operations":[],"platforms":[],"cancellable":true,"nested_usage":"none"},"helper_protocol":2,"ax_trusted":true,"screen_access":true,"pid":1}}'; read line; exit 3"#;
+        let dies = r#"read line; echo '{"id":1,"ok":true,"result":{"manifest":{"name":"x","version":"0","protocol":1,"channel":"desktop","operations":[],"platforms":[],"cancellable":true,"nested_usage":"none"},"helper_protocol":3,"ax_trusted":true,"screen_access":true,"pid":1}}'; read line; exit 3"#;
         let helper = Helper::start(
             Path::new("/bin/sh"),
             &["-c".into(), dies.into()],

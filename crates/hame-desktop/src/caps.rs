@@ -63,6 +63,50 @@ pub fn opens_dialog(name: &str) -> bool {
     name.ends_with('…') || name.ends_with("...")
 }
 
+/// How Finder names a granted folder, its parent and its direct
+/// subfolders: what a save panel's "Where:" pop-up shows.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FolderNames {
+    pub path: String,
+    pub name: String,
+    pub parent: String,
+    pub children: Vec<String>,
+}
+
+impl FolderNames {
+    pub fn from_json(v: &Value) -> Self {
+        let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+        Self {
+            path: s("path"),
+            name: s("name"),
+            parent: s("parent"),
+            children: v["children"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str().map(String::from))
+                .collect(),
+        }
+    }
+}
+
+/// Whether a save panel showing `place` ("folder — parent", as its
+/// "Where:" pop-up does, or only "folder" for some folders) points at one
+/// of `folders` or a direct subfolder of one. Only these names are
+/// visible, so a different folder with the same names would match too;
+/// with no parent shown, the folder's own name must be a granted one.
+pub fn save_place_allowed(place: &str, folders: &[FolderNames]) -> bool {
+    let Some((name, parent)) = place.rsplit_once(" \u{2014} ") else {
+        let name = place.trim();
+        return !name.is_empty() && folders.iter().any(|f| f.name == name);
+    };
+    let (name, parent) = (name.trim(), parent.trim());
+    folders.iter().any(|f| {
+        (!f.name.is_empty() && name == f.name && parent == f.parent)
+            || (!f.name.is_empty() && parent == f.name && f.children.iter().any(|c| c == name))
+    })
+}
+
 /// What hame knows about the element an action is aimed at.
 #[derive(Debug, Clone, Default)]
 pub struct ElementFacts {
@@ -190,6 +234,8 @@ pub struct FocusContext {
     /// The application's bundle id, set by the caller from the target
     /// window (the helper does not report it).
     pub app: String,
+    /// The save panel's destination as its "Where:" pop-up shows it.
+    pub save_where: Option<String>,
 }
 
 /// Document editors, where Return in a text area of an ordinary window
@@ -235,6 +281,7 @@ impl FocusContext {
             in_dialog: v["in_dialog"].as_bool().unwrap_or(true),
             save_panel: v["save_panel"].as_bool().unwrap_or(true),
             app: String::new(),
+            save_where: v["save_where"].as_str().map(String::from),
         })
     }
 
@@ -247,12 +294,16 @@ impl FocusContext {
     /// What the helper must still find at dispatch time for this
     /// classification to hold.
     pub fn expectation(&self) -> Value {
-        json!({
+        let mut expect = json!({
             "role": self.role,
             "subrole": self.subrole,
             "in_dialog": self.in_dialog,
             "save_panel": self.save_panel,
-        })
+        });
+        if let Some(place) = &self.save_where {
+            expect["save_where"] = json!(place);
+        }
+        expect
     }
 
     pub fn is_text_input(&self) -> bool {
@@ -497,6 +548,8 @@ pub struct HitFacts {
     pub in_dialog: bool,
     /// The point is inside a save panel.
     pub save_panel: bool,
+    /// The save panel's destination as its "Where:" pop-up shows it.
+    pub save_where: Option<String>,
 }
 
 /// Roles a click activates.
@@ -550,6 +603,7 @@ impl HitFacts {
                 .collect(),
             in_dialog: v["in_dialog"].as_bool().unwrap_or(true),
             save_panel: v["save_panel"].as_bool().unwrap_or(true),
+            save_where: v["save_where"].as_str().map(String::from),
         }
     }
 
@@ -573,10 +627,14 @@ impl HitFacts {
 
     /// What the helper must still find under the point at dispatch time.
     pub fn expectation(&self) -> Value {
-        match self.chain.first() {
+        let mut expect = match self.chain.first() {
             Some(e) => json!({"role": e.role, "name": e.name}),
             None => json!({"role": "", "name": ""}),
+        };
+        if let Some(place) = &self.save_where {
+            expect["save_where"] = json!(place);
         }
+        expect
     }
 }
 
@@ -792,6 +850,28 @@ mod tests {
             app: "com.apple.TextEdit".into(),
             ..FocusContext::default()
         }
+    }
+
+    #[test]
+    fn a_save_panel_may_point_only_at_a_granted_folder_or_its_child() {
+        let work = FolderNames {
+            path: "/tmp/w/work".into(),
+            name: "work".into(),
+            parent: "w".into(),
+            children: vec!["out".into()],
+        };
+        let ok = |place: &str| save_place_allowed(place, std::slice::from_ref(&work));
+        assert!(ok("work \u{2014} w"));
+        assert!(ok("out \u{2014} work"));
+        assert!(!ok("Documents \u{2014} rupphi"));
+        assert!(!ok("TextEdit \u{2014} iCloud"));
+        assert!(!ok("work \u{2014} elsewhere"));
+        assert!(!ok("missing \u{2014} work"));
+        // Some folders show no parent: the name alone must be granted.
+        assert!(ok("work"));
+        assert!(!ok("out"));
+        assert!(!ok("Documents"));
+        assert!(!save_place_allowed("work \u{2014} w", &[]));
     }
 
     #[test]
@@ -1013,6 +1093,7 @@ mod tests {
                 .collect(),
             in_dialog,
             save_panel,
+            save_where: None,
         }
     }
 

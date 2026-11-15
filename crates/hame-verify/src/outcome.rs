@@ -86,8 +86,9 @@ fn clip(text: &str, max: usize) -> String {
 
 /// Splits CSV text into records of fields, honouring double quotes: a
 /// quoted field may hold commas and line breaks, and `""` inside it is a
-/// quote. Blank records are dropped. A quote that is never closed, or one
-/// in the middle of an unquoted field, is an error.
+/// quote. Empty physical lines are dropped, but quoted empty fields and
+/// whitespace remain records. A quote that is never closed, or one in the
+/// middle of an unquoted field, is an error.
 fn csv_records(text: &str) -> Result<Vec<Vec<String>>, String> {
     let mut records = Vec::new();
     let mut record = Vec::new();
@@ -95,16 +96,18 @@ fn csv_records(text: &str) -> Result<Vec<Vec<String>>, String> {
     let mut quoted = false;
     // The current field began with a quote (and so may only end with one).
     let mut was_quoted = false;
+    let mut record_started = false;
     let mut line = 1;
     let mut chars = text.chars().peekable();
-    let mut end_record = |record: &mut Vec<String>, field: &mut String| {
+    let mut end_record = |record: &mut Vec<String>, field: &mut String, started: &mut bool| {
         record.push(std::mem::take(field));
         let fields = std::mem::take(record);
-        if !(fields.len() == 1 && fields[0].trim().is_empty()) {
+        if std::mem::take(started) {
             records.push(fields);
         }
     };
     while let Some(c) = chars.next() {
+        record_started |= quoted || !matches!(c, '\r' | '\n');
         match (c, quoted) {
             ('"', true) if chars.peek() == Some(&'"') => {
                 field.push('"');
@@ -127,7 +130,7 @@ fn csv_records(text: &str) -> Result<Vec<Vec<String>>, String> {
             }
             ('\r', false) if chars.peek() == Some(&'\n') => {}
             ('\n' | '\r', false) => {
-                end_record(&mut record, &mut field);
+                end_record(&mut record, &mut field, &mut record_started);
                 was_quoted = false;
                 line += 1;
             }
@@ -142,7 +145,7 @@ fn csv_records(text: &str) -> Result<Vec<Vec<String>>, String> {
     if quoted {
         return Err(format!("line {line}: a quoted field is never closed"));
     }
-    end_record(&mut record, &mut field);
+    end_record(&mut record, &mut field, &mut record_started);
     Ok(records)
 }
 
@@ -808,6 +811,28 @@ mod tests {
         };
         assert!(verify(&shape(1), dir.path(), None, None).await.passed);
         assert!(!verify(&shape(2), dir.path(), None, None).await.passed);
+    }
+
+    #[tokio::test]
+    async fn csv_shape_counts_empty_quoted_and_whitespace_records() {
+        let dir = tempfile::tempdir().unwrap();
+        for text in [
+            "note\n\"\"",
+            "note\r\n\"\"\r\n",
+            "note\n\" \"\n",
+            "note\n \n",
+        ] {
+            std::fs::write(dir.path().join("t.csv"), text).unwrap();
+            for rows in [0, 1] {
+                let t = task(vec![Predicate::CsvShape {
+                    path: "t.csv".into(),
+                    rows: Some(rows),
+                    columns: vec!["note".into()],
+                }]);
+                let report = verify(&t, dir.path(), None, None).await;
+                assert_eq!(report.passed, rows == 1, "{text:?}: {}", describe(&report));
+            }
+        }
     }
 
     #[cfg(unix)]

@@ -27,6 +27,8 @@ All notable changes to hame are listed here. The format follows [Keep a Changelo
 
 ### Added
 
+- Grants take `folders`: a confirmed desktop save or export panel may write only into them (default the workspace; `"*"` for any folder). Before, `file_write` on an app let it save anywhere (a pilot run exported into `~/Documents`). The desktop helper protocol is now 3.
+
 - Desktop: `select` (table cells by address, text by occurrence), cell addresses and the Numbers and Pages canvases in observations, typing that follows Numbers' formula editor; an Export button in a save panel needs `commit` and `file_write` like Save.
 - `hame run --inbox DIR` and the eval manifest field `interject`: a user message delivered mid-run.
 

@@ -336,6 +336,23 @@ fn focus_moved(focused: Option<WindowKey>, now: &Value) -> Option<String> {
     })
 }
 
+/// A grant's folder as a path: empty is the workspace, `~/` the home
+/// directory, a relative path is under the workspace; links resolved.
+fn resolve_folder(folder: &str, cwd: &std::path::Path) -> PathBuf {
+    let folder = folder.trim();
+    let path = if folder.is_empty() {
+        cwd.to_path_buf()
+    } else if let Some(rest) = folder.strip_prefix("~/") {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(rest)
+    } else {
+        cwd.join(folder)
+    };
+    path.canonicalize().unwrap_or(path)
+}
+
 /// Why a value must not go into a save panel's file name field. The field
 /// takes a name, not a path: macOS turns every `/` in it into `:` and saves
 /// in whatever folder the panel shows, which writes a file somewhere the
@@ -572,6 +589,54 @@ impl DesktopTool {
             }
         }
         Ok(())
+    }
+
+    /// Refuses confirming a save panel that points outside the folders
+    /// `file_write` is granted for on `target` (the workspace unless the
+    /// grant names others). `place` is the panel's "Where:" pop-up; when it
+    /// cannot be read the folder is unknown, which is refused too.
+    async fn check_save_folder(
+        &self,
+        target: &Target,
+        place: Option<&str>,
+        ctx: &ToolContext,
+    ) -> Step<()> {
+        use hame_session::contract::SaveFolders;
+        let SaveFolders::Only(folders) = self.config.authorization.save_folders(target) else {
+            return Ok(());
+        };
+        let paths: Vec<String> = folders
+            .iter()
+            .map(|f| resolve_folder(f, &ctx.cwd).to_string_lossy().into_owned())
+            .collect();
+        let Some(place) = place else {
+            return Err(Outcome::err(format!(
+                "not_authorized: hame cannot tell which folder the save panel points at (its \
+                 \"Where:\" pop-up was not found; an expanded panel hides it), and file_write \
+                 is granted only for {}. Collapse the panel, or move it to one of those folders \
+                 with Go To Folder (cmd+shift+g), then try again. Nothing was sent.",
+                paths.join(", ")
+            )));
+        };
+        let names = self
+            .req_quick("display_names", json!({"paths": paths}))
+            .await
+            .map_err(|e| fail(&e))?;
+        let known: Vec<caps::FolderNames> = names["folders"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(caps::FolderNames::from_json)
+            .collect();
+        if caps::save_place_allowed(place, &known) {
+            return Ok(());
+        }
+        Err(Outcome::err(format!(
+            "not_authorized: the save panel points at \"{place}\", outside the folders file_write \
+             is granted for ({}, and their direct subfolders). Move it to one of them with Go To \
+             Folder (cmd+shift+g), or ask the user to grant that folder. Nothing was sent.",
+            paths.join(", ")
+        )))
     }
 
     /// Where keyboard focus is in the window now, asked of the helper right
@@ -1001,6 +1066,13 @@ impl DesktopTool {
         };
         let caps = caps::required(action, Some(&facts), commit);
         self.authorize(&target, &caps)?;
+        if facts.save_panel && caps.contains(&Capability::FileWrite) {
+            let place = resolved["save_where"].as_str();
+            self.check_save_folder(&target, place, ctx).await?;
+            if let Some(place) = place {
+                params["expect_save_where"] = json!(place);
+            }
+        }
         let value = input["value"].as_str();
         if action == "set_value" && value.is_none() {
             return Err(invalid("set_value needs value."));
@@ -1285,6 +1357,13 @@ impl DesktopTool {
         }
         let need = caps::type_needs(text, focus.as_ref(), commit);
         self.authorize_need(&target, &need)?;
+        if caps::type_needs_focus(text)
+            && need.caps.contains(&Capability::FileWrite)
+            && focus.as_ref().is_none_or(|f| f.save_panel)
+        {
+            let place = focus.as_ref().and_then(|f| f.save_where.as_deref());
+            self.check_save_folder(&target, place, ctx).await?;
+        }
         let caps = need.caps.clone();
         let secure = info["role"].as_str() == Some("AXSecureTextField")
             || focus
@@ -1400,6 +1479,13 @@ impl DesktopTool {
             input["commit"].as_bool().unwrap_or(false),
         );
         self.authorize_need(&target, &need)?;
+        if caps::key_needs_focus(&combo)
+            && need.caps.contains(&Capability::FileWrite)
+            && focus.as_ref().is_none_or(|f| f.save_panel)
+        {
+            let place = focus.as_ref().and_then(|f| f.save_where.as_deref());
+            self.check_save_folder(&target, place, ctx).await?;
+        }
         let caps = need.caps.clone();
         let idem = need.commits().then(|| {
             let facts = focus.as_ref().map(FocusContext::facts).unwrap_or_default();
@@ -1643,6 +1729,10 @@ impl DesktopTool {
             input["commit"].as_bool().unwrap_or(false),
         );
         self.authorize_need(&record.target, &need)?;
+        if need.caps.contains(&Capability::FileWrite) && hit.as_ref().is_none_or(|h| h.save_panel) {
+            let place = hit.as_ref().and_then(|h| h.save_where.as_deref());
+            self.check_save_folder(&record.target, place, ctx).await?;
+        }
         let caps = need.caps.clone();
         let idem = need.commits().then(|| {
             let facts = hit.as_ref().map(HitFacts::facts).unwrap_or_default();
@@ -2430,6 +2520,7 @@ mod tests {
                 origin: None,
                 profile: None,
                 capabilities: vec![Capability::Observe, Capability::Interact],
+                folders: vec![],
             }],
         });
         let target = Target {
@@ -2549,6 +2640,18 @@ mod tests {
                    "title": "Doc", "frame": [0.0, 0.0, 800.0, 600.0], "sheets": []})
         }
 
+        /// Focus in a save panel's name field, the panel showing `place`.
+        pub fn in_panel(place: &str) -> Value {
+            json!({"known": true, "role": "AXTextField", "subrole": "", "name": "Save As:",
+                   "value": "", "in_dialog": true, "save_panel": true, "save_where": place})
+        }
+
+        /// The helper's display names for one granted folder.
+        pub fn names(name: &str, parent: &str) -> Value {
+            json!({"folders": [{"path": "/w/work", "name": name, "parent": parent,
+                                "children": []}]})
+        }
+
         /// `answers` maps an operation to its result; anything else fails.
         pub fn fixture(
             caps: &[Capability],
@@ -2589,6 +2692,7 @@ mod tests {
                 origin: None,
                 profile: None,
                 capabilities: caps.to_vec(),
+                folders: vec![],
             };
             let mut config = DesktopConfig::new(
                 dir.path(),
@@ -2755,6 +2859,66 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
+    async fn a_save_panel_pointing_outside_the_granted_folders_is_refused() {
+        use scripted::*;
+        let caps = [
+            Capability::Observe,
+            Capability::Commit,
+            Capability::FileWrite,
+            Capability::GlobalInput,
+        ];
+        // The panel shows ~/Documents; file_write covers the workspace.
+        let elsewhere = fixture(
+            &caps,
+            &[],
+            &[
+                (
+                    "window_state",
+                    json!({"window": window(), "frontmost_pid": 42}),
+                ),
+                ("focus_context", in_panel("Documents \u{2014} someone")),
+                ("display_names", names("work", "w")),
+                ("key", json!({"pressed": "return", "window": window()})),
+            ],
+        );
+        for input in [
+            json!({"action": "key", "app": APP, "window": 7, "keys": "return"}),
+            json!({"action": "type", "app": APP, "window": 7, "text": "\n"}),
+        ] {
+            let out = elsewhere.call(input).await;
+            assert!(
+                out.is_error && out.text.contains("outside the folders file_write"),
+                "{}",
+                out.text
+            );
+        }
+        assert!(elsewhere.requests("key").is_empty());
+        assert!(elsewhere.requests("type").is_empty());
+        // A panel whose folder cannot be read is refused too.
+        let unknown = fixture(
+            &caps,
+            &[],
+            &[
+                (
+                    "window_state",
+                    json!({"window": window(), "frontmost_pid": 42}),
+                ),
+                ("focus_context", focused("AXTextField", true, true)),
+                ("key", json!({"pressed": "return", "window": window()})),
+            ],
+        );
+        let out = unknown
+            .call(json!({"action": "key", "app": APP, "window": 7, "keys": "return"}))
+            .await;
+        assert!(
+            out.is_error && out.text.contains("cannot tell which folder"),
+            "{}",
+            out.text
+        );
+        assert!(unknown.requests("key").is_empty());
+    }
+
+    #[tokio::test]
     async fn return_in_a_save_panel_needs_file_write_and_is_journalled_as_a_commit() {
         use scripted::*;
         let answers = [
@@ -2762,7 +2926,8 @@ mod tests {
                 "window_state",
                 json!({"window": window(), "frontmost_pid": 42}),
             ),
-            ("focus_context", focused("AXTextField", true, true)),
+            ("focus_context", in_panel("work \u{2014} w")),
+            ("display_names", names("work", "w")),
             ("key", json!({"pressed": "return", "window": window()})),
         ];
         let without = fixture(
@@ -2805,7 +2970,8 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(
             sent[0]["expect_context"],
-            json!({"role": "AXTextField", "subrole": "", "in_dialog": true, "save_panel": true})
+            json!({"role": "AXTextField", "subrole": "", "in_dialog": true, "save_panel": true,
+                   "save_where": "work \u{2014} w"})
         );
         let receipt = with.tool.state().receipts.last().cloned().unwrap();
         assert_eq!(receipt.capability, Capability::Commit);

@@ -184,6 +184,7 @@ capabilities = ["observe", "interact"]
 channel = "desktop"
 app = "com.apple.TextEdit"
 capabilities = ["observe", "interact", "global_input", "commit", "file_write"]
+folders = ["~/Documents/reports"]   # where its save panel may write (default: the workspace)
 
 [[computer.grant]]              # TextEdit screenshots and clicks on screenshot pixels (not on Save, Delete, ...)
 channel = "visual"
@@ -191,14 +192,14 @@ app = "com.apple.TextEdit"
 capabilities = ["screen", "global_input"]
 ```
 
-A grant has a `channel` (`browser`, `desktop`, or `visual` for screenshots and pixel clicks of native windows), optional `app` (bundle id), `origin` and `profile` patterns (`*` matches any run of characters, case-insensitive; an absent pattern matches anything), and `capabilities`:
+A grant has a `channel` (`browser`, `desktop`, or `visual` for screenshots and pixel clicks of native windows), optional `app` (bundle id), `origin` and `profile` patterns (`*` matches any run of characters, case-insensitive; an absent pattern matches anything), optional `folders` (desktop `file_write`: the folders a save or export panel may write into, each with its direct subfolders; absolute, `~/` or relative to the workspace; `"*"` for any folder; default the workspace only), and `capabilities`:
 
 | Capability | Allows |
 |---|---|
 | `observe` | read pages, windows and accessibility trees; wait; extract |
 | `interact` | click, fill, select, press, set values, menus that only open something |
 | `commit` | actions that submit, send, save, delete, pay or purchase (by control name, form method, or `commit: true` from the model), by whatever route: on the desktop also Return or Space where it presses a button, cmd+s, cmd+w, cmd+q, cmd+d, cmd+delete, a newline typed anywhere but the text area of a document editor (TextEdit, Pages, Numbers, Keynote, Notes, Word; in any other app, such as Messages or Slack, Return may send), and a pixel click on such a control or on anything hame cannot identify |
-| `file_write` | downloads into the workspace (see below); confirming a save or export panel (its Save or Export button, Return or a typed newline in it, a click on Save) and cmd+s. On the desktop this is per application, not per folder: the app saves wherever its panel points, which can be any folder you can write |
+| `file_write` | downloads into the workspace (see below); confirming a save or export panel (its Save or Export button, Return or a typed newline in it, a click on Save) and cmd+s. On the desktop, only into the grant's `folders` (default the workspace): hame reads the panel's "Where:" pop-up (folder and parent names) when it is confirmed and refuses any other folder, or a panel whose folder it cannot read (an expanded panel). Saving an already saved document in place (cmd+s, File > Save) writes where that document is |
 | `clipboard` | read and set the clipboard (desktop; the previous contents are restored), and cmd+c, cmd+x, cmd+v |
 | `global_input` | keyboard events, key combinations and pixel clicks; needs the target frontmost and holds a cross-process lease. Alone it covers typing and keys that do not commit; see `commit` |
 | `screen` | screenshots (stored as artifacts) |
@@ -479,7 +480,7 @@ Start with `hame doctor`: every line that is not `ok` says what to do.
 
 ## Limitations
 
-- **Desktop control is macOS only** (14 or later) and was tested on macOS 26.6.2 with TextEdit, Numbers 14.4 and Pages 14.4. Excel exposes no cell grid to accessibility; Word and Keynote were not tried. Not implemented: scrolling, drag, hover, choosing pop-up menu items by value, context menus. A desktop `file_write` grant is not limited to a folder (see the capability table). Commands in the shell sandbox cannot send Apple Events (`osascript`), use the accessibility interface, post or tap input events, capture the screen or use the clipboard, so other apps are driven only through the desktop tool; a program run inside the sandbox that needs a window server (a GUI app, a browser) does not work there. `key` assumes a US (ANSI) layout; secure text fields generally ignore synthesized input; windows on another Space or minimized cannot be captured.
+- **Desktop control is macOS only** (14 or later) and was tested on macOS 26.6.2 with TextEdit, Numbers 14.4 and Pages 14.4. Excel exposes no cell grid to accessibility; Word and Keynote were not tried. Not implemented: scrolling, drag, hover, choosing pop-up menu items by value, context menus. A desktop `file_write` grant is limited to folders by the names the save panel shows, so another folder with the same name and parent name would pass. Commands in the shell sandbox cannot send Apple Events (`osascript`), use the accessibility interface, post or tap input events, capture the screen or use the clipboard, so other apps are driven only through the desktop tool; a program run inside the sandbox that needs a window server (a GUI app, a browser) does not work there. `key` assumes a US (ANSI) layout; secure text fields generally ignore synthesized input; windows on another Space or minimized cannot be captured.
 - **The browser tool** drives Chrome-family browsers through Playwright and was verified on macOS arm64 only. Iframes and closed shadow roots are not expanded; commit detection is heuristic (above); a page's own network requests are not filtered.
 - **Outcome checks** see what the predicates name: a task file without a check for some side effect does not verify it. `desktop_state` reads values cut at 300 characters; check long documents in the saved file. False-success detection in `hame eval` is phrase-based.
 - **Budgets**: prices are known only for Anthropic models, so `max_cost_usd` stops a task on any other provider at its first request.
